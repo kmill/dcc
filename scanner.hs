@@ -1,7 +1,10 @@
 import IO hiding (try)
 import Text.ParserCombinators.Parsec hiding (alphaNum)
 import Text.ParserCombinators.Parsec.Char hiding (alphaNum)
+import Text.ParserCombinators.Parsec.Error
+import Text.ParserCombinators.Parsec.Prim
 import Control.Monad
+import Control.Applicative (pure, (<*>))
 import Data.Char (ord)
 import System.Environment
 import Data.List (concatMap)
@@ -12,9 +15,9 @@ import Data.List (concatMap)
 
 reservedWords = ["boolean", "break", "callout", "class", "continue"
                 ,"else", "for", "if", "int", "return", "void", "while"]
-otherTokens = ["{", "}", "(", ")", "[", "]", ";", ",",
-               "=", "+=", "-=", "+", "-", "*", "/", "%",
-               "<=", ">=", "<", ">", "==", "!=", "!", "&&", "||"]
+symbols = ["{", "}", "(", ")", "[", "]", ";", ",",
+           "=", "+=", "-=", "+", "-", "*", "/", "%",
+           "<=", ">=", "<", ">", "==", "!=", "!", "&&", "||"]
 
 data TokenType = CharLiteral
                | IntLiteral
@@ -26,19 +29,25 @@ data TokenType = CharLiteral
 data Token = Token { tokenType :: TokenType
                    , tokenString :: String
                    , tokenPos :: SourcePos }
+           | TokenError SourcePos Char
 
 instance Show Token where
+    show (TokenError err) = show err
     show x = ln ++ tokType ++ " " ++ tokStr
         where ln = show $ sourceLine $ tokenPos x
+              -- gives a textual representation of the type field
               tokType = case tokenType x of
                           Keyword -> ""
                           t -> " " ++ (show t)
+              -- gives a textual representation of the string data,
+              -- escaping as necessary
               tokStr = case tokenType x of
                          CharLiteral -> "'" ++ escaped ++ "'"
                          StringLiteral -> "\"" ++ escaped ++ "\""
                          _ -> tokenString x
                   where escaped = dcEscapeStr $ tokenString x
 
+dcEscapeChar :: Char -> String
 dcEscapeChar '\\' = "\\\\"
 dcEscapeChar '\t' = "\\t"
 dcEscapeChar '\n' = "\\n"
@@ -46,6 +55,7 @@ dcEscapeChar '"' = "\\\""
 dcEscapeChar '\'' = "\\'"
 dcEscapeChar x = [x]
 
+dcEscapeStr :: String -> String
 dcEscapeStr = concatMap dcEscapeChar
 
 instance Show TokenType where
@@ -85,7 +95,7 @@ alphaNum = alpha <|> digit        <?> "alphanumeric"
 
 identifier :: Scanner Token
 identifier = makeToken Identifier identifier'
-    where identifier' = (liftM2 (:)) alpha (many alphaNum)  <?> "identifier"
+    where identifier' = liftM2 (:) alpha (many alphaNum)  <?> "identifier"
 
 -- Parses a particular string as long as it's not followed by alphaNum
 reserved :: String -> Scanner String
@@ -115,10 +125,10 @@ keywords :: Scanner Token
 keywords = choice $ map keyword reservedWords
 
 symbolTokens :: Scanner Token
-symbolTokens = choice $ map (\s -> makeToken Keyword (try $ string s)) otherTokens
+symbolTokens = choice $ map (\s -> makeToken Keyword (try $ string s)) symbols
 
 dchar :: Scanner Char
-dchar = ((char '\\') >> escapedChar)
+dchar = (((char '\\') <?> "backslash" )>> escapedChar)
         <|> ((satisfy isValidChar) <?> "valid non-quote character")
     where
       escapedTable = [('\'', '\''), ('"', '"'), ('\\', '\\'), ('t', '\t'), ('n', '\n')]
@@ -129,23 +139,25 @@ dchar = ((char '\\') >> escapedChar)
 
 charLiteral :: Scanner Token
 charLiteral = makeToken CharLiteral clscanner
-    where clscanner = do c <- between (char '\'') (char '\'') dchar
+    where clscanner = do c <- between squote squote dchar
                          return $ [c]
+          squote = (char '\'') <?> "single quote"
 
 stringLiteral :: Scanner Token
-stringLiteral = makeToken StringLiteral $ (between (char '"') (char '"') $ many dchar)
+stringLiteral = makeToken StringLiteral $ (between dquote dquote $ many dchar)
+    where dquote = (char '"') <?> "double quote"
 
-parsecPlus :: GenParser tok st a -> GenParser tok st a -> GenParser tok st a
-parsecPlus (Parser p1) (Parser p2)
-    = Parser (\state ->
-        case (p1 state) of        
-          Empty (Error err) -> case (p2 state) of
-                                 Empty reply -> Empty (mergeErrorReply err reply)
-                                 consumed    -> consumed
-          other             -> other
-      )
+scanOne :: Scanner Token
+scanOne = do st <- getState
+             toks <- lift stateInput getParserState
+             pos <- getPosition
+             case runParser st (sourceName pos) toks of
+               Right x -> return x
+               Left err -> do eatUntil $ errorPos TokenError err
 
-data ScannerErrors = ScannerErrors [
+makeError :: Scanner Token
+makeError = do c <- anyChar
+               
 
 scanner :: Scanner [Token]
 scanner = do whitespace
@@ -161,6 +173,7 @@ scanner = do whitespace
                   <|> charLiteral <|> stringLiteral <|> symbolTokens
 
 scanFile fname = do input <- readFile fname
+--                    let input = "'\\p'"
                     let res = runParser scanner () fname input
                     case res of
                       Left err -> print err
