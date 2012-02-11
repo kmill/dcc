@@ -28,8 +28,8 @@ reservedWords = ["boolean", "break", "callout", "class", "continue"
                 ,"else", "for", "if", "int", "return", "void", "while"]
 -- The symbols list is ordered so prefixes don't appear first.
 symbols = ["{", "}", "(", ")", "[", "]", ";", ",",
-           "=", "+=", "-=", "+", "-", "*", "/", "%",
-           "<=", ">=", "<", ">", "==", "!=", "!", "&&", "||"]
+           "==", "=", "+=", "-=", "+", "-", "*", "/", "%",
+           "<=", ">=", "<", ">", "!=", "!", "&&", "||"]
 
 data TokenType = CharLiteral
                | IntLiteral
@@ -53,8 +53,8 @@ instance Show Token where
     show (TokenError pos c mc)
         = compatPos
           ++ case mc of
-               Just exc -> printf "expecting %s, found %s"
-                           (compatChar mc) (compatChar c)
+               Just exc -> printf "expecting %s, found '%s'"
+                           (compatChar mc) (fromMaybe "EOF" $ c >>= Just . escChar)
                Nothing -> "unexpected char: " ++ (compatChar c)
         where compatPos = printf "%s line %i:%i: "
                           (sourceName pos) (sourceLine pos) (sourceColumn pos)
@@ -62,6 +62,18 @@ instance Show Token where
                                     then quotify "'" [c]
                                     else printf "0x%X" c
               compatChar Nothing = "EOF"
+
+              -- Escapes a character for 6.035 compatibility... It
+              -- requires no backslashes!!!
+              escChar :: Char -> String
+              escChar x
+                  = case x of
+                      '\\' -> "\\"
+                      '\t' -> "\\t"
+                      '\n' -> "\\n"
+                      '"'  -> "\""
+                      '\'' -> "'"
+                      x    -> [x]
                                   
     show x = ln ++ tokType ++ " " ++ tokStr
         where ln = show $ sourceLine $ tokenPos x
@@ -76,7 +88,8 @@ instance Show Token where
                          StringLiteral -> quotify "\"" escaped
                          _ -> tokenString x
               escaped = concatMap escChar $ tokenString x
-              -- Escapes a character for 6.035 compatibility
+
+              -- Escapes a character for 6.035 compatibility...
               escChar :: Char -> String
               escChar x
                   = case x of
@@ -100,6 +113,11 @@ instance Show TokenType where
 makeTokenError :: Maybe Char -> Scanner Token
 makeTokenError mc = do pos <- getPosition
                        c <- (liftM Just anyChar) <|> (eof >> return Nothing)
+                       let hack = case c of  -- dumb hack to satisfy 6.035...
+                                    Just '\t' -> 7
+                                    Just '\n' -> 1
+                                    _ -> 1
+                       setPosition (incSourceColumn pos hack)
                        return $ TokenError pos c mc
 
 -- Takes maybe an expected character, checks if we're in 6.035
@@ -137,11 +155,17 @@ intLiteral = hexLiteral <|> binLiteral <|> decLiteral
     where
       intLiteral' :: String -> Scanner Char -> Scanner Token
       intLiteral' prefix digitParser =
-          makeToken IntLiteral $ (try (string prefix)) <++> (many1 digitParser)
+          do pos <- getPosition
+             try (string prefix)
+             mdigit <- (liftM Just digitParser) <|> scanNone
+             case mdigit of
+               Just digit -> do digits <- many digitParser
+                                return $ Token IntLiteral (prefix ++ (digit:digits)) pos
+               Nothing -> scanError Nothing
       
       hexLiteral = intLiteral' "0x" hexDigit
       binLiteral = intLiteral' "0b" $ oneOf "01"
-      decLiteral = intLiteral' "" digit
+      decLiteral = makeToken IntLiteral $ many1 digit
 
 -- alpha is [a-zA-Z_]
 alpha :: Scanner Char
@@ -211,7 +235,7 @@ mbetween c p handle
            Just inside ->
                do mc <- (mchar c) <|> scanNone
                   case mc of
-                    Nothing -> makeTokenError (Just '\'')
+                    Nothing -> makeTokenError (Just c)
                     Just _ -> return $ handle inside pos
 
 -- Runs a parser as many times as it matches.  But, if the parser
@@ -232,16 +256,16 @@ mmany s = do mas <- mmany' []
                                  (Just c) -> mmany' (c:cs)
 
 charLiteral :: Scanner Token
-charLiteral = mbetween '\'' dchar (\c -> Token CharLiteral [c])
+charLiteral = mbetween '\'' (dchar <|> scanNone) (\c -> Token CharLiteral [c])
 
 stringLiteral :: Scanner Token
 stringLiteral = mbetween '"' (mmany dchar) (Token StringLiteral)
 
+-- This is the main token scanner!
 dctoken :: Scanner Token
 dctoken = keywords <|> boolLiteral <|> identifier <|> intLiteral
           <|> charLiteral <|> stringLiteral <|> symbolTokens
           <|> (scanError Nothing) -- to handle 6.035 compatibility mode
-
 
 
 scanner :: Scanner [Token]

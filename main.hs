@@ -9,7 +9,7 @@ import Scanner
 main :: IO ()
 main = do args <- getArgs
           opts <- compilerOpts args
-          let ifname = fromMaybe "stdin" $ inputFile opts
+          let ifname = fromMaybe "<stdin>" $ inputFile opts
           input <- case inputFile opts of
                      Just ifname -> readFile ifname
                      Nothing -> hGetContents stdin

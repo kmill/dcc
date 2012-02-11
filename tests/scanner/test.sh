@@ -1,9 +1,10 @@
 #!/bin/sh
 
 runscanner() {
-  cd `dirname $1`;
-  ../../../scanner -target scan -compat `basename $1`
-  cd ..
+  olddir=`pwd`;
+  cd `dirname $1`
+  `dirname $0`/../../../dcc --target scan --compat `basename $1`
+  cd $olddir;
 }
 
 fail=0
@@ -14,7 +15,7 @@ for file in `dirname $0`/input/*; do
   if ! diff -u $output `dirname $0`/output/`basename $file`.out; then
     echo "File $file scanner output mismatch.";
     fail=1
-    exit $fail
+    #exit $fail
   fi
   rm $output;
 done
