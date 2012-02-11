@@ -1,20 +1,32 @@
-import IO hiding (try)
+module Scanner ( TokenType(..), Token(..), runScanner ) where
+
 import Text.ParserCombinators.Parsec hiding (alphaNum)
 import Text.ParserCombinators.Parsec.Char hiding (alphaNum)
 import Text.ParserCombinators.Parsec.Error
 import Text.ParserCombinators.Parsec.Prim
+import Text.Printf
 import Control.Monad
 import Control.Applicative (pure, (<*>))
 import Data.Char (ord)
-import System.Environment
 import Data.List (concatMap)
+
+import CLI
+import Data.Maybe (fromMaybe)
 
 -- Just a lifted version of (++).
 (<++>) :: Scanner [a] -> Scanner [a] -> Scanner [a]
 (<++>) = liftM2 (++)
 
+type Scanner a = GenParser Char ScannerState a
+data ScannerState = ScannerState { scanner6035CompatMode :: Bool }
+
+makeScannerState :: Bool -> ScannerState
+makeScannerState compat
+    = ScannerState { scanner6035CompatMode=compat }
+
 reservedWords = ["boolean", "break", "callout", "class", "continue"
                 ,"else", "for", "if", "int", "return", "void", "while"]
+-- The symbols list is ordered so prefixes don't appear first.
 symbols = ["{", "}", "(", ")", "[", "]", ";", ",",
            "=", "+=", "-=", "+", "-", "*", "/", "%",
            "<=", ">=", "<", ">", "==", "!=", "!", "&&", "||"]
@@ -29,10 +41,28 @@ data TokenType = CharLiteral
 data Token = Token { tokenType :: TokenType
                    , tokenString :: String
                    , tokenPos :: SourcePos }
-           | TokenError SourcePos Char
+           -- TokenError takes an unexpected char and maybe the
+           -- expected char; used for 6.035 compatibility mode.
+           | TokenError SourcePos (Maybe Char) (Maybe Char)
+
+-- Wraps the second string with two copies of the first string.
+quotify :: String -> String -> String
+quotify q s = q ++ s ++ q
 
 instance Show Token where
-    show (TokenError err) = show err
+    show (TokenError pos c mc)
+        = compatPos
+          ++ case mc of
+               Just exc -> printf "expecting %s, found %s"
+                           (compatChar mc) (compatChar c)
+               Nothing -> "unexpected char: " ++ (compatChar c)
+        where compatPos = printf "%s line %i:%i: "
+                          (sourceName pos) (sourceLine pos) (sourceColumn pos)
+              compatChar (Just c) = if 32 <= (ord c) && (ord c) <= 126
+                                    then quotify "'" [c]
+                                    else printf "0x%X" c
+              compatChar Nothing = "EOF"
+                                  
     show x = ln ++ tokType ++ " " ++ tokStr
         where ln = show $ sourceLine $ tokenPos x
               -- gives a textual representation of the type field
@@ -42,21 +72,20 @@ instance Show Token where
               -- gives a textual representation of the string data,
               -- escaping as necessary
               tokStr = case tokenType x of
-                         CharLiteral -> "'" ++ escaped ++ "'"
-                         StringLiteral -> "\"" ++ escaped ++ "\""
+                         CharLiteral -> quotify "'" escaped
+                         StringLiteral -> quotify "\"" escaped
                          _ -> tokenString x
-                  where escaped = dcEscapeStr $ tokenString x
-
-dcEscapeChar :: Char -> String
-dcEscapeChar '\\' = "\\\\"
-dcEscapeChar '\t' = "\\t"
-dcEscapeChar '\n' = "\\n"
-dcEscapeChar '"' = "\\\""
-dcEscapeChar '\'' = "\\'"
-dcEscapeChar x = [x]
-
-dcEscapeStr :: String -> String
-dcEscapeStr = concatMap dcEscapeChar
+              escaped = concatMap escChar $ tokenString x
+              -- Escapes a character for 6.035 compatibility
+              escChar :: Char -> String
+              escChar x
+                  = case x of
+                      '\\' -> "\\\\"
+                      '\t' -> "\\t"
+                      '\n' -> "\\n"
+                      '"'  -> "\\\""
+                      '\'' -> "\\'"
+                      x    -> [x]
 
 instance Show TokenType where
     show CharLiteral = "CHARLITERAL"
@@ -66,7 +95,28 @@ instance Show TokenType where
     show Identifier = "IDENTIFIER"
     show Keyword = "KEYWORD"
 
-type Scanner a = GenParser Char () a
+-- Takes maybe an expected character and creates a TokenError using
+-- the current position.  This Scanner eats a character.
+makeTokenError :: Maybe Char -> Scanner Token
+makeTokenError mc = do pos <- getPosition
+                       c <- (liftM Just anyChar) <|> (eof >> return Nothing)
+                       return $ TokenError pos c mc
+
+-- Takes maybe an expected character, checks if we're in 6.035
+-- compatibility mode, and then, if so, calls makeTokenError.
+scanError :: Maybe Char -> Scanner Token
+scanError mc = do s <- getState
+                  case scanner6035CompatMode s of
+                    False -> mzero
+                    True -> makeTokenError mc
+
+-- Checks if we're in 6.035 compatibility mode, and return Nothing if
+-- we are, or does mzero otherwise.
+scanNone :: Scanner (Maybe a)
+scanNone = do s <- getState
+              case scanner6035CompatMode s of
+                False -> mzero
+                True -> return $ Nothing
 
 -- Makes a parser which returns a Token whose content is the output of
 -- the given parser.
@@ -76,6 +126,12 @@ makeToken restype parser =
        text <- parser
        return $ Token restype text pos
 
+
+---
+--- Actual scanners
+---
+
+-- Matches a hex/bin/dec literal.
 intLiteral :: Scanner Token
 intLiteral = hexLiteral <|> binLiteral <|> decLiteral
     where
@@ -127,64 +183,75 @@ keywords = choice $ map keyword reservedWords
 symbolTokens :: Scanner Token
 symbolTokens = choice $ map (\s -> makeToken Keyword (try $ string s)) symbols
 
-dchar :: Scanner Char
-dchar = (((char '\\') <?> "backslash" )>> escapedChar)
-        <|> ((satisfy isValidChar) <?> "valid non-quote character")
+dchar :: Scanner (Maybe Char)
+dchar = (((char '\\') <?> "backslash") >> (escapedChar <|> scanNone)) -- scanNone since ate backslash
+        <|> (((satisfy isValidChar)>>=(\c -> return $ Just c)) <?> "valid non-quote character")
+--        <|> (eof >> scanNone)
     where
       escapedTable = [('\'', '\''), ('"', '"'), ('\\', '\\'), ('t', '\t'), ('n', '\n')]
-      escapedChar :: Scanner Char
-      escapedChar = choice $ map (\(c,r) -> (char c) >> (return r)) escapedTable
+      escapedChar :: Scanner (Maybe Char)
+      escapedChar = choice $ map (\(c,r) -> (char c) >> (return $ Just r)) escapedTable
 
       isValidChar c = (ord c) >= 32 && (ord c) <= 126 && not (c `elem` "'\"")
 
+
+-- mchar is char but with a built-in scanNone
+mchar :: Char -> Scanner (Maybe Char)
+mchar c = ((char c) >> (return $ Just c)) <|> scanNone
+
+-- Takes a character that should surround a parser.  If either the
+-- parser or the matching of the second iteration of the character
+-- fail, then makeTokenError is called.
+mbetween c p handle
+    = do pos <- getPosition
+         char c
+         minside <- p
+         case minside of
+           Nothing -> makeTokenError Nothing
+           Just inside ->
+               do mc <- (mchar c) <|> scanNone
+                  case mc of
+                    Nothing -> makeTokenError (Just '\'')
+                    Just _ -> return $ handle inside pos
+
+-- Runs a parser as many times as it matches.  But, if the parser
+-- returns Nothing (because of a scanNone, for instance), it is
+-- treated as an error, and then this entire parser returns Nothing as
+-- well.
+mmany :: Scanner (Maybe a) -> Scanner (Maybe [a])
+mmany s = do mas <- mmany' []
+             case mas of
+               Nothing -> return Nothing
+               (Just as) -> return $ Just $ reverse as
+    where mmany' cs = do emc <- (liftM Just s) <|> (return $ Nothing)
+                         case emc of
+                           Nothing -> return $ Just cs
+                           (Just mc) ->
+                               case mc of
+                                 Nothing -> return Nothing
+                                 (Just c) -> mmany' (c:cs)
+
 charLiteral :: Scanner Token
-charLiteral = makeToken CharLiteral clscanner
-    where clscanner = do c <- between squote squote dchar
-                         return $ [c]
-          squote = (char '\'') <?> "single quote"
+charLiteral = mbetween '\'' dchar (\c -> Token CharLiteral [c])
 
 stringLiteral :: Scanner Token
-stringLiteral = makeToken StringLiteral $ (between dquote dquote $ many dchar)
-    where dquote = (char '"') <?> "double quote"
+stringLiteral = mbetween '"' (mmany dchar) (Token StringLiteral)
 
-scanOne :: Scanner Token
-scanOne = do st <- getState
-             toks <- lift stateInput getParserState
-             pos <- getPosition
-             case runParser st (sourceName pos) toks of
-               Right x -> return x
-               Left err -> do eatUntil $ errorPos TokenError err
+dctoken :: Scanner Token
+dctoken = keywords <|> boolLiteral <|> identifier <|> intLiteral
+          <|> charLiteral <|> stringLiteral <|> symbolTokens
+          <|> (scanError Nothing) -- to handle 6.035 compatibility mode
 
-makeError :: Scanner Token
-makeError = do c <- anyChar
-               
+
 
 scanner :: Scanner [Token]
 scanner = do whitespace
-             scanner'
-    where scanner' :: Scanner [Token]
-          scanner' = (eof >> return []) <|>
-                     do tok <- token
-                        whitespace
-                        rest <- scanner'
-                        return $ tok:rest
-          token :: Scanner Token
-          token = keywords <|> boolLiteral <|> identifier <|> intLiteral
-                  <|> charLiteral <|> stringLiteral <|> symbolTokens
+             manyTill token' eof
+    where token' = do tok <- dctoken
+                      whitespace
+                      return tok
 
-scanFile fname = do input <- readFile fname
---                    let input = "'\\p'"
-                    let res = runParser scanner () fname input
-                    case res of
-                      Left err -> print err
-                      Right v -> printScannerResult v
+runScanner :: CompilerOpts -> String -> String -> Either ParseError [Token]
+runScanner opts ifname input
+    = runParser scanner (makeScannerState $ compatMode opts) ifname input
 
-main :: IO ()
-main = do args <- getArgs
-          let fname = args !! (length args - 1)
-          scanFile $ fname
-
-printScannerResult :: [Token] -> IO ()
-printScannerResult (t:ts) = do putStrLn $ show t
-                               printScannerResult ts
-printScannerResult [] = return ()
