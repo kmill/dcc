@@ -104,6 +104,14 @@ instance Show TokenType where
     show Identifier = "IDENTIFIER"
     show Keyword = "KEYWORD"
 
+-- Makes a parser which returns a Token whose content is the output of
+-- the given parser.
+makeToken :: TokenType -> Scanner String -> Scanner Token
+makeToken restype parser =
+    do pos <- getPosition
+       text <- parser
+       return $ Token restype text pos
+
 -- Takes maybe an expected character and creates a TokenError using
 -- the current position.  This Scanner eats a character.
 makeTokenError :: Maybe Char -> Scanner Token
@@ -132,14 +140,8 @@ scanNone = do s <- getState
                 False -> mzero
                 True -> return $ Nothing
 
--- Makes a parser which returns a Token whose content is the output of
--- the given parser.
-makeToken :: TokenType -> Scanner String -> Scanner Token
-makeToken restype parser =
-    do pos <- getPosition
-       text <- parser
-       return $ Token restype text pos
-
+-- expected char, 
+mthread :: Maybe Char -> 
 
 ---
 --- Actual scanners
@@ -206,7 +208,6 @@ symbolTokens = choice $ map (\s -> makeToken Keyword (try $ string s)) symbols
 dchar :: Scanner (Maybe Char)
 dchar = (((char '\\') <?> "backslash") >> (escapedChar <|> scanNone)) -- scanNone since ate backslash
         <|> (((satisfy isValidChar)>>=(\c -> return $ Just c)) <?> "valid non-quote character")
---        <|> (eof >> scanNone)
     where
       escapedTable = [('\'', '\''), ('"', '"'), ('\\', '\\'), ('t', '\t'), ('n', '\n')]
       escapedChar :: Scanner (Maybe Char)
