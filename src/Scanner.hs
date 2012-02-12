@@ -42,68 +42,36 @@ data Token = Token { tokenType :: TokenType
            -- expected char; used for 6.035 compatibility mode.
            | TokenError SourcePos (Maybe Char) (Maybe Char)
 
--- Wraps the second string with two copies of the first string.
-quotify :: String -> String -> String
-quotify q s = q ++ s ++ q
-
 instance Show Token where
-    show (TokenError pos c mc)
-        = compatPos
-          ++ case mc of
-               Just exc -> printf "expecting %s, found '%s'"
-                           (compatChar mc) (fromMaybe "EOF" $ c >>= Just . escChar)
-               Nothing -> "unexpected char: " ++ (compatChar c)
-        where compatPos = printf "%s line %i:%i: "
-                          (sourceName pos) (sourceLine pos) (sourceColumn pos)
-              compatChar (Just c) = if 32 <= (ord c) && (ord c) <= 126
-                                    then quotify "'" [c]
-                                    else printf "0x%X" c
-              compatChar Nothing = "EOF"
-
-              -- Escapes a character for 6.035 compatibility... It
-              -- requires no backslashes in a "found" string!!!
-              escChar :: Char -> String
-              escChar x
-                  = case x of
-                      '\\' -> "\\"
-                      '\t' -> "\\t"
-                      '\n' -> "\\n"
-                      '"'  -> "\""
-                      '\'' -> "'"
-                      x    -> [x]
-                                  
-    show x = ln ++ tokType ++ " " ++ tokStr
-        where ln = show $ sourceLine $ tokenPos x
-              -- gives a textual representation of the type field
-              tokType = case tokenType x of
-                          Keyword -> ""
-                          t -> " " ++ (show t)
-              -- gives a textual representation of the string data,
-              -- escaping as necessary
-              tokStr = case tokenType x of
-                         CharLiteral -> quotify "'" escaped
-                         StringLiteral -> quotify "\"" escaped
-                         _ -> tokenString x
-              escaped = concatMap escChar $ tokenString x
-
-              -- Escapes a character for 6.035 compatibility...
-              escChar :: Char -> String
-              escChar x
-                  = case x of
-                      '\\' -> "\\\\"
-                      '\t' -> "\\t"
-                      '\n' -> "\\n"
-                      '"'  -> "\\\""
-                      '\'' -> "\\'"
-                      x    -> [x]
+    show t@(Token {tokenString=s})
+        = case tokenType t of
+            CharLiteral -> printf "character '%s'" $ escStr s
+            IntLiteral -> printf "literal %s" s
+            BooleanLiteral -> printf "boolean %s" s
+            StringLiteral -> printf "string \"%s\"" $ escStr s
+            Identifier -> printf "identifier \"%s\"" s
+            Keyword -> printf "keyword \"%s\"" s
+        where
+          escChar :: Char -> String
+          escChar x
+              = case x of
+                  '\\' -> "\\\\"
+                  '\t' -> "\\t"
+                  '\n' -> "\\n"
+                  '"'  -> "\\\""
+                  '\'' -> "\\'"
+                  x    -> [x]
+          escStr :: String -> String
+          escStr = concatMap escChar
 
 instance Show TokenType where
-    show CharLiteral = "CHARLITERAL"
-    show IntLiteral = "INTLITERAL"
-    show BooleanLiteral = "BOOLEANLITERAL"
-    show StringLiteral = "STRINGLITERAL"
-    show Identifier = "IDENTIFIER"
-    show Keyword = "KEYWORD"
+    show CharLiteral = "character literal"
+    show IntLiteral = "integer literal"
+    show BooleanLiteral = "boolean literal"
+    show StringLiteral = "string literal"
+    show Identifier = "identifier"
+    show Keyword = "keyword"
+
 
 -- Makes a parser which returns a Token whose content is the output of
 -- the given parser.

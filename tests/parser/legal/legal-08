@@ -1,6 +1,6 @@
 class Program {
   void bar(int a) {
-    for i = 0, a {
+    for (i = 0; a) {
       a = a - 1;
     }
   }

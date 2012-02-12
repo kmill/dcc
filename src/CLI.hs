@@ -23,7 +23,7 @@ defaultOptions
                    }
 
 
-data TargetFlag = TargetScanner
+data TargetFlag = TargetScan
                 | TargetParse
                 | TargetInter
                 | TargetLowIR
@@ -48,8 +48,8 @@ options =
 targetOpt :: String -> TargetFlag
 targetOpt s
     = case s of
-        "scan" -> TargetScanner
-        "scanner" -> TargetScanner
+        "scan" -> TargetScan
+        "scanner" -> TargetScan
         "parse" -> TargetParse
         "inter" -> TargetInter
         "lowir" -> TargetLowIR

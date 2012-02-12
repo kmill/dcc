@@ -2,7 +2,7 @@ class Program {
   int A[0xA];
 
   void bar() {
-    forpar i = 0, 0xA {
+    forpar (i = 0; 0xA) {
       A[i] = i;
     }
   }
