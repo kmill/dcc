@@ -25,6 +25,9 @@ dkeyword s = (token showtok tokenPos testtok <?> "\"" ++ s ++ "\"") >> return ()
           testtok t = if tokenType t == Keyword && tokenString t == s
                       then Just t else Nothing
 
+--dkeywords :: [String] -> a
+dkeywords = (foldl1 (<|>)) . (map dkeyword)
+
 -- dprogram is the main entry point into the parser
 dprogram :: DParser
 dprogram = do dkeyword "class" 
@@ -55,15 +58,17 @@ dclosebr = dkeyword "}" >> return ()
 tLookAhead = try . lookAhead
 
 fieldDecl :: DParser
-fieldDecl = do try $ do dtype
-                        tLookAhead $ ident >> (dsemi <|> dopensb <|> dkeyword ",")
+fieldDecl = do try $ do
+                 dtype
+                 tLookAhead $ ident >> (dsemi <|> dopensb <|> dkeyword ",")
                sepBy1 (arrayVar <|> plainVar) (dkeyword ",")
                dsemi
                return ()
     where plainVar = do try ident
                         return ()
-          arrayVar = do try $ do ident
-                                 dopensb
+          arrayVar = do try $ do
+                          ident
+                          dopensb
                         dtoken IntLiteral
                         dclosesb
                         return ()
@@ -79,10 +84,10 @@ methodDecl = do try (dtype <|> dkeyword "void")
                    return ()
 
 block :: DParser
-block = do between dopenbr dclosebr $
-                   do many varDecl
-                      many statement
-                      return ()
+block = do between dopenbr dclosebr $ do
+             many varDecl
+             many statement
+             return ()
 
 varDecl :: DParser
 varDecl = do dtype
@@ -112,16 +117,17 @@ statement = do (ifSt
           ifSt = do dkeyword "if"
                     between dopenp dclosep expr
                     block
-                    optionMaybe $ do dkeyword "else"
-                                     block
+                    optionMaybe $ do
+                      dkeyword "else"
+                      block
                     return ()
           forSt = do dkeyword "for"
-                     between dopenp dclosep $
-                             do ident
-                                dkeyword "="
-                                expr
-                                dkeyword ";"
-                                expr
+                     between dopenp dclosep $ do
+                       ident
+                       dkeyword "="
+                       expr
+                       dkeyword ";"
+                       expr
                      block
                      return ()
           whileSt = do dkeyword "while"
@@ -150,10 +156,11 @@ methodCall = ((tLookAhead $ ident >> dopenp) >> normalMethod)
                             between dopenp dclosep $ sepBy expr (dkeyword ",")
                             return ()
           calloutMethod = do dkeyword "callout"
-                             between dopenp dclosep $
-                                     do dtoken StringLiteral
-                                        many $ do dkeyword ","
-                                                  calloutArg
+                             between dopenp dclosep $ do
+                               dtoken StringLiteral
+                               many $ do
+                                 dkeyword ","
+                                 calloutArg
                              return ()
           calloutArg = do expr <|> dtoken StringLiteral
 
@@ -179,8 +186,6 @@ makeBinOp op next = do next
 makeUnaryOp op next = do optionMaybe (op <?> "unary operator")
                          next
                          return ()
-
-dkeywords = (foldl1 (<|>)) . (map dkeyword)
 
 expr :: DParser
 expr = exprBinOp1

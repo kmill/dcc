@@ -6,7 +6,7 @@ import Text.ParserCombinators.Parsec.Error
 import Text.ParserCombinators.Parsec.Prim
 import Text.Printf
 import Control.Monad
-import Control.Applicative (pure, (<*>))
+import Control.Applicative (pure, (<$>), (<*>), (<*), (*>))
 import Data.Char (ord)
 import Data.List (concatMap)
 
@@ -108,6 +108,8 @@ scanNone = do s <- getState
               case scanner6035CompatMode s of
                 False -> mzero
                 True -> return $ Nothing
+
+
 
 -- expected char, 
 --mthread :: Maybe Char -> 
