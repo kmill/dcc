@@ -33,6 +33,7 @@ data TokenType = CharLiteral
                | StringLiteral
                | Identifier
                | Keyword
+                 deriving (Eq)
 
 data Token = Token { tokenType :: TokenType
                    , tokenString :: String
@@ -141,7 +142,7 @@ scanNone = do s <- getState
                 True -> return $ Nothing
 
 -- expected char, 
-mthread :: Maybe Char -> 
+--mthread :: Maybe Char -> 
 
 ---
 --- Actual scanners

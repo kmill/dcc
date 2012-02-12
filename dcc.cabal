@@ -44,7 +44,7 @@ Cabal-version:        >=1.2
 Executable dcc
   Hs-source-dirs:     src
   -- .hs or .lhs file containing the Main module.
-  Main-is:  	      main.hs
+  Main-is:  	      Main.hs
   
   -- Packages needed in order to build this package.
   Build-depends:      base >= 4, haskell98, parsec >= 2

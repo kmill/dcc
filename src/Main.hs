@@ -5,6 +5,7 @@ import System.Environment
 import CLI
 import Data.Maybe (fromMaybe)
 import Scanner
+import Parser
 
 main :: IO ()
 main = do args <- getArgs

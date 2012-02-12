@@ -3,7 +3,7 @@
 runscanner() {
   olddir=`pwd`;
   cd `dirname $1`
-  `dirname $0`/../../../dcc --target scan --compat `basename $1`
+  ../../../dcc --target scan --compat `basename $1`
   cd $olddir;
 }
 
