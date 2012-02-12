@@ -3,20 +3,22 @@ module CLI ( compilerOpts, CompilerOpts(..), TargetFlag(..)) where
 import System.Console.GetOpt
 import System.Exit
 
-data CompilerOpts = CompilerOpts { inputFile :: Maybe String
-                                 , outputFile :: Maybe String
-                                 , target :: TargetFlag
-                                 , debugMode :: Bool
-                                 , compatMode :: Bool
-                                 }
-                    deriving (Show)
+data CompilerOpts
+    = CompilerOpts { inputFile :: Maybe String
+                   , outputFile :: Maybe String
+                   , target :: TargetFlag
+                   , debugMode :: Bool
+                   , compatMode :: Bool
+                   }
+      deriving (Show)
 
-defaultOptions = CompilerOpts { inputFile = Nothing
-                              , outputFile = Nothing
-                              , target = TargetDefault
-                              , debugMode = False
-                              , compatMode = False
-                              }
+defaultOptions
+    = CompilerOpts { inputFile = Nothing
+                   , outputFile = Nothing
+                   , target = TargetDefault
+                   , debugMode = False
+                   , compatMode = False
+                   }
 
 
 data TargetFlag = TargetScanner

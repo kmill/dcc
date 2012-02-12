@@ -20,10 +20,6 @@ import Data.Maybe (fromMaybe)
 type Scanner a = GenParser Char ScannerState a
 data ScannerState = ScannerState { scanner6035CompatMode :: Bool }
 
-makeScannerState :: Bool -> ScannerState
-makeScannerState compat
-    = ScannerState { scanner6035CompatMode=compat }
-
 reservedWords = ["boolean", "break", "callout", "class", "continue"
                 ,"else", "for", "if", "int", "return", "void", "while"]
 -- The symbols list is ordered so prefixes don't appear first.
@@ -64,7 +60,7 @@ instance Show Token where
               compatChar Nothing = "EOF"
 
               -- Escapes a character for 6.035 compatibility... It
-              -- requires no backslashes!!!
+              -- requires no backslashes in a "found" string!!!
               escChar :: Char -> String
               escChar x
                   = case x of
@@ -219,7 +215,8 @@ dchar = (((char '\\') <?> "backslash") >> (escapedChar <|> scanNone)) -- scanNon
       isValidChar c = (ord c) >= 32 && (ord c) <= 126 && not (c `elem` "'\"")
 
 
--- mchar is char but with a built-in scanNone
+-- mchar is char but with a built-in scanNone (so it uses Maybe to
+-- signal whether the char worked)
 mchar :: Char -> Scanner (Maybe Char)
 mchar c = ((char c) >> (return $ Just c)) <|> scanNone
 
@@ -277,5 +274,5 @@ scanner = do whitespace
 
 runScanner :: CompilerOpts -> String -> String -> Either ParseError [Token]
 runScanner opts ifname input
-    = runParser scanner (makeScannerState $ compatMode opts) ifname input
-
+    = runParser scanner scanState ifname input
+      where scanState = ScannerState { scanner6035CompatMode=compatMode opts }
