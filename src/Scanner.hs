@@ -6,19 +6,12 @@ import Text.ParserCombinators.Parsec.Error
 import Text.ParserCombinators.Parsec.Prim
 import Text.Printf
 import Control.Monad
-import Control.Applicative (pure, (<$>), (<*>), (<*), (*>))
+import Control.Applicative (Applicative, pure, (<$>), (<*>), (<*), (*>))
 import Data.Char (ord)
 import Data.List (concatMap)
 
 import CLI
 import Data.Maybe (fromMaybe)
-
--- Just a lifted version of (++).
-(<++>) :: Scanner [a] -> Scanner [a] -> Scanner [a]
-(<++>) = liftM2 (++)
-
-type Scanner a = GenParser Char ScannerState a
-data ScannerState = ScannerState { scanner6035CompatMode :: Bool }
 
 reservedWords = ["boolean", "break", "callout", "class", "continue"
                 ,"else", "for", "if", "int", "return", "void", "while"]
@@ -73,6 +66,10 @@ instance Show TokenType where
     show Keyword = "keyword"
 
 
+type Scanner a = GenParser Char ScannerState a
+data ScannerState = ScannerState { scanner6035CompatMode :: Bool }
+
+
 -- Makes a parser which returns a Token whose content is the output of
 -- the given parser.
 makeToken :: TokenType -> Scanner String -> Scanner Token
@@ -85,8 +82,9 @@ makeToken restype parser =
 -- the current position.  This Scanner eats a character.
 makeTokenError :: Maybe Char -> Scanner Token
 makeTokenError mc = do pos <- getPosition
-                       c <- (liftM Just anyChar) <|> (eof >> return Nothing)
-                       let hack = case c of  -- dumb hack to satisfy 6.035...
+                       c <- optionMaybe anyChar
+                       -- dumb hack to satisfy 6.035 compatibility...
+                       let hack = case c of
                                     Just '\t' -> 7
                                     Just '\n' -> 1
                                     _ -> 1
@@ -101,18 +99,65 @@ scanError mc = do s <- getState
                     False -> mzero
                     True -> makeTokenError mc
 
--- Checks if we're in 6.035 compatibility mode, and return Nothing if
--- we are, or does mzero otherwise.
-scanNone :: Scanner (Maybe a)
-scanNone = do s <- getState
-              case scanner6035CompatMode s of
-                False -> mzero
-                True -> return $ Nothing
+-- ErrorScanner is a Scanner that contains an Either.  The bind
+-- operation short circuits when the contained Either is a Left, and
+-- is a normal Scanner when it's a Right.
+newtype ErrorScanner a = ErrorScanner { runErrorScanner :: Scanner (Either Token a) }
+
+instance Monad (Either a) where
+    return = Right
+    (Right x) >>= f  = f x
+    (Left x) >>= _   = Left x
+instance Applicative (Either a) where
+    pure = Right
+    a <*> b = do x <- a
+                 y <- b
+                 return $ x y
+
+instance Monad ErrorScanner where
+    return   = ErrorScanner . return . return
+    m >>= f  = ErrorScanner $ do
+                 ea <- runErrorScanner m
+                 case ea of
+                   Left l -> return $ Left l
+                   Right r -> runErrorScanner $ f r
+    fail _   = ErrorScanner $ (Left <$> scanError Nothing)
+
+instance Functor ErrorScanner where
+    fmap f = ErrorScanner . fmap (fmap f) . runErrorScanner
+
+liftS :: Scanner a -> ErrorScanner a
+liftS m = ErrorScanner $ Right <$> m
+
+-- Takes maybe the expected character and returns an ErrorScanner
+-- which fails by returning a Left TokenError, thus short-circuiting
+-- the rest of the ErrorScanner.
+scanFail :: Maybe Char -> ErrorScanner a
+scanFail mc = ErrorScanner $ Left <$> scanError mc
+
+-- Takes an ErrorScanner and pulls out whatever was in the Left or
+-- Right, thus bringing it back to a Scanner.
+catchErrorScanner :: ErrorScanner Token -> Scanner Token
+catchErrorScanner ms
+    = do res <- runErrorScanner ms
+         case res of
+           Left l -> return l
+           Right r -> return r
+
+-- This is the same as <?> for Scanners but instead for an
+-- ErrorScanner
+(<<?>>) :: ErrorScanner a -> String -> ErrorScanner a
+p <<?>> s = ErrorScanner $ (runErrorScanner p <?> s)
 
 
+-- This is the same as <|> but for ErrorScanner instead of Scanner.
+-- Importantly, if the left operand returns a Left, then that is the
+-- same as succeeding, so the right operand is not run.
+(<<|>>) :: ErrorScanner a -> ErrorScanner a -> ErrorScanner a
+p1 <<|>> p2 = ErrorScanner $ runErrorScanner p1 <|> runErrorScanner p2
 
--- expected char, 
---mthread :: Maybe Char -> 
+infix 0 <<?>>
+infixr 1 <<|>>
 
 ---
 --- Actual scanners
@@ -120,21 +165,19 @@ scanNone = do s <- getState
 
 -- Matches a hex/bin/dec literal.
 intLiteral :: Scanner Token
-intLiteral = hexLiteral <|> binLiteral <|> decLiteral
+intLiteral = catchErrorScanner $ hexLiteral <<|>> binLiteral <<|>> decLiteral
     where
-      intLiteral' :: String -> Scanner Char -> Scanner Token
+      intLiteral' :: String -> Scanner Char -> ErrorScanner Token
       intLiteral' prefix digitParser =
-          do pos <- getPosition
-             try (string prefix)
-             mdigit <- (liftM Just digitParser) <|> scanNone
-             case mdigit of
-               Just digit -> do digits <- many digitParser
-                                return $ Token IntLiteral (prefix ++ (digit:digits)) pos
-               Nothing -> scanError Nothing
-      
+          do pos <- liftS getPosition
+             liftS $ try (string prefix)
+             digit1 <- (liftS digitParser) <<|>> scanFail Nothing
+             digits <- liftS $ many digitParser
+             return $ Token IntLiteral (prefix ++ (digit1:digits)) pos
+
       hexLiteral = intLiteral' "0x" hexDigit
       binLiteral = intLiteral' "0b" $ oneOf "01"
-      decLiteral = makeToken IntLiteral $ many1 digit
+      decLiteral = liftS $ makeToken IntLiteral $ many1 digit
 
 -- alpha is [a-zA-Z_]
 alpha :: Scanner Char
@@ -148,8 +191,7 @@ identifier = makeToken Identifier identifier'
 
 -- Parses a particular string as long as it's not followed by alphaNum
 reserved :: String -> Scanner String
-reserved s = do try (string s >> notFollowedBy alphaNum)
-                return s
+reserved s = try (string s <* notFollowedBy alphaNum)
 
 boolLiteral :: Scanner Token
 boolLiteral = (boolReserved "true") <|> (boolReserved "false")  <?> "boolean"
@@ -173,62 +215,60 @@ keywordSymbol s = makeToken Keyword (string s)
 keywords :: Scanner Token
 keywords = choice $ map keyword reservedWords
 
-symbolTokens :: Scanner Token
-symbolTokens = choice $ map (\s -> makeToken Keyword (try $ string s)) symbols
 
-dchar :: Scanner (Maybe Char)
-dchar = (((char '\\') <?> "backslash") >> (escapedChar <|> scanNone)) -- scanNone since ate backslash
-        <|> (((satisfy isValidChar)>>=(\c -> return $ Just c)) <?> "valid non-quote character")
+-- This matches any of the symbol tokens like parens, braces,
+-- operators, etc.  They come from the symbols variable.
+symbolTokens :: Scanner Token
+symbolTokens = choice [makeToken Keyword (try $ string s) | s <- symbols]
+
+-- Represents a character which can appear in a string
+dchar :: ErrorScanner Char
+dchar = do (liftS $ char '\\') <<?>> "backslash"
+           escapedChar <<|>> scanFail Nothing -- scanFail since ate backslash
+        <<|>> ((liftS $ satisfy isValidChar) <<?>> "valid non-quote character")
     where
       escapedTable = [('\'', '\''), ('"', '"'), ('\\', '\\'), ('t', '\t'), ('n', '\n')]
-      escapedChar :: Scanner (Maybe Char)
-      escapedChar = choice $ map (\(c,r) -> (char c) >> (return $ Just r)) escapedTable
-
+      escapedChar :: ErrorScanner Char
+      escapedChar = foldr1 (<<|>>) [(liftS $ char c) >> return r | (c,r) <- escapedTable]
       isValidChar c = (ord c) >= 32 && (ord c) <= 126 && not (c `elem` "'\"")
 
 
--- mchar is char but with a built-in scanNone (so it uses Maybe to
--- signal whether the char worked)
-mchar :: Char -> Scanner (Maybe Char)
-mchar c = ((char c) >> (return $ Just c)) <|> scanNone
+-- mchar is a lifted char function but with a built-in scanFail
+mchar :: Char -> ErrorScanner Char
+mchar c = (liftS $ char c) <<|>> scanFail (Just c)
 
--- Takes a character that should surround a parser.  If either the
--- parser or the matching of the second iteration of the character
--- fail, then makeTokenError is called.
-mbetween c p handle
-    = do pos <- getPosition
-         char c
-         minside <- p
-         case minside of
-           Nothing -> makeTokenError Nothing
-           Just inside ->
-               do mc <- (mchar c) <|> scanNone
-                  case mc of
-                    Nothing -> makeTokenError (Just c)
-                    Just _ -> return $ handle inside pos
+-- Takes a character which should surround the parser.  This parser
+-- fails if the first character is not matched, and uses mchar to
+-- scanFail if the last character is not matched.  It returns the
+-- result of the parser along with the position of the opening
+-- character.  Make sure the passed in parser handles its own errors!
+mbetween :: Char -> ErrorScanner a -> ErrorScanner (a, SourcePos)
+mbetween c p = do pos <- liftS getPosition
+                  liftS $ char c
+                  minside <- p
+                  mchar c
+                  return (minside, pos)
 
--- Runs a parser as many times as it matches.  But, if the parser
--- returns Nothing (because of a scanNone, for instance), it is
--- treated as an error, and then this entire parser returns Nothing as
--- well.
-mmany :: Scanner (Maybe a) -> Scanner (Maybe [a])
-mmany s = do mas <- mmany' []
-             case mas of
-               Nothing -> return Nothing
-               (Just as) -> return $ Just $ reverse as
-    where mmany' cs = do emc <- (liftM Just s) <|> (return $ Nothing)
-                         case emc of
-                           Nothing -> return $ Just cs
-                           (Just mc) ->
-                               case mc of
-                                 Nothing -> return Nothing
-                                 (Just c) -> mmany' (c:cs)
+-- Like optionMaybe, but lifted to ErrorScanner.
+mOptionMaybe :: ErrorScanner a -> ErrorScanner (Maybe a)
+mOptionMaybe p = (liftM Just p) <<|>> return Nothing
+
+-- Like many, but lifted to ErrorScanner.
+mmany :: ErrorScanner a -> ErrorScanner [a]
+mmany p = do mx <- mOptionMaybe p
+             case mx of
+               Nothing -> return []
+               Just x -> fmap (x:) (mmany p)
 
 charLiteral :: Scanner Token
-charLiteral = mbetween '\'' (dchar <|> scanNone) (\c -> Token CharLiteral [c])
+charLiteral = catchErrorScanner $ do
+                (c, pos) <- mbetween '\'' (dchar <<|>> scanFail Nothing)
+                return $ Token CharLiteral [c] pos
 
 stringLiteral :: Scanner Token
-stringLiteral = mbetween '"' (mmany dchar) (Token StringLiteral)
+stringLiteral = catchErrorScanner $ do
+                  (s, pos) <- mbetween '"' (mmany dchar)
+                  return $ Token StringLiteral s pos
 
 -- This is the main token scanner!
 dctoken :: Scanner Token
