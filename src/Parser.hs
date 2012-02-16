@@ -4,23 +4,29 @@ import Scanner
 import Text.ParserCombinators.Parsec
 import Text.ParserCombinators.Parsec.Error
 import CLI
+import Control.Applicative (Applicative, pure, (<$>), (<*>), (<*), (*>), (<$))
+
+import Text.PrettyPrint.HughesPJ
 
 -- at this stage, all parsers must return ()
-type DParser = GenParser Token DParserState ()
+type DParser a = GenParser Token DParserState a
 data DParserState = DParserState
 
-runDParser :: CompilerOpts -> [Token] -> Either ParseError ()
+runDParser :: CompilerOpts -> [Token] -> Either ParseError DProgram
 runDParser opts input
     = runParser dprogram parseState "" input
       where parseState = DParserState
 
-dtoken :: TokenType -> DParser
-dtoken tt = (token showtok tokenPos testtok <?> (show tt)) >> return ()
-    where showtok = show
-          testtok t = if tt == tokenType t then Just t else Nothing
+dtoken :: TokenType -> DParser Token
+dtoken tt = dtoken' (\t -> tt == tokenType t) <?> (show tt)
 
-dkeyword :: String -> DParser
-dkeyword s = (token showtok tokenPos testtok <?> "\"" ++ s ++ "\"") >> return ()
+dtoken' :: (Token -> Bool) -> DParser Token
+dtoken' p = token showtok tokenPos testtok
+    where showtok = show
+          testtok t = if p t then Just t else Nothing
+
+dkeyword :: String -> DParser Token
+dkeyword s = token showtok tokenPos testtok <?> "\"" ++ s ++ "\""
     where showtok = show
           testtok t = if tokenType t == Keyword && tokenString t == s
                       then Just t else Nothing
@@ -28,77 +34,158 @@ dkeyword s = (token showtok tokenPos testtok <?> "\"" ++ s ++ "\"") >> return ()
 --dkeywords :: [String] -> a
 dkeywords = (foldl1 (<|>)) . (map dkeyword)
 
--- dprogram is the main entry point into the parser
-dprogram :: DParser
-dprogram = do dkeyword "class" 
-              ident
-              dkeyword "{"
-              many fieldDecl
-              many methodDecl
-              dkeyword "}"
-              return ()
+class PP a where
+    pp :: a -> Doc
 
-dsemi :: DParser
+data DProgram = DProgram SourcePos [FieldDecl] [MethodDecl]
+
+instance Show DProgram where
+    show = render . pp
+
+instance PP DProgram where
+    pp (DProgram pos fields methods)
+        = text "Program"
+          $$ (nest 3 $ vcat [pp f | f <- fields])
+          $$ (nest 3 $ vcat [pp m | m <- methods])
+
+-- dprogram is the main entry point into the parser
+dprogram :: DParser DProgram
+dprogram = DProgram <$> getPosition
+           <* header
+           <*> many fieldDecl
+           <*> many methodDecl
+           <* dkeyword "}"
+    where header = dkeyword "class" >> identProgram >> dkeyword "{"
+          identProgram = dtoken' (\t -> Identifier == tokenType t
+                                        && "Program" == tokenString t)
+                          <?> "identifier \"Program\""
+          
+
+dsemi :: DParser ()
 dsemi = dkeyword ";" >> return ()
 
-dopenp :: DParser
+dopenp :: DParser ()
 dopenp = dkeyword "(" >> return ()
-dclosep :: DParser
+dclosep :: DParser ()
 dclosep = dkeyword ")" >> return ()
-dopensb :: DParser
+dopensb :: DParser ()
 dopensb = dkeyword "[" >> return ()
-dclosesb :: DParser
+dclosesb :: DParser ()
 dclosesb = dkeyword "]" >> return ()
-dopenbr :: DParser
+dopenbr :: DParser ()
 dopenbr = dkeyword "{" >> return ()
-dclosebr :: DParser
+dclosebr :: DParser ()
 dclosebr = dkeyword "}" >> return ()
 
+dcomma :: DParser ()
+dcomma = dkeyword "," >> return ()
 
+-- fixed some kind of bug in parsec...
 tLookAhead = try . lookAhead
 
-fieldDecl :: DParser
-fieldDecl = do try $ do
-                 dtype
-                 tLookAhead $ ident >> (dsemi <|> dopensb <|> dkeyword ",")
-               sepBy1 (arrayVar <|> plainVar) (dkeyword ",")
-               dsemi
-               return ()
-    where plainVar = do try ident
-                        return ()
-          arrayVar = do try $ do
-                          ident
-                          dopensb
-                        dtoken IntLiteral
-                        dclosesb
-                        return ()
+data FieldDecl = FieldDecl SourcePos DType [FieldVar]
+                 deriving Show
 
-methodDecl :: DParser
-methodDecl = do try (dtype <|> dkeyword "void")
-                ident
-                between dopenp dclosep $ sepBy arg (dkeyword ",")
-                block
-                return ()
-    where arg = do dtype
-                   ident
-                   return ()
+instance PP FieldDecl where
+    pp (FieldDecl pos t vars)
+        = text "field" <+> (pp t)
+          <+> (nest 3 $ vcat [pp v | v <- vars])
 
-block :: DParser
-block = do between dopenbr dclosebr $ do
-             many varDecl
-             many statement
-             return ()
+data FieldVar = PlainVar Token
+              | ArrayVar Token Token
+                deriving Show
 
-varDecl :: DParser
-varDecl = do dtype
-             sepBy1 ident (dkeyword ",")
-             dsemi
-             return ()
+instance PP FieldVar where
+    pp (PlainVar t) = text $ tokenString t
+    pp (ArrayVar t l) = (text $ tokenString t) <> brackets (text $ show l)
 
-dtype :: DParser
-dtype = (dkeyword "int" <|> dkeyword "boolean") <?> "type"
+fieldDecl :: DParser FieldDecl
+fieldDecl = FieldDecl <$> getPosition
+            <*> (try $ dtype <* -- three symbol lookahead
+                         (tLookAhead $ ident >> (dsemi <|> dopensb <|> dcomma)))
+            <*> (sepBy1 (arrayVar <|> plainVar) dcomma)
+            <* dsemi
+    where plainVar = PlainVar <$> try ident
+          arrayVar = ArrayVar
+                     <$> (try $ ident <* dopensb)
+                     <*> (dtoken IntLiteral)
+                     <* dclosesb
 
-statement :: DParser
+data MethodDecl = MethodDecl SourcePos MethodType Token [MethodArg]
+
+instance PP MethodDecl where
+    pp (MethodDecl pos t tok args)
+        = text "methoddecl" <+> (pp t) <+> (text $ tokenString tok)
+          <> parens (hsep $ punctuate comma [pp a | a <- args])
+
+
+data MethodType = MethodReturns DType
+                | MethodVoid
+
+instance PP MethodType where
+    pp (MethodReturns x) = pp x
+    pp MethodVoid = text "void"
+
+data MethodArg = MethodArg DType Token
+
+instance PP MethodArg where
+    pp (MethodArg t tok) = (pp t) <+> (text $ tokenString tok)
+
+methodDecl :: DParser MethodDecl
+methodDecl = MethodDecl <$> getPosition
+             <*> do try ((MethodReturns <$> dtype)
+                         <|> (MethodVoid <$ dkeyword "void"))
+             <*> ident
+             <*> (between dopenp dclosep $ sepBy arg dcomma)
+             <* block
+    where arg = MethodArg
+                <$> dtype
+                <*> ident
+
+data Statement = Block SourcePos [VarDecl] [Statement]
+               | IfSt SourcePos Expr Statement (Maybe Statement)
+               | WhileSt SourcePos Expr Statement
+               | ReturnSt SourcePos (Maybe Expr)
+               | BreakSt SourcePos
+               | CountinueSt SourcePos
+               | ExprSt Expr
+               | AssignSt
+
+block :: DParser Statement
+block = Block <$> getPosition
+        <* dopenbr
+        <*> many varDecl
+        <*> many statement
+        <* dclosebr
+
+
+data VarDecl = VarDecl SourcePos DType [Token]
+
+instance PP VarDecl where
+    pp (VarDecl pos t vars)
+        = text "var" <+> pp t
+          <+> (nest 3 $ vcat [text $ tokenString v | v <- vars])
+
+varDecl :: DParser VarDecl
+varDecl = VarDecl <$> getPosition
+          <*> dtype
+          <*> sepBy1 ident dcomma
+          <* dsemi
+
+
+data DType = DInt
+           | DBool
+             deriving Show
+
+instance PP DType where
+    pp DInt = text "int"
+    pp DBool = text "bool"
+
+dtype :: DParser DType
+dtype = ((DInt <$ dkeyword "int")
+         <|> (DBool <$ dkeyword "boolean")) <?> "type"
+
+statement :: DParser Statement
 statement = do (ifSt
                 <|> forSt
                 <|> whileSt
@@ -145,26 +232,27 @@ statement = do (ifSt
                           dsemi
                           return ()
 
-assignOp :: DParser
+assignOp :: DParser ()
 assignOp = do dkeyword "=" <|> dkeyword "+=" <|> dkeyword "-="
               return ()
 
-methodCall :: DParser
+methodCall :: DParser ()
 methodCall = ((tLookAhead $ ident >> dopenp) >> normalMethod)
              <|> calloutMethod
     where normalMethod = do ident
-                            between dopenp dclosep $ sepBy expr (dkeyword ",")
+                            between dopenp dclosep $ sepBy expr dcomma
                             return ()
           calloutMethod = do dkeyword "callout"
                              between dopenp dclosep $ do
                                dtoken StringLiteral
                                many $ do
-                                 dkeyword ","
+                                 dcomma
                                  calloutArg
                              return ()
-          calloutArg = do expr <|> dtoken StringLiteral
+          calloutArg = do expr <|> (() <$ dtoken StringLiteral)
+                          return ()
 
-location :: DParser
+location :: DParser ()
 location = do ident
               optionMaybe $ between dopensb dclosesb expr
               return ()
@@ -187,7 +275,7 @@ makeUnaryOp op next = do optionMaybe (op <?> "unary operator")
                          next
                          return ()
 
-expr :: DParser
+expr :: DParser ()
 expr = exprBinOp1
     where exprBinOp1 = makeBinOp (dkeyword "||") exprBinOp2
           exprBinOp2 = makeBinOp (dkeyword "&&") exprBinOp3
@@ -202,7 +290,8 @@ expr = exprBinOp1
                      <|> literal
                      <|> between dopenp dclosep expr
 
-literal :: DParser
-literal = dtoken IntLiteral <|> dtoken CharLiteral <|> dtoken BooleanLiteral
+literal :: DParser ()
+literal = do dtoken IntLiteral <|> dtoken CharLiteral <|> dtoken BooleanLiteral
+             return ()
 
 ident = dtoken Identifier

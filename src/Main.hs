@@ -52,7 +52,8 @@ doParseFile opts ifname input
               [] -> case runDParser opts v of
                       Left err -> do reportErr (lines input) err
                                      exitWith $ ExitFailure 1
-                      Right r -> exitWith $ ExitSuccess
+                      Right r -> do print r
+                                    exitWith $ ExitSuccess
               errors -> do printScannerResult errors
                            exitWith $ ExitFailure 1
     where getErrors res

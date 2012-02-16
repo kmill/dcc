@@ -47,7 +47,7 @@ Executable dcc
   Main-is:  	      Main.hs
   
   -- Packages needed in order to build this package.
-  Build-depends:      base >= 4, haskell98, parsec >= 2
+  Build-depends:      base >= 4, haskell98, parsec >= 2, pretty
   
   -- Modules not exported by this package.
   -- Other-modules:       
