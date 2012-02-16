@@ -104,15 +104,15 @@ scanError mc = do s <- getState
 -- is a normal Scanner when it's a Right.
 newtype ErrorScanner a = ErrorScanner { runErrorScanner :: Scanner (Either Token a) }
 
-instance Monad (Either a) where
-    return = Right
-    (Right x) >>= f  = f x
-    (Left x) >>= _   = Left x
-instance Applicative (Either a) where
-    pure = Right
-    a <*> b = do x <- a
-                 y <- b
-                 return $ x y
+-- instance Monad (Either a) where
+--     return = Right
+--     (Right x) >>= f  = f x
+--     (Left x) >>= _   = Left x
+-- instance Applicative (Either a) where
+--     pure = Right
+--     a <*> b = do x <- a
+--                  y <- b
+--                  return $ x y
 
 instance Monad ErrorScanner where
     return   = ErrorScanner . return . return

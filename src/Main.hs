@@ -49,7 +49,7 @@ doParseFile opts ifname input
                        exitWith $ ExitFailure 1
         Right v ->
             case getErrors v of
-              [] -> case runDParser opts v of
+              [] -> case runDParser opts ifname v of
                       Left err -> do reportErr (lines input) err
                                      exitWith $ ExitFailure 1
                       Right r -> do print r
