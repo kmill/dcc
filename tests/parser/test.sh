@@ -1,7 +1,7 @@
 #!/bin/sh
 
 runparser() {
-  ../../dcc --target parse $1
+  ../../dcc --compat --target parse $1
 }
 
 cd `dirname $0`
@@ -27,7 +27,8 @@ for file in ./legal/*; do
   fi
 done
 
-if test fail; then
+if [ "$fail" -eq 0 ]
+then
     echo "\nPassed"
 else
     echo "\nFailed"

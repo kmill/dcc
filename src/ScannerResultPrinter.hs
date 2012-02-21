@@ -1,21 +1,27 @@
-module ScannerResultPrinter(printScannerResult) where
+-- | This module contains functions for outputting a list of 'Token's
+-- (consisting of both 'Token's and 'TokenError's) in a way that
+-- satisfies the 6.035 specification.  We put it over here in it's own
+-- file because the author would like to disown it.
+
+module ScannerResultPrinter(printScannerResult, Show6035) where
 
 import Text.Printf
-import IO
 import Text.ParserCombinators.Parsec.Pos
 import Scanner
 import Data.Maybe (fromMaybe)
 import Data.Char (ord)
 
+-- | Runs 'show6035' on each of the tokens and prints each 
 printScannerResult :: [Token] -> IO ()
-printScannerResult (t:ts) = do putStrLn $ show6035 t
-                               printScannerResult ts
-printScannerResult [] = return ()
+printScannerResult ts = mapM_ (putStrLn . show6035) ts
 
+-- | The 'Show6035' class is for showing things in accordance with the
+-- 6.035 specifications.  It has the same interface as 'Show', except,
+-- it's 'Show6035'.
 class Show6035 a where
     show6035 :: a -> String
 
--- Wraps the second string with two copies of the first string.
+-- | Wraps the second string in two copies of the first string.
 quotify :: String -> String -> String
 quotify q s = q ++ s ++ q
 
@@ -23,18 +29,19 @@ instance Show6035 Token where
     show6035 (TokenError pos c mc)
         = compatPos
           ++ case mc of
-               Just exc -> printf "expecting %s, found '%s'"
-                           (compatChar mc) (fromMaybe "EOF" $ c >>= Just . escChar)
+               Just _ -> printf "expecting %s, found '%s'"
+                         (compatChar mc) (fromMaybe "EOF" $ c >>= Just . escChar)
                Nothing -> "unexpected char: " ++ (compatChar c)
         where compatPos = printf "%s line %i:%i: "
                           (sourceName pos) (sourceLine pos) (sourceColumn pos)
-              compatChar (Just c) = if 32 <= (ord c) && (ord c) <= 126
-                                    then quotify "'" [c]
-                                    else printf "0x%X" c
+              compatChar (Just c') = if 32 <= (ord c') && (ord c') <= 126
+                                     then quotify "'" [c']
+                                     else printf "0x%X" c'
               compatChar Nothing = "EOF"
 
               -- Escapes a character for 6.035 compatibility... It
-              -- requires no backslashes in a "found" string!!!
+              -- requires that there be no backslashes in a "found"
+              -- string!!!
               escChar :: Char -> String
               escChar x
                   = case x of
@@ -43,7 +50,7 @@ instance Show6035 Token where
                       '\n' -> "\\n"
                       '"'  -> "\""
                       '\'' -> "'"
-                      x    -> [x]
+                      _    -> [x]
                                   
     show6035 x = ln ++ tokType ++ " " ++ tokStr
         where ln = show $ sourceLine $ tokenPos x
@@ -61,14 +68,14 @@ instance Show6035 Token where
 
               -- Escapes a character for 6.035 compatibility...
               escChar :: Char -> String
-              escChar x
-                  = case x of
+              escChar c
+                  = case c of
                       '\\' -> "\\\\"
                       '\t' -> "\\t"
                       '\n' -> "\\n"
                       '"'  -> "\\\""
                       '\'' -> "\\'"
-                      x    -> [x]
+                      _    -> [c]
 
 instance Show6035 TokenType where
     show6035 CharLiteral = "CHARLITERAL"

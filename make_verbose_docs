@@ -1,0 +1,2 @@
+#!/bin/sh
+cabal haddock --executables --haddock-option=--ignore-all-exports

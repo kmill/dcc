@@ -42,12 +42,20 @@ Build-type:          Simple
 Cabal-version:        >=1.2
 
 Executable dcc
-  Hs-source-dirs:     src
+  hs-source-dirs:     src
+  ghc-options:	      -Wall -O2
   -- .hs or .lhs file containing the Main module.
   Main-is:  	      Main.hs
   
   -- Packages needed in order to build this package.
-  Build-depends:      base >= 4, haskell98, parsec >= 2, pretty
+  Build-depends:
+    base >= 4,
+    haskell98,
+    parsec >= 2,
+    pretty,
+    mtl >= 1.1
+  extensions:
+    CPP
   
   -- Modules not exported by this package.
   -- Other-modules:       
