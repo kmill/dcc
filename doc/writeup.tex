@@ -39,6 +39,19 @@ program, rather than having all arguments begin with \texttt{-}.  The
 rationale for this will be discussed in section
 \ref{sec:comm-line-interf}.
 
+\section{Invocation}
+\label{sec:invocation}
+
+To build the project, run
+\begin{verbatim}
+$ cabal configure
+$ cabal build
+\end{verbatim}
+There is a symbolic link \texttt{dcc} in the root of the archive which
+runs the built program.  The test case script in
+\texttt{tests/scanner/test.sh} and \texttt{tests/parser/test.sh} have
+been modified to be able to find \texttt{dcc}.
+
 \section{Design overview}
 \label{sec:design-overview}
 
@@ -118,9 +131,9 @@ that Parsec, upon encountering a scanning error (which is consuming
 input and entering a state in which the scanner cannot proceed), will
 immediately halt and deliver a useful error message, rather than
 skipping the character, collecting the error, and continuing scanning,
-as ANTLR scanners would, despite the fact that scanning errors tend to
-occur in strings, and messing up a string, and continuing will just
-scan everything in the string as out, and vice versa.
+as ANTLR scanners would, despite the fact that scanner errors tend to
+occur in strings, and continuing after a messed-up string will just
+scan everything in the string as out of it, and vice versa.
 
 Since the specification required collecting all errors, this
 difficulty with Parsec needed to be solved.  First, we need a quick
