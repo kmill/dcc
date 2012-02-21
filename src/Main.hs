@@ -1,3 +1,5 @@
+-- | This is where the magic starts.
+
 module Main where
 
 import System.Environment
@@ -31,12 +33,13 @@ main = do args <- getArgs
 reportErr :: [String] -- ^ The lines from the source file
           -> ParseError -- ^ The parse error to format
           -> IO ()
-reportErr ls err = do putStrLn $ show (errorPos err) ++ ":"
-                      putStrLn line
-                      putStr errptr
-                      putStrLn $ showErrorMessages "or" "unknown parse error"
-                                   "expecting" "unexpected" "end of input"
-                                   (errorMessages err)
+reportErr ls err
+    = do putStrLn $ show (errorPos err) ++ ":"
+         putStrLn line
+         putStr errptr
+         putStrLn $ showErrorMessages "or" "unknown parse error"
+                      "expecting" "unexpected" "end of input"
+                      (errorMessages err)
     where line = ls !! (sourceLine pos - 1)
           errptr = replicate (sourceColumn pos - 1) ' '
                    ++ "^"

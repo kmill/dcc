@@ -1,0 +1,319 @@
+\documentclass[11pt]{article}
+
+\usepackage{amsmath,amsfonts,amssymb,amsthm} %,latexsym,mathrsfs,bbm}
+\usepackage{fullpage}
+
+\title{6.035 Project 0}
+\author{Kyle Miller}
+\date{21 Feb 2012}
+\begin{document}
+\maketitle
+
+This is an overview of Project 0, which was a project about writing a
+small program.  In particular, the goal was to make a scanner and
+parser for the Decaf language.
+
+The decision was made very early on (i.e., last year) to use Haskell
+as the language to build the compiler.  This was due to varying
+reasons.  An attempt to solidify these reasons would have as some of
+them 1) the author has been meaning to actually learn how to program
+in Haskell, 2) the language seems to be very well-suited to designing
+domain-specific languages, which seems to the currently naive author
+useful for building a compiler, and 3) monads\footnote{etc.}.
+
+The specification was followed very closely; in fact, it was followed
+to such a maddening degree that ANTLR quirks were coded into the
+scanner and the output was made character perfect.  There were two
+additions made to the project specification.  The first was to make a
+command line flag called \texttt{--compat} which, when given, ensures
+that the output of the program matches the required output perfectly.
+The second was to implement an abstract syntax tree and output it when
+\texttt{--compat} mode is not given.  The rationale for having an
+abstract syntax tree is for being able to test, for instance, whether
+order of operations actually works.
+
+There was one modification made to the specification, and that was to
+make it so command line arguments begin with \texttt{--} if they are
+in long form and \texttt{-} if they are in short form, like any other
+program, rather than having all arguments begin with \texttt{-}.  The
+rationale for this will be discussed in section
+\ref{sec:comm-line-interf}.
+
+\section{Design overview}
+\label{sec:design-overview}
+
+This section briefly describes the various parts of the scanner and
+parser and their design.
+
+\subsection{Command line interface}
+\label{sec:comm-line-interf}
+
+The downside to using Haskell as far as amount of programming work
+goes is that there was no CLI or supporting framework, so the it had
+to be built.  For a CLI, it seemed like many real Haskell applications
+used \texttt{System.Console.GetOpt}, so the author decided to use it
+as well.  The interface is not complicated---you give it a table of
+the possible options as well as functions to convert the parsed
+options into some internal data structure.  And, not only does it do
+the parsing, but it also is able to automatically generate a usage
+page. Also, looking at the code, it's almost unfair comparing
+\texttt{CLI.java} with \texttt{CLI.hs} since \texttt{GetOpt} is such a
+nice DSL.
+
+The ``problem'' with \texttt{GetOpt}, as far as the 6.035
+specification is concerned, is that it interprets a single
+``\texttt{-}'' as meaning the start of a short form of an argument,
+reserving long forms for ``\texttt{--}'' prefixes.  It seems
+\texttt{GetOpt} was designed this way since then multiple single-hypen
+arguments can be concateneted, dropping off hyphens (so, ``\texttt{-a
+  -u -x}'' can be written as ``\texttt{-aux}''). It would be a very
+ugly hack to try to convince \texttt{GetOpt} to like single-hyphen
+long-form arguments, so the decision was made not to do this.  To be
+more specific, three ways which come to mind which almost work but are
+unacceptable are
+\begin{enumerate}
+\item textually replace all single-hyphen arguments with their
+  doubly-hypenated counterparts, duplicating the efforts of
+  \texttt{GetOpt} to parse arguments and possibly losing the error
+  handling;
+\item textually replace instances of single hyphen with two hyphens
+  and adding single-character ``long-form arguments'', losing
+  \texttt{GetOpt}'s nice automatic usage page; or
+\item textually replace all doubly hyphenated arguments with a single
+  hyphen and its first character, losing \texttt{GetOpt}'s error
+  handling mechanism.
+\end{enumerate}
+If forced, the author might begrudgingly implement the first one and
+make a compiler flag that would compiled in this feature.
+
+\subsection{Scanner}
+\label{sec:scanner}
+
+There were two possible tools the author knew about for building a
+scanner: Alex and Parsec.  Alex is a lexer generator which takes a
+specification, like ANTLR, and produces Haskell code which turns
+strings into token streams.  Parsec is a parser combinator library
+which lets one build parsers for any kind of stream (that is, a list
+of some kind of data, such as characters) by composing them from other
+parsers.  Since Parsec implements regular expression operations, it
+would be able to produce at least what Alex could.  For this reason
+along with the author's inherent distrust for code generators, Parsec
+was chosen.
+
+The design of the \texttt{Token} data constructor was chosen to
+simplify the code of the scanner.  In particular, the constructor was
+defined with arguments in the order of \texttt{TokenType},
+\texttt{SourcePos}, \texttt{String} (where \texttt{TokenType} is
+something like \texttt{CharLiteral} or \texttt{Identifier}), to
+facilitate using applicative functor notation.  For instance, the
+general function for making token objects using the current scanner
+state was able to be written like
+\begin{verbatim}
+makeToken :: TokenType -> Scanner String -> Scanner Token
+makeToken restype parser = Token restype <$> getPosition <*> parser
+\end{verbatim} %$
+
+One hangup with using Parsec instead of the 6.035-prescribed ANTLR was
+that Parsec, upon encountering a scanning error (which is consuming
+input and entering a state in which the scanner cannot proceed), will
+immediately halt and deliver a useful error message, rather than
+skipping the character, collecting the error, and continuing scanning,
+as ANTLR scanners would, despite the fact that scanning errors tend to
+occur in strings, and messing up a string, and continuing will just
+scan everything in the string as out, and vice versa.
+
+Since the specification required collecting all errors, this
+difficulty with Parsec needed to be solved.  First, we need a quick
+overview of how Parsec works.  It is a top-down parser whose
+individual parsing functions compute a value of a type like
+\texttt{Consumed (Reply a)} where
+\begin{verbatim}
+data Consumed a = Consumed a | Empty !a
+data Reply a = OK a ParserState | Error ParseError
+\end{verbatim}
+where the \texttt{Consumed} type represents whether the parser
+consumed input in the process of parsing (which occurs due to
+lookahead) and the \texttt{Reply} type represents whether the parser
+actually was able to parse.  To concatenate parsers, the rule is that
+if the first parser comes to an error then the entire parser results
+in that error, and whether the concatenated parser consumed anything
+is a function of whether either consumed anything.  Interestingly, to
+make a parser which parses either of the parsers, which we'll call the
+choice parser, the first is executed, and if it fails without having
+consumed input, then the second parser is executed.  The choice parser
+fails if either the second parser fails or if the first parser fails
+after having consumed input.  This behavior for the choice parser
+makes Parsec efficient by removing implicit lookahead.
+
+With this in mind, the problem is still to make it so the scanner can
+continue after failure with Parsec.  There are a few options.
+\begin{itemize}
+\item Make a function which takes a parser and catches \texttt{Error}.
+  The problem with this approach is that Parsec forgets its state in
+  the event of an error to prevent memory leaks!  While it is true
+  that the \texttt{ParseError} contains the position in the file where
+  the error occurred, taking the line and column data and restarting a
+  parser from there would be annoying.  Furthermore, to get a
+  character-perfect replication of the test cases, we would need to
+  put in code which would disrupt normal Parsec error messages, which
+  would be annoying in the event we would want to turn them off.
+\item Make a parser which could inspect the current Parsec errors
+  (which are stored in \texttt{ParserState}) and create a special
+  error token object which would represent the error.  This would be
+  put at the end of a choice parser so that Parsec would think the
+  parse was a success since an object was returned and then not stop
+  parsing.  There are two problems: a) Parsec's library is watertight
+  and such information cannot be had by user-written parsers, and b)
+  the logic to short-circuit when getting a error token object would
+  be annoying.
+\item Do something like the previous option, but wrap the parser in a
+  monad transformer which could do such short circuiting
+  automatically.
+\end{itemize}
+We went with the third option because it seemed the cleanest.  The
+transformer is in \texttt{Control.Exceptional}, which was written
+especially for the scanner.  It is essentially \texttt{EitherT} except
+with different names because older versions of the Prelude didn't have
+instances for \texttt{Either e} being a monad.  Scanners which could
+have a scanner error are put in the \texttt{EitherT}, where the
+\texttt{Left} holds a token representing the error.
+
+The decision was made to make the above mechanism disabled by default
+and to be able to turn on collecting errors using the
+``\texttt{--compat}'' argument due to the taste of the author.  This
+is accomplished by having some state in the parsers which makes the
+error-building parser evaluate to \texttt{mzero} if the flag is not
+set.
+
+There is an oddity in ANTLR where unexpected tabs increment the column
+number by 8 and unexpected newlines increment the column number by 2.
+It doesn't increment the line number!  This oddity was accounted for
+in ``\texttt{--compat}'' mode.
+
+\subsection{Parser}
+\label{sec:parser}
+
+Having had success with Parsec, the parser was also written with the
+library.  The parser construction is straightforward and looks
+somewhat like the grammar itself. Applicative functor notation was a
+great benefit to parser construction.  For instance, to define a
+``for'' statement one may write
+\begin{verbatim}
+forSt :: DParser Statement
+forSt = ForSt <$> getPosition
+        <* dkeyword "for" <* dopenp
+        <*> ident <* dkeyword "="
+        <*> expr <* dkeyword ";"
+        <*> expr <* dclosep
+        <*> block
+\end{verbatim} %$
+
+Every once in a while, up to three symbols of lookahead were used to
+figure out which branch of the parser to take.  Wherever lookahead
+occurs in the source, there is a comment acknowledging this fact.
+
+An interesting part of the parser is the definition of expressions.
+Mirroring the specification, the operators were defined by
+\begin{verbatim}
+ops :: [DParser Expr -> DParser Expr]
+ops = [ unOps ["-"]
+      , unOps ["!"]
+      , binOps ["*", "/", "%"]
+      , binOps ["+", "-"]
+      , binOps ["<", "<=", ">=", ">"]
+      , binOps ["==", "!="]
+      , binOps ["&&"]
+      , binOps ["||"]
+      ]
+\end{verbatim}
+and then code was written to tell the parser on each line about the
+parser on the previous line, where the first parser was told about the
+parsers for method calls, literals, and further expressions nested in
+parentheses.  This makes it easy to add more operators to the language
+at a later date at any precedence level while also making sure tedious
+code did not have to be written for defining expressions.
+
+A benefit of using Parsec is good at giving lists of expected tokens.
+For instance,
+\begin{verbatim}
+"./illegal/illegal-16" (line 3, column 9):
+    if () { // no condition
+        ^
+unexpected keyword ")"
+expecting unary operator, identifier, "callout", literal or "("
+\end{verbatim}
+(the part which points to a line of source with a carat was written
+for this project).  There is currently one semi-bug with the parser,
+and that is a problem in reporting errors when lookahead is involved.
+The following is an example of this:
+\begin{verbatim}
+"./illegal/illegal-12" (line 7, column 11):
+    int a b;	// missing comma
+          ^
+unexpected identifier "b"
+expecting "," or ";"
+\end{verbatim}
+The ``expecting'' line should have also had an open parenthesis, but
+because two-symbol lookahead was used to determine whether the parser
+was trying to find a method or field declaration, the parser forgot
+that an open parenthesis was used in the decision.  At the moment,
+it's unclear to the author how to fix this error message.
+
+\section{Discovered patterns}
+\label{sec:discovered-patterns}
+
+This section documents various code patterns which were either
+discovered by trial and error or from other sources in the event that
+they might be useful to use in the future.
+
+The first is \texttt{foldl (flip id) s l} where \texttt{s} is of type
+$a$ and \texttt{l} is of type $[a\to a]$.  This iteratively applies
+the functions in \texttt{l} with \texttt{s} as the initial input.  So,
+what is the function \texttt{flip id}?  We'll just do a partial
+evaluation to figure it out, where the symbol $\mapsto$ refers to the
+lambda abstraction and is right-associative:
+\begin{align*}
+  \text{\texttt{flip\ id}}
+  &=(f\mapsto x\mapsto y\mapsto f y x)(x\mapsto x)\\
+  &=(x\mapsto y\mapsto (x\mapsto x) y x)\\
+  &=(x\mapsto y\mapsto y x)\\
+  &=\text{\texttt{flip\ (\$)}}.
+\end{align*}
+That is, \texttt{flip id} is the reverse apply operator.  So,
+\texttt{flip id x} is a function which takes a function and applies
+the argument \texttt{x} to it.  This occurs in the wild both in the
+CLI interface for evaluating the parsed arguments and in the parser
+for sequencing the parsers.
+
+The second is for a ``double bind,'' which for binding two monads to a
+function at the same time.  In particular, we are talking about a
+function of the type \texttt{Monad m => (a -> b -> m c) -> m a -> m b
+  -> m c}.  A straightforward way to define such a function is
+\begin{verbatim}
+dbind f ma mb = do a <- ma
+                   b <- mb
+                   f a b
+\end{verbatim}
+but the author doesn't think that is very elegant.  Recalling the fact
+that the reverse bind operator, of type \texttt{Monad m => (a -> m b)
+  -> m a -> m b}, can be written as \texttt{join (fmap f a)} for
+\texttt{f =<< ma} since \texttt{fmap f a} is of type \texttt{Monad m % >>
+  => m (m b)} and \texttt{join} removes one layer of monads, we can
+try some sort of analogue using fmap and join.  It ends up being
+\begin{verbatim}
+dbind f ma mb = join (f <$> ma <*> mb)
+\end{verbatim} % $
+where \texttt{(<\$>)} is infix \texttt{fmap} and \texttt{(<*>)} is the
+composition operator for applicative functors, defined for monads to
+be
+\begin{verbatim}
+mf <*> ma = do f <- mf
+               a <- ma
+               return $ f a
+\end{verbatim} % $
+or, mildly more sneakily,
+\begin{verbatim}
+mf <*> ma = mf >>= (\f -> a >>= (return . f))
+\end{verbatim} % $
+
+\end{document}

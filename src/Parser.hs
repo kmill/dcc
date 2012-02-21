@@ -274,6 +274,7 @@ expr = foldl (flip id) nullary ops
 literal :: DParser Expr
 literal = ExprLiteral <$> getPosition
           <*> (dtoken IntLiteral <|> dtoken CharLiteral <|> dtoken BooleanLiteral)
+          <?> "literal"
 
 -- | Parses identifiers.
 ident :: DParser Token
