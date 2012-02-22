@@ -61,6 +61,43 @@ instance ASTNodePos Expr where
     getNodePos (LoadLoc pos _) = pos
     getNodePos (ExprMethod pos _) = pos
 
+instance ASTNodePos DProgram where 
+    getNodePos (DProgram pos _ _) = pos
+
+instance ASTNodePos FieldDecl where
+    getNodePos (FieldDecl pos _ _) = pos 
+
+instance ASTNodePos MethodDecl where
+    getNodePos (MethodDecl pos _ _ _ _) = pos 
+
+instance ASTNodePos Statement where
+    getNodePos (Block pos _ _) = pos
+    getNodePos (IfSt pos _ _ _) = pos
+    getNodePos (ForSt pos _ _ _ _) = pos
+    getNodePos (WhileSt pos _ _) = pos
+    getNodePos (ReturnSt pos _) = pos
+    getNodePos (BreakSt pos) = pos
+    getNodePos (ContinueSt pos) = pos
+    getNodePos (ExprSt e) = getNodePos e
+    getNodePos (AssignSt pos _ _ _) = pos
+
+instance ASTNodePos DLocation where
+    getNodePos (PlainLocation pos _) = pos
+    getNodePos (ArrayLocation pos _ _) = pos
+
+instance ASTNodePos VarDecl where
+    getNodePos (VarDecl pos _ _) = pos
+
+instance ASTNodePos MethodCall where
+    getNodePos (NormalMethod pos _ _) = pos
+    getNodePos (CalloutMethod pos _ _) = pos
+
+
+
+
+
+
+
 ---
 --- Displaying ASTs
 ---
