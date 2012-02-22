@@ -25,6 +25,7 @@ main = do args <- getArgs
           case target opts of
             TargetScan -> doScanFile opts ifname input
             TargetParse -> doParseFile opts ifname input
+            TargetDefault -> doParseFile opts ifname input
             _ -> error "No such target"
 
 
