@@ -1,0 +1,5 @@
+class Program
+{
+	int array[1];
+	void main() { array[false] = 0; }
+}

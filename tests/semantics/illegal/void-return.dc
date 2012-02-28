@@ -1,0 +1,5 @@
+class Program
+{
+	void method() { return 0; }
+	void main() {}
+}
