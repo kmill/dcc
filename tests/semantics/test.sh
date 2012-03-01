@@ -18,14 +18,14 @@ for file in ./illegal/*; do
   fi
 done
 
-# for file in ./legal/*; do
-#   if ! runparser $file; then
-#     echo "[ ] Legal file $file failed to parse.";
-#     fail=1
-#   else
-#       echo "[+]" $file;
-#   fi
-# done
+for file in ./legal/*; do
+  if ! runparser $file; then
+    echo "[ ] Legal file $file failed to parse.";
+    fail=1
+  else
+      echo "[+]" $file;
+  fi
+done
 
 if [ "$fail" -eq 0 ]
 then
