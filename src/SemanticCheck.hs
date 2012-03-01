@@ -250,7 +250,7 @@ checkFieldDecl (FieldDecl pos t vars)
      where
        checkvar (PlainVar tok)
            = addEnvBinding (tokenPos tok) (tokenString tok)
-             (getDUType t pos)
+             (getDUType t (tokenPos tok))
        checkvar (ArrayVar tok1 tok2)
            = addEnvBinding (tokenPos tok1) (tokenString tok1)
              (tArray pos Nothing (getDUType t pos))
@@ -265,7 +265,7 @@ checkMethodDecl (MethodDecl pos t tok args st)
     = do addEnvBinding pos name ftyp
          local (extendEnv targs (Just retType)) (checkStatement st)
       where name = tokenString tok
-            ftyp = tFunc pos retType [atyp | (_,atyp) <- targs]
+            ftyp = tFunc (tokenPos tok) retType [atyp | (_,atyp) <- targs]
             retType = getMethodType t pos
             targs = map getMArg args
 
