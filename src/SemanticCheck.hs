@@ -161,7 +161,18 @@ duTypePos (DUArray pos _) = pos
 duTermPos :: DUTerm -> SourcePos
 duTermPos (Term x _) = duTypePos x
                     
-type SemChecker = State SemCheckData
+newtype SemChecker a = SemChecker { getSemChecker :: State SemCheckData a }
+
+instance Functor SemChecker where
+    fmap f m = SemChecker (fmap f (getSemChecker m))
+
+instance Monad SemChecker where
+    return = SemChecker . return
+    a >>= f =  SemChecker (getSemChecker a >>= (getSemChecker . f))
+
+instance MonadState SemCheckData SemChecker where
+    get = SemChecker get
+    put a = SemChecker $ put a
 
 instance MonadReader LexicalEnv SemChecker where
   ask = do s <- get
@@ -204,7 +215,7 @@ lookupOrAdd pos name
 
 runSemChecker :: SemChecker a
               -> Either (UnifierData DUType, [SemError]) LexicalEnv
-runSemChecker sc = let (t, s') = runState sc s
+runSemChecker sc = let (t, s') = runState (getSemChecker sc) s
                    in case semErrors s' of
                         [] -> Right $ semLexicalEnv s'
                         errors -> Left (semUnifierData s', errors)
