@@ -131,6 +131,7 @@ data SemError = SemUnificationError (UnificationError DUType)
               | SemContinueOutsideLoop SourcePos
               | SemNoMainError SourcePos
               | SemNotScalarError DUTerm SourcePos
+              | SemArraySizeError SourcePos
                 deriving Show
                          
 showDUTerm :: DUTerm -> String
@@ -200,7 +201,7 @@ enterLoop = local (\env -> env { isInsideLoop=True })
 addEnvBinding :: SourcePos -> String -> DUTerm -> SemChecker ()
 addEnvBinding pos name typ
     = do env <- ask
-         case envLookup name env of
+         case Map.lookup name (lexicalBindings env) of
            Just _ -> addError $ SemDupDef pos name
            Nothing -> modEnv $ envBind name typ
 
@@ -266,9 +267,10 @@ checkFieldDecl (FieldDecl pos t vars)
        checkvar (PlainVar tok)
            = addEnvBinding (tokenPos tok) (tokenString tok)
              (getDUType t (tokenPos tok))
-       checkvar (ArrayVar tok1 tok2)
-           = addEnvBinding (tokenPos tok1) (tokenString tok1)
-             (tArray pos Nothing (getDUType t pos))
+       checkvar (ArrayVar tok1 len)
+           = do when (len <= 0) $ addError $ SemArraySizeError (tokenPos tok1)
+                addEnvBinding (tokenPos tok1) (tokenString tok1)
+                                  (tArray pos Nothing (getDUType t pos))
              
 getMethodType (MethodReturns t) = getDUType t
 getMethodType MethodVoid = tVoid
@@ -295,13 +297,13 @@ checkStatement (IfSt pos expr cst mast)
          checkStatement cst
          maybe (return ()) checkStatement mast
 checkStatement (ForSt pos tok start end st)
-    = do inc <- lookupOrAdd (tokenPos tok) (tokenString tok)
-         _ <- tInt (tokenPos tok) <==> inc
-         t1 <- checkExpr start
+    = do t1 <- checkExpr start
          _ <- tInt (getNodePos start) <==> t1
          t2 <- checkExpr end
          _ <- tInt (getNodePos end) <==> t2
-         enterLoop $ checkStatement st
+         local deriveEnv $ do -- create environment to shadow variable if needed.
+           addEnvBinding (tokenPos tok) (tokenString tok) (tInt $ tokenPos tok) -- add index variable
+           enterLoop $ checkStatement st
 checkStatement (WhileSt pos expr st)
     = do t <- checkExpr expr
          _ <- tBool (getNodePos expr) <==> t
@@ -392,8 +394,10 @@ checkExpr (ExprLiteral pos tok)
         CharLiteral -> return $ tChar pos
         StringLiteral -> return $ tString pos
         BooleanLiteral -> return $ tBool pos
-        IntLiteral -> return $ tInt pos
+        IntLiteral -> error "uh oh" --return $ tInt pos -- shouldn't be used anymore
         _ -> error "uh oh"
+checkExpr (ExprIntLiteral pos tok)
+    = return $ tInt pos
 checkExpr (LoadLoc pos loc)
     = checkLocation loc
 checkExpr (ExprMethod pos call)

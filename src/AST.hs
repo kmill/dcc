@@ -6,6 +6,7 @@ module AST where
 import Scanner(Token(..))
 import Text.ParserCombinators.Parsec
 import Text.PrettyPrint.HughesPJ
+import Data.Int
 
 -- | The 'PP' class is for pretty printing objects into 'Doc's.
 class PP a where
@@ -18,7 +19,7 @@ class PP a where
 data DProgram = DProgram SourcePos [FieldDecl] [MethodDecl]
 data FieldDecl = FieldDecl SourcePos DType [FieldVar]
 data FieldVar = PlainVar Token
-              | ArrayVar Token Token
+              | ArrayVar Token Int64
 data MethodDecl = MethodDecl SourcePos MethodType Token [MethodArg] Statement
 data MethodType = MethodReturns DType
                 | MethodVoid
@@ -45,6 +46,7 @@ data CalloutArg = CArgExpr Expr
 data Expr = BinaryOp SourcePos Expr Token Expr
           | UnaryOp SourcePos Token Expr
           | ExprLiteral SourcePos Token
+          | ExprIntLiteral SourcePos Int64
           | LoadLoc SourcePos DLocation
           | ExprMethod SourcePos MethodCall
 
@@ -58,6 +60,7 @@ instance ASTNodePos Expr where
     getNodePos (BinaryOp pos _ _ _) = pos
     getNodePos (UnaryOp pos _ _) = pos
     getNodePos (ExprLiteral pos _) = pos
+    getNodePos (ExprIntLiteral pos _) = pos
     getNodePos (LoadLoc pos _) = pos
     getNodePos (ExprMethod pos _) = pos
 
@@ -124,7 +127,7 @@ instance PP FieldDecl where
 
 instance PP FieldVar where
     pp (PlainVar t) = text $ tokenString t
-    pp (ArrayVar t l) = (text $ tokenString t) <> brackets (text $ tokenString l)
+    pp (ArrayVar t l) = (text $ tokenString t) <> brackets (text $ show l)
 
 instance PP MethodDecl where
     pp (MethodDecl pos t tok args st)
@@ -220,5 +223,7 @@ instance PP Expr where
         = (text $ tokenString t) <> (pp e)
     pp (ExprLiteral _ t)
        = text $ tokenString t
+    pp (ExprIntLiteral _ i)
+       = text $ show i
     pp (LoadLoc _ loc) = pp loc
     pp (ExprMethod _ mc) = pp mc

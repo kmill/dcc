@@ -10,6 +10,7 @@ import CLI
 import Control.Applicative hiding ((<|>), many)
 import Control.Monad
 import AST
+import Data.Int
 
 ---
 --- Main scanner
@@ -106,7 +107,7 @@ fieldDecl = FieldDecl <$> getPosition
     where plainVar = PlainVar <$> try ident
           arrayVar = ArrayVar
                      <$> do try $ ident <* dopensb -- two symbol lookahead
-                     <*> dtoken IntLiteral
+                     <*> (parseInt64 False <$> (tokenString <$> dtoken IntLiteral))
                      <* dclosesb
 
 
@@ -257,7 +258,7 @@ expr = foldl (flip id) nullary ops
                 <|> between dopenp dclosep expr
       -- | The precedence is from highest to lowest.
       ops :: [DParser Expr -> DParser Expr]
-      ops = [ unOps ["-"]
+      ops = [ doNegateOp
             , unOps ["!"]
             , binOps ["*", "/", "%"]
             , binOps ["+", "-"]
@@ -269,13 +270,38 @@ expr = foldl (flip id) nullary ops
       unOps, binOps :: [String] -> DParser Expr -> DParser Expr
       unOps = makeUnaryOp . dkeywords
       binOps = makeBinOp . dkeywords
+      
+      -- | This is a modification of @unOps ["-"]@ so that we first
+      -- try to parse the negation as the negative of a number.
+      doNegateOp :: DParser Expr -> DParser Expr
+      doNegateOp next = try (op *> intParse) <|> negOp
+          where negOp = makeUnaryOp op next
+                op = dkeyword "-"
+                intParse = ExprIntLiteral <$> getPosition
+                           <*> (parseInt64 True <$> (tokenString <$> dtoken IntLiteral))
+
 
 -- | Parses integer, character, and boolean literals.
 literal :: DParser Expr
-literal = ExprLiteral <$> getPosition
-          <*> (dtoken IntLiteral <|> dtoken CharLiteral <|> dtoken BooleanLiteral)
-          <?> "literal"
+literal = intParse
+          <|> (ExprLiteral <$> getPosition
+               <*> (dtoken CharLiteral <|> dtoken BooleanLiteral)
+               <?> "literal")
+    where intParse = ExprIntLiteral <$> getPosition
+                     <*> (parseInt64 False <$> (tokenString <$> dtoken IntLiteral))
 
 -- | Parses identifiers.
 ident :: DParser Token
 ident = dtoken Identifier
+
+-- | Parses a string into an Int64
+parseInt64 :: Bool -> String -> Int64
+parseInt64 neg s =
+    case s of
+      ('0':'x':_) -> justRead
+      ('0':'b':rest) -> let loop ('0':s') v = loop s' 2*v
+                            loop ('1':s') v = loop s' (2*v + (if neg then -1 else 1))
+                            loop _ v = v
+                        in loop rest 0
+      _ -> justRead
+    where justRead = read (if neg then '-':s else s)

@@ -108,13 +108,17 @@ doCheckFile opts ifname input
 showSemError :: [String] -> UnifierData DUType -> SemError -> String
 showSemError ls ud (SemUnificationError uerr)
     = case uerr of
-        UHeadError x y -> printf "%s\n%s\nCannot unify \"%s\" and \"%s\"\n"
-                          (posToLineView ls (duTermPos x))
-                          (posToLineView ls (duTermPos y))
+        UHeadError x y -> printf "%s\nCannot unify \"%s\" and \"%s\"\n"
+                          (if xpos == ypos
+                           then (posToLineView ls xpos)
+                           else ((posToLineView ls xpos) ++ "\n"
+                                 ++ (posToLineView ls ypos)))
                           (showDUTerm x')
                           (showDUTerm y')
             where x' = expandTerm x env
                   y' = expandTerm y env
+                  xpos = duTermPos x
+                  ypos = duTermPos y
         UOccursError v x -> printf "Type variable %s occurs in \"%s\"\n" -- TODO
                             (show v) (showDUTerm x')
             where x' = expandTerm x env
@@ -130,21 +134,24 @@ showSemError ls ud (SemUnboundError pos name typ)
       (posToLineView ls pos) (show name) (showDUTerm typ')
     where typ' = expandTerm typ (unifierEnv ud)
 showSemError ls ud (SemBreakOutsideLoop pos)
-    = printf "%s\nBreak statement outside of loop.\n"
+    = printf "%s\nBreak statement outside of for loop.\n"
       (posToLineView ls pos)
 showSemError ls ud (SemContinueOutsideLoop pos)
-    = printf "%s\nContinue statement outside of loop.\n"
+    = printf "%s\nContinue statement outside of for loop.\n"
       (posToLineView ls pos)
 showSemError ls ud (SemNoMainError pos)
     = printf "%s\nProgram is missing a main method.\n"
       (posToLineView ls pos)
 showSemError ls ud (SemNotScalarError t pos)
-    = printf "%s%s\nType must be scalar, not \"%s\".\n"
+    = printf "%s%s\nType must be a scalar, not \"%s\".\n"
       (case t of
          Var _ -> (posToLineView ls (duTermPos t)) ++ "\n"
          _ -> "")
       (posToLineView ls pos)
       (showDUTerm t)
+showSemError ls ud (SemArraySizeError pos)
+    = printf "%s\nArray must have positive length.\n"
+      (posToLineView ls pos)
           
 posToLineView :: [String] -> SourcePos -> String
 posToLineView ls pos
