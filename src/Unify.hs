@@ -19,37 +19,48 @@ instance Show UVar where
 data Term a = Var UVar
             | Term a [Term a]
               deriving (Eq, Show)
+                       
+nullaryTerm :: a -> Term a
+nullaryTerm x = Term x []
 
 type UEnv a = Map.Map Int (Term a)
 
-class (Eq a, Monad m) => BindingMonad a m | m -> a where
+class ( Eq a
+      , Monad m
+      , Functor m
+      , MonadState (UnifierData a) m)
+    => BindingMonad a m | m -> a where
+  
     genVar :: m UVar
+    genVar = do us <- get
+                put us { unifierVarCounter=unifierVarCounter us + 1 }
+                return $ UVar (unifierVarCounter us)
+
     getBinding :: UVar -> m (Maybe (Term a))
+    getBinding (UVar i) = do env <- unifierEnv <$> get
+                             return $ Map.lookup i env
+
     addBinding :: UVar -> Term a -> m ()
+    addBinding (UVar i) t
+        = do d <- get
+             put $ d { unifierEnv = Map.insert i t (unifierEnv d) }
+             return ()
+
 
 data UnifierData a = UnifierData
     { unifierEnv :: UEnv a
     , unifierVarCounter :: Int
     } deriving Show
 
-data UnificationError a = UError String
-                        | UHeadError a a
-                        | UUnknownError (Term a) (Term a)
+newUnifierData :: UnifierData a
+newUnifierData = UnifierData
+                 { unifierEnv=Map.empty
+                 , unifierVarCounter=0 }
+
+data UnificationError a = UHeadError (Term a) (Term a)
+                        | UMismatchedLengths (Term a) (Term a)
                         | UOccursError UVar (Term a)
                 deriving Show
-                         
-instance Eq a => BindingMonad a (State (UnifierData a)) where
-    genVar = do us <- get
-                put us { unifierVarCounter=unifierVarCounter us + 1 }
-                return $ UVar (unifierVarCounter us)
-                
-    getBinding (UVar i) = do env <- unifierEnv <$> get
-                             return $ Map.lookup i env
-
-    addBinding (UVar i) t
-        = do d <- get
-             put $ d { unifierEnv = Map.insert i t (unifierEnv d) }
-             return ()
 
 --type Unifier a = ExceptionalT (UError a) (State (UnifierData a))
 
@@ -58,8 +69,12 @@ instance Eq a => BindingMonad a (State (UnifierData a)) where
 
 --runUnifierTest u = runUnifier u UnifierData { unifierEnv=Map.empty, unifierVarCounter=0 }
 
-
-                    
+expandTerm :: Eq a => Term a -> UEnv a -> Term a
+expandTerm (Var (UVar i)) env
+    = case Map.lookup i env of
+        Just b -> expandTerm b env
+        Nothing -> (Var (UVar i))
+expandTerm (Term x xs) env = Term x [expandTerm x' env | x' <- xs]
 
 
 occursIn :: Eq a => UVar -> Term a -> Bool
@@ -74,8 +89,8 @@ unify :: ( BindingMonad a m
 unify (Term x xs) (Term y ys)
     | x == y && length xs == length ys
         = Term x <$> sequence [unify x' y' | (x',y') <- zip xs ys]
-    | x == y    = throwError $ UError "Mismatched lengths"
-    | otherwise = throwError $ UHeadError x y
+    | x == y    = throwError $ UMismatchedLengths (Term x xs) (Term y ys)
+    | otherwise = throwError $ UHeadError (Term x xs) (Term y ys)
 unify (Var v) y = unifyVar v y
 unify x (Var v) = unifyVar v x
 

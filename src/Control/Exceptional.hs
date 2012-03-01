@@ -1,3 +1,5 @@
+{-# LANGUAGE FlexibleInstances, MultiParamTypeClasses #-}
+
 {-|
 
   The 'Control.Exceptional' library contains two types, 'Exceptional'
@@ -18,6 +20,7 @@ module Control.Exceptional
 
 import Control.Applicative
 import Control.Monad.Trans
+import Control.Monad.Error
 
 data Exceptional e a = Success a -- ^ Essentially 'Right'
                      | Exception e -- ^ Essentially 'Left'
@@ -83,3 +86,12 @@ throwT = ExceptionalT . return . throwE
 -- | Lifts 'catchE' into the monad transformer.
 catchT :: Monad m => ExceptionalT e m a -> (e -> a) -> m a
 catchT ext f = runExceptionalT ext >>= (return . (flip catchE f))
+
+instance Monad m => MonadError e (ExceptionalT e m) where
+  throwError = throwT
+  catchError (ExceptionalT ext) f
+      = ExceptionalT $ do
+          ex <- ext
+          case ex of
+            Success x -> return $ Success x
+            Exception x -> runExceptionalT $ f x
