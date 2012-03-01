@@ -113,6 +113,9 @@ showSemError ls ud (SemUnificationError uerr)
         UOccursError v x -> printf "Type variable %s occurs in \"%s\"\n" -- TODO
                             (show v) (showDUTerm x')
             where x' = expandTerm x env
+        UMismatchedLengths x y ->
+            printf "%s\n%s\nMismatched number of arguments.\n"
+            (posToLineView ls (duTermPos x)) (posToLineView ls (duTermPos y))
     where env = unifierEnv ud
 showSemError ls ud (SemDupDef pos name)
     = printf "%s\nDuplicate definition of %s.\n"
@@ -121,6 +124,15 @@ showSemError ls ud (SemUnboundError pos name typ)
     = printf "%s\nUnbound identifier %s.  Inferred type is \"%s\".\n"
       (posToLineView ls pos) (show name) (showDUTerm typ')
     where typ' = expandTerm typ (unifierEnv ud)
+showSemError ls ud (SemBreakOutsideLoop pos)
+    = printf "%s\nBreak statement outside of loop.\n"
+      (posToLineView ls pos)
+showSemError ls ud (SemContinueOutsideLoop pos)
+    = printf "%s\nContinue statement outside of loop.\n"
+      (posToLineView ls pos)
+showSemError ls ud (SemNoMainError pos)
+    = printf "%s\nProgram is missing a main method.\n"
+      (posToLineView ls pos)
           
 posToLineView :: [String] -> SourcePos -> String
 posToLineView ls pos

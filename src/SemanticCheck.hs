@@ -27,10 +27,16 @@ doSemanticCheck ast = res
 
 data LexicalEnv = LexicalEnv
     { lexicalBindings :: Map.Map String DUTerm
-    , parentEnv :: Maybe LexicalEnv }
+    , parentEnv :: Maybe LexicalEnv
+    , methReturnType :: Maybe DUTerm -- the return type of the current function
+    , isInsideLoop :: Bool
+    }
                   deriving Show
     
-emptyEnv = LexicalEnv { lexicalBindings=Map.empty, parentEnv=Nothing }
+emptyEnv = LexicalEnv { lexicalBindings=Map.empty
+                      , parentEnv=Nothing 
+                      , methReturnType=Nothing
+                      , isInsideLoop=False }
     
 envLookup :: String -> LexicalEnv -> Maybe DUTerm
 envLookup name lenv = Map.lookup name e
@@ -45,13 +51,18 @@ envBind name val lenv = lenv { lexicalBindings=Map.insert name val e }
     where e = lexicalBindings lenv
           
 deriveEnv :: LexicalEnv -> LexicalEnv
-deriveEnv e = LexicalEnv { lexicalBindings=Map.empty, parentEnv=Just e }
+deriveEnv e = LexicalEnv { lexicalBindings=Map.empty
+                         , parentEnv=Just e
+                         , methReturnType=methReturnType e
+                         , isInsideLoop=isInsideLoop e}
 
-extendEnv :: [(String, DUTerm)] -> LexicalEnv -> LexicalEnv
-extendEnv bindings e
+extendEnv :: [(String, DUTerm)] -> Maybe DUTerm -> LexicalEnv -> LexicalEnv
+extendEnv bindings ret e
     = LexicalEnv
       { lexicalBindings=Map.fromList bindings
-      , parentEnv=Just e }
+      , parentEnv=Just e
+      , methReturnType=ret
+      , isInsideLoop=isInsideLoop e }
 
 ---
 
@@ -60,7 +71,7 @@ data DUType = DUInt SourcePos
             | DUChar SourcePos
             | DUString SourcePos
             | DUVoid SourcePos
-            | DUArray (Maybe Int)
+            | DUArray SourcePos (Maybe Int)
             | DUFunc SourcePos
               deriving (Show)
 
@@ -70,7 +81,7 @@ instance Eq DUType where
   (DUChar _) == (DUChar _) = True
   (DUString _) == (DUString _) = True
   (DUVoid _) == (DUVoid _) = True
-  (DUArray _) == (DUArray _) = True
+  (DUArray _ _) == (DUArray _ _) = True
   (DUFunc _) == (DUFunc _) = True
   _ == _ = False
 
@@ -79,7 +90,7 @@ tBool pos = nullaryTerm (DUBool pos)
 tChar pos = nullaryTerm (DUChar pos)
 tString pos = nullaryTerm (DUString pos)
 tVoid pos = nullaryTerm (DUVoid pos)
-tArray s t = Term (DUArray s) [t]
+tArray pos s t = Term (DUArray pos s) [t]
 tFunc pos r args = Term (DUFunc pos) ([r] ++ args)
 
 type DUTerm = Term DUType
@@ -107,11 +118,14 @@ data SemCheckData = SemCheckData
 data SemError = SemUnificationError (UnificationError DUType)
               | SemDupDef SourcePos String
               | SemUnboundError SourcePos String (Term DUType)
+              | SemBreakOutsideLoop SourcePos
+              | SemContinueOutsideLoop SourcePos
+              | SemNoMainError SourcePos
                 deriving Show
                          
 showDUTerm :: DUTerm -> String
 showDUTerm (Var u) = show u
-showDUTerm (Term (DUArray _) [x]) = printf "%s[]" (showDUTerm x)
+showDUTerm (Term (DUArray _ _) [x]) = printf "%s[]" (showDUTerm x)
 showDUTerm (Term (DUFunc _) (ret:args)) = printf "%s (%s)"
                                         (showDUTerm ret)
                                         (intercalate ", "
@@ -130,6 +144,7 @@ duTypePos (DUChar pos) = pos
 duTypePos (DUString pos) = pos
 duTypePos (DUVoid pos) = pos
 duTypePos (DUFunc pos) = pos
+duTypePos (DUArray pos _) = pos
 --duTypePos _ = ""
 
 --duTermPos (Var _) = ""
@@ -154,6 +169,9 @@ modEnv f = do s <- get
 addError :: SemError -> SemChecker ()
 addError e = do sd <- get
                 put $ sd { semErrors=semErrors sd ++ [e] }
+
+enterLoop :: SemChecker a -> SemChecker a
+enterLoop = local (\env -> env { isInsideLoop=True })
               
               
 addEnvBinding :: SourcePos -> String -> DUTerm -> SemChecker ()
@@ -209,32 +227,29 @@ doUnify t1 t2 = do sd <- get
                                        return Nothing
                                        
 t1 <==> t2  = doUnify t1 t2
-
---runUnifier :: Unifier a -> Exceptional (UnificationError DUType) a
---runUnifier u = evalState s (catchT (return <$> u) Exception)
---    where s = 
-               
---testunify2 = do let t1 = Term DUInt []
---                t2 <- Var <$> genVar "y"
---                t2 <- Var <$> genVar "y"
---                unify t1 t2
              
 checkDProgram :: DProgram -> SemChecker ()
-checkDProgram (DProgram _ fdecls mdecls)
+checkDProgram (DProgram pos fdecls mdecls)
     = do sequence_ [checkFieldDecl f | f <- fdecls]
          sequence_ [checkMethodDecl m | m <- mdecls]
+         env <- ask
+         case envLookup "main" env of
+           Just _ -> return ()
+           Nothing -> addError $ SemNoMainError pos
 
 getDUType DInt = tInt
-getDUType DBool = tInt
+getDUType DBool = tBool
          
 checkFieldDecl :: FieldDecl -> SemChecker ()
 checkFieldDecl (FieldDecl pos t vars)
      = sequence_ [checkvar v | v <- vars]
      where
        checkvar (PlainVar tok)
-           = addEnvBinding pos (tokenString tok) (getDUType t pos)
+           = addEnvBinding (tokenPos tok) (tokenString tok)
+             (getDUType t pos)
        checkvar (ArrayVar tok1 tok2)
-           = addEnvBinding pos (tokenString tok1) (tArray Nothing (getDUType t pos))
+           = addEnvBinding (tokenPos tok1) (tokenString tok1)
+             (tArray pos Nothing (getDUType t pos))
              
 getMethodType (MethodReturns t) = getDUType t
 getMethodType MethodVoid = tVoid
@@ -244,9 +259,10 @@ getMArg (MethodArg t tok) = (tokenString tok, getDUType t (tokenPos tok))
 checkMethodDecl :: MethodDecl -> SemChecker ()
 checkMethodDecl (MethodDecl pos t tok args st)
     = do addEnvBinding pos name ftyp
-         local (extendEnv targs) (checkStatement st)
+         local (extendEnv targs (Just retType)) (checkStatement st)
       where name = tokenString tok
-            ftyp = tFunc pos (getMethodType t pos) [atyp | (_,atyp) <- targs]
+            ftyp = tFunc pos retType [atyp | (_,atyp) <- targs]
+            retType = getMethodType t pos
             targs = map getMArg args
 
 checkStatement :: Statement -> SemChecker ()
@@ -265,18 +281,31 @@ checkStatement (ForSt pos tok start end st)
          t1 <- checkExpr start
          _ <- liftS $ unify (tInt (getNodePos start)) t1
          t2 <- checkExpr end
-         _ <- liftS $ unify (tInt (getNodePos start)) t1
-         checkStatement st
+         _ <- liftS $ unify (tInt (getNodePos end)) t2
+         enterLoop $ checkStatement st
 checkStatement (WhileSt pos expr st)
     = do t <- checkExpr expr
          _ <- liftS $ unify (tBool (getNodePos expr)) t
-         checkStatement st
+         enterLoop $ checkStatement st
 checkStatement (ReturnSt pos mexpr)
-    = return () -- TODO
+    = do env <- ask
+         let rettype = fromJust $ methReturnType env
+         case mexpr of
+           Nothing -> do _ <- liftS $ unify rettype (tVoid pos)
+                         return ()
+           Just expr -> do t <- checkExpr expr
+                           _ <- liftS $ unify t rettype
+                           return ()
 checkStatement (BreakSt pos)
-    = return () -- TODO should check inside loop
+    = do env <- ask
+         case isInsideLoop env of
+           True -> return ()
+           False -> addError $ SemBreakOutsideLoop pos
 checkStatement (ContinueSt pos)
-    = return () -- TODO should check inside loop
+    = do env <- ask
+         case isInsideLoop env of
+           True -> return ()
+           False -> addError $ SemContinueOutsideLoop pos
 checkStatement (ExprSt ex) = () <$ checkExpr ex
 checkStatement (AssignSt pos loc assop ex)
     = do dt <- checkLocation loc
@@ -292,15 +321,21 @@ checkVarDecl (VarDecl pos t vars)
      = sequence_ [checkvar v | v <- vars]
      where
        checkvar tok
-           = addEnvBinding pos (tokenString tok) (getDUType t pos)
+           = addEnvBinding pos' (tokenString tok) (getDUType t pos')
+           where pos' = tokenPos tok
              
 checkExpr :: Expr -> SemChecker (Term DUType)
 checkExpr (BinaryOp pos e1 tok e2)
-    = do t1 <- checkExpr e1
-         _ <- liftS $ unify t1 (neededType (tokenPos tok))
-         t2 <- checkExpr e2
-         _ <- liftS $ unify t2 (neededType (tokenPos tok))
-         return $ givesType pos
+    = if tokenString tok `elem` ["==", "!="]
+      then do t1 <- checkExpr e1
+              t2 <- checkExpr e2
+              _ <- liftS $ unify t1 t2
+              return $ tBool pos
+      else do t1 <- checkExpr e1
+              _ <- liftS $ unify t1 (neededType (tokenPos tok))
+              t2 <- checkExpr e2
+              _ <- liftS $ unify t2 (neededType (tokenPos tok))
+              return $ givesType pos
     where neededType
               = if tokenString tok `elem` boolArgBinOps
                 then tBool else tInt
@@ -336,7 +371,7 @@ checkLocation (ArrayLocation pos tok expr) -- tok[expr]
          t' <- checkExpr expr
          _ <- liftS $ unify (tInt (getNodePos expr)) t'
          v <- fromJust <$> (liftS genVar)
-         mt <- liftS $ unify t (tArray Nothing (Var v))
+         mt <- liftS $ unify t (tArray pos Nothing (Var v))
          return $ Var v
 
 checkMethodCall :: MethodCall -> SemChecker (Term DUType)
