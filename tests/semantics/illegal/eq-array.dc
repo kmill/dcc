@@ -1,0 +1,7 @@
+class Program {
+  int a[22], b[22];
+  void main() {
+    if(a==b) {
+    }
+  }
+}

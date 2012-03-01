@@ -130,6 +130,7 @@ data SemError = SemUnificationError (UnificationError DUType)
               | SemBreakOutsideLoop SourcePos
               | SemContinueOutsideLoop SourcePos
               | SemNoMainError SourcePos
+              | SemNotScalarError DUTerm SourcePos
                 deriving Show
                          
 showDUTerm :: DUTerm -> String
@@ -249,7 +250,10 @@ checkDProgram (DProgram pos fdecls mdecls)
          sequence_ [checkMethodDecl m | m <- mdecls]
          env <- ask
          case envLookup "main" env of
-           Just _ -> return ()
+           Just t -> do v <- fromJust <$> liftS genVar
+                        -- duTermPos is OK since global-def will not be var
+                        _ <- t <==> tFunc (duTermPos t) (Var v) [] -- check main has no args
+                        return ()
            Nothing -> addError $ SemNoMainError pos
 
 getDUType DInt = tInt
@@ -325,6 +329,7 @@ checkStatement (ExprSt ex) = () <$ checkExpr ex
 checkStatement (AssignSt pos loc assop ex)
     = do dt <- checkLocation loc
          et <- checkExpr ex
+         checkIsScalar et (getNodePos ex)
          dt <- (maybe et id) <$> dt <==> et
          case assop of
            Assign    -> return ()
@@ -338,6 +343,18 @@ checkVarDecl (VarDecl pos t vars)
        checkvar tok
            = addEnvBinding pos' (tokenString tok) (getDUType t pos')
            where pos' = tokenPos tok
+
+-- | Checks if a term is a scalar, if it is bound.  The assumption is
+-- that if it is not bound, then we don't need to emit an error
+-- because an error will be emitted for having made an unbound error.
+checkIsScalar :: DUTerm -> SourcePos -> SemChecker ()
+checkIsScalar t pos = case t of
+                        (Var _) -> return ()
+                        (Term x _) ->
+                             case x of
+                               (DUInt _) -> return ()
+                               (DUBool _) -> return ()
+                               _ -> addError $ SemNotScalarError t pos
              
 checkExpr :: Expr -> SemChecker DUTerm
 checkExpr (BinaryOp pos e1 tok e2)
@@ -345,6 +362,7 @@ checkExpr (BinaryOp pos e1 tok e2)
       then do t1 <- checkExpr e1
               t2 <- checkExpr e2
               _ <-  t1 <==> t2
+              checkIsScalar t1 (getNodePos e1)
               return $ tBool pos
       else do t1 <- checkExpr e1
               _ <-  t1 <==> neededType (tokenPos tok)
@@ -406,6 +424,6 @@ checkMethodCall (NormalMethod pos tok args)
           name = tokenString tok
 checkMethodCall (CalloutMethod pos tok args)
     = do sequence_ [checkCArg a | a <- args]
-         (Var . fromJust) <$> (liftS genVar)
+         return $ tInt pos
     where checkCArg (CArgString _) = return ()
           checkCArg (CArgExpr ex) = () <$ checkExpr ex

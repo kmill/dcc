@@ -138,6 +138,13 @@ showSemError ls ud (SemContinueOutsideLoop pos)
 showSemError ls ud (SemNoMainError pos)
     = printf "%s\nProgram is missing a main method.\n"
       (posToLineView ls pos)
+showSemError ls ud (SemNotScalarError t pos)
+    = printf "%s%s\nType must be scalar, not \"%s\".\n"
+      (case t of
+         Var _ -> (posToLineView ls (duTermPos t)) ++ "\n"
+         _ -> "")
+      (posToLineView ls pos)
+      (showDUTerm t)
           
 posToLineView :: [String] -> SourcePos -> String
 posToLineView ls pos
