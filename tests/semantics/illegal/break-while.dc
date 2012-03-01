@@ -1,7 +1,6 @@
 class Program {
   void main() {
-    int i;
-    for(i=0;5) {
+    while(true) {
       break;
     }
   }

@@ -305,7 +305,9 @@ checkStatement (ForSt pos tok start end st)
 checkStatement (WhileSt pos expr st)
     = do t <- checkExpr expr
          _ <- tBool (getNodePos expr) <==> t
-         enterLoop $ checkStatement st
+         -- do not do "enterLoop" because break/continue are only for
+         -- "for" loops
+         checkStatement st
 checkStatement (ReturnSt pos mexpr)
     = do env <- ask
          let rettype = fromJust $ methReturnType env
