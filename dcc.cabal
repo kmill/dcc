@@ -53,9 +53,10 @@ Executable dcc
     haskell98,
     parsec >= 2,
     pretty,
-    mtl >= 1.1
-  extensions:
-    CPP
+    mtl >= 1.1,
+    containers >= 0.3
+--  extensions:
+--    MultiParamTypeClasses
   
   -- Modules not exported by this package.
   -- Other-modules:       
