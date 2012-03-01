@@ -1,0 +1,6 @@
+class Program
+{
+	int notarray;
+
+	void main() { notarray[0] = 0; }
+}

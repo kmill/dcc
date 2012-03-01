@@ -1,0 +1,11 @@
+class Program
+{
+	void main()
+	{
+		int id1;
+		id1 = id2;
+		{
+			int id2;
+		}
+	}
+}
