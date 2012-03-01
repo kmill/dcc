@@ -374,7 +374,7 @@ checkLocation (PlainLocation pos tok)
 checkLocation (ArrayLocation pos tok expr) -- tok[expr]
     = do t <- lookupOrAdd pos (tokenString tok)
          t' <- checkExpr expr
-         _ <- tInt (getNodePos expr) <==> t'
+         _ <-  t' <==> tInt (getNodePos expr)
          v <- fromJust <$> (liftS genVar)
          mt <- t <==> tArray pos Nothing (Var v)
          return $ Var v

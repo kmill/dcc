@@ -1,0 +1,5 @@
+class Program {
+ int main() {
+   x[0] = x; // occurs check!
+ }
+}

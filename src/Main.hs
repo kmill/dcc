@@ -109,7 +109,12 @@ showSemError :: [String] -> UnifierData DUType -> SemError -> String
 showSemError ls ud (SemUnificationError uerr)
     = case uerr of
         UHeadError x y -> printf "%s\n%s\nCannot unify \"%s\" and \"%s\"\n"
-                          (posToLineView ls (duTermPos x)) (posToLineView ls (duTermPos y)) (showDUTerm x) (showDUTerm y)
+                          (posToLineView ls (duTermPos x))
+                          (posToLineView ls (duTermPos y))
+                          (showDUTerm x')
+                          (showDUTerm y')
+            where x' = expandTerm x env
+                  y' = expandTerm y env
         UOccursError v x -> printf "Type variable %s occurs in \"%s\"\n" -- TODO
                             (show v) (showDUTerm x')
             where x' = expandTerm x env
