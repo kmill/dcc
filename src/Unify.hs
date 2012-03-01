@@ -1,11 +1,19 @@
 {-# LANGUAGE MultiParamTypeClasses, FunctionalDependencies,
   FlexibleInstances, FlexibleContexts #-}
 
-module Unify where
+module Unify( Term(..)
+            , UnificationError(..)
+            , UnifierData(..)
+            , newUnifierData
+            , BindingMonad(..)
+            , nullaryTerm
+            , unify 
+            , expandTerm
+            )
+       where
 
 import qualified Data.Map as Map
 
-import Control.Exceptional
 import Control.Applicative
 import Control.Monad.State
 import Control.Monad.Error
@@ -61,13 +69,6 @@ data UnificationError a = UHeadError (Term a) (Term a)
                         | UMismatchedLengths (Term a) (Term a)
                         | UOccursError UVar (Term a)
                 deriving Show
-
---type Unifier a = ExceptionalT (UError a) (State (UnifierData a))
-
---runUnifier :: Eq a => Unifier b a -> (UnifierData b) -> (Exceptional (UError b) a, (UnifierData b))
---runUnifier u s = runState (catchT (return <$> u) throwE) s
-
---runUnifierTest u = runUnifier u UnifierData { unifierEnv=Map.empty, unifierVarCounter=0 }
 
 expandTerm :: Eq a => Term a -> UEnv a -> Term a
 expandTerm (Var (UVar i)) env
