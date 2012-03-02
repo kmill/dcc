@@ -25,12 +25,14 @@ import Control.Monad.Reader.Class
 import Data.Maybe
 import Text.Printf
 import Data.List
+import Execution
+import Data.Int
 
 -- | This is the main entry point.
 doSemanticCheck :: DProgram
                 -> Either (UnifierData DUType, [SemError]) LexicalEnv
 doSemanticCheck ast = res
-    where res = runSemChecker (checkDProgram ast)
+    where res = runSemChecker (runDProgram ast)
 
 --- environments
 
@@ -82,7 +84,7 @@ data DUType = DUInt SourcePos
             | DUChar SourcePos
             | DUString SourcePos
             | DUVoid SourcePos
-            | DUArray SourcePos (Maybe Int)
+            | DUArray SourcePos (Maybe Int64)
             | DUFunc SourcePos
               deriving (Show)
 
@@ -104,7 +106,7 @@ tChar pos = nullaryTerm (DUChar pos)
 tString pos = nullaryTerm (DUString pos)
 tVoid pos = nullaryTerm (DUVoid pos)
 
-tArray :: SourcePos -> Maybe Int -> DUTerm -> DUTerm
+tArray :: SourcePos -> Maybe Int64 -> DUTerm -> DUTerm
 tArray pos s t = Term (DUArray pos s) [t]
 
 tFunc :: SourcePos -> DUTerm -> [DUTerm] -> DUTerm
@@ -244,109 +246,9 @@ infix 5 <==>
 
 (<==>) :: DUTerm -> DUTerm -> SemChecker (Maybe DUTerm)
 t1 <==> t2  = liftS $ unify t1 t2
-             
-checkDProgram :: DProgram -> SemChecker ()
-checkDProgram (DProgram pos fdecls mdecls)
-    = do sequence_ [checkFieldDecl f | f <- fdecls]
-         sequence_ [checkMethodDecl m | m <- mdecls]
-         env <- ask
-         case envLookup "main" env of
-           Just t -> do v <- fromJust <$> liftS genVar
-                        -- duTermPos is OK since global-def will not be var
-                        _ <- t <==> tFunc (duTermPos t) (Var v) [] -- check main has no args
-                        return ()
-           Nothing -> addError $ SemNoMainError pos
 
 getDUType DInt = tInt
 getDUType DBool = tBool
-         
-checkFieldDecl :: FieldDecl -> SemChecker ()
-checkFieldDecl (FieldDecl pos t vars)
-     = sequence_ [checkvar v | v <- vars]
-     where
-       checkvar (PlainVar tok)
-           = addEnvBinding (tokenPos tok) (tokenString tok)
-             (getDUType t (tokenPos tok))
-       checkvar (ArrayVar tok1 len)
-           = do when (len <= 0) $ addError $ SemArraySizeError (tokenPos tok1)
-                addEnvBinding (tokenPos tok1) (tokenString tok1)
-                                  (tArray pos Nothing (getDUType t pos))
-             
-getMethodType (MethodReturns t) = getDUType t
-getMethodType MethodVoid = tVoid
-
-getMArg (MethodArg t tok) = (tokenString tok, getDUType t (tokenPos tok))
-
-checkMethodDecl :: MethodDecl -> SemChecker ()
-checkMethodDecl (MethodDecl pos t tok args st)
-    = do addEnvBinding pos name ftyp
-         local (extendEnv targs (Just retType)) (checkStatement st)
-      where name = tokenString tok
-            ftyp = tFunc (tokenPos tok) retType [atyp | (_,atyp) <- targs]
-            retType = getMethodType t pos
-            targs = map getMArg args
-
-checkStatement :: Statement -> SemChecker ()
-checkStatement (Block pos vdecls statements)
-    = local deriveEnv $
-      do sequence_ [checkVarDecl v | v <- vdecls]
-         sequence_ [checkStatement s | s <- statements]
-checkStatement (IfSt pos expr cst mast)
-    = do et <- checkExpr expr
-         _ <- tBool (getNodePos expr) <==> et
-         checkStatement cst
-         maybe (return ()) checkStatement mast
-checkStatement (ForSt pos tok start end st)
-    = do t1 <- checkExpr start
-         _ <- tInt (getNodePos start) <==> t1
-         t2 <- checkExpr end
-         _ <- tInt (getNodePos end) <==> t2
-         local deriveEnv $ do -- create environment to shadow variable if needed.
-           addEnvBinding (tokenPos tok) (tokenString tok) (tInt $ tokenPos tok) -- add index variable
-           enterLoop $ checkStatement st
-checkStatement (WhileSt pos expr st)
-    = do t <- checkExpr expr
-         _ <- tBool (getNodePos expr) <==> t
-         -- do not do "enterLoop" because break/continue are only for
-         -- "for" loops
-         checkStatement st
-checkStatement (ReturnSt pos mexpr)
-    = do env <- ask
-         let rettype = fromJust $ methReturnType env
-         case mexpr of
-           Nothing -> do _ <- rettype <==> tVoid pos
-                         return ()
-           Just expr -> do t <- checkExpr expr
-                           _ <- t <==> rettype
-                           return ()
-checkStatement (BreakSt pos)
-    = do env <- ask
-         case isInsideLoop env of
-           True -> return ()
-           False -> addError $ SemBreakOutsideLoop pos
-checkStatement (ContinueSt pos)
-    = do env <- ask
-         case isInsideLoop env of
-           True -> return ()
-           False -> addError $ SemContinueOutsideLoop pos
-checkStatement (ExprSt ex) = () <$ checkExpr ex
-checkStatement (AssignSt pos loc assop ex)
-    = do dt <- checkLocation loc
-         et <- checkExpr ex
-         checkIsScalar et (getNodePos ex)
-         dt <- (maybe et id) <$> dt <==> et
-         case assop of
-           Assign    -> return ()
-           IncAssign -> dt <==> tInt pos  >> return ()
-           DecAssign -> dt <==> tInt pos  >> return ()
-
-checkVarDecl :: VarDecl -> SemChecker ()
-checkVarDecl (VarDecl pos t vars)
-     = sequence_ [checkvar v | v <- vars]
-     where
-       checkvar tok
-           = addEnvBinding pos' (tokenString tok) (getDUType t pos')
-           where pos' = tokenPos tok
 
 -- | Checks if a term is a scalar, if it is bound.  The assumption is
 -- that if it is not bound, then we don't need to emit an error
@@ -359,77 +261,158 @@ checkIsScalar t pos = case t of
                                (DUInt _) -> return ()
                                (DUBool _) -> return ()
                                _ -> addError $ SemNotScalarError t pos
-             
-checkExpr :: Expr -> SemChecker DUTerm
-checkExpr (BinaryOp pos e1 tok e2)
-    = if tokenString tok `elem` ["==", "!="]
-      then do t1 <- checkExpr e1
-              t2 <- checkExpr e2
-              _ <-  t1 <==> t2
-              checkIsScalar t1 (getNodePos e1)
-              return $ tBool pos
-      else do t1 <- checkExpr e1
-              _ <-  t1 <==> neededType (tokenPos tok)
-              t2 <- checkExpr e2
-              _ <-  t2 <==> neededType (tokenPos tok)
-              return $ givesType pos
-    where neededType
-              = if tokenString tok `elem` boolArgBinOps
-                then tBool else tInt
-          boolArgBinOps = ["&&", "||"]
-          givesType
-              = if tokenString tok `elem` boolRetBinOps
-                then tBool else tInt
-          boolRetBinOps = ["&&", "||", "<", "<=", ">=", ">", "==", "!="]
-checkExpr (UnaryOp pos tok expr)
-    = do t <- checkExpr expr
-         _ <-  t <==> unType (tokenPos tok)
-         return $ unType pos
-    where unType = case tokenString tok of
-                     "-" -> tInt
-                     "!" -> tBool
-                     _ -> fail "No such unary operator"
-checkExpr (ExprLiteral pos tok)
-    = case tokenType tok of
-        CharLiteral -> return $ tChar pos
-        StringLiteral -> return $ tString pos
-        BooleanLiteral -> return $ tBool pos
-        IntLiteral -> error "uh oh" --return $ tInt pos -- shouldn't be used anymore
-        _ -> error "uh oh"
-checkExpr (ExprIntLiteral pos tok)
-    = return $ tInt pos
-checkExpr (LoadLoc pos loc)
-    = checkLocation loc
-checkExpr (ExprMethod pos call)
-    = checkMethodCall call
-      
-checkLocation :: DLocation -> SemChecker DUTerm
-checkLocation (PlainLocation pos tok)
-    = lookupOrAdd pos (tokenString tok)
-checkLocation (ArrayLocation pos tok expr) -- tok[expr]
-    = do t <- lookupOrAdd pos (tokenString tok)
-         t' <- checkExpr expr
-         _ <-  t' <==> tInt (getNodePos expr)
-         v <- fromJust <$> (liftS genVar)
-         mt <- t <==> tArray pos Nothing (Var v)
-         return $ Var v
 
-checkMethodCall :: MethodCall -> SemChecker DUTerm
-checkMethodCall (NormalMethod pos tok args)
-    = do env <- ask
-         v <- fromJust <$> (liftS genVar)
-         targs' <- targs
-         case envLookup name env of
-           Just t -> do _ <-  t <==> tFunc pos (Var v) targs'
-                        return $ Var v
-           Nothing -> local envRoot $
-                      do ft <- lookupOrAdd pos name
-                         _ <-  ft <==> tFunc pos (Var v) targs'
-                         return $ Var v
-    where targs = sequence [checkExpr a | a <- args]
-          name = tokenString tok
-checkMethodCall (CalloutMethod pos tok args)
-    = do sequence_ [checkCArg a | a <- args]
-         return $ tInt pos
-    where checkCArg (CArgString _) = return ()
-          checkCArg (CArgExpr ex) = () <$ checkExpr ex
+instance ASTExecution SemChecker DUTerm DUTerm where
+  doDProgram pos fdecls mdecls
+      = do sequence_ fdecls
+           sequence_ mdecls
+           env <- ask
+           case envLookup "main" env of
+             Just t -> do v <- fromJust <$> liftS genVar
+                          -- duTermPos is OK since global-def will not be uvar.
+                          -- check that main has no args
+                          _ <- t <==> tFunc (duTermPos t) (Var v) []
+                          return ()
+             Nothing -> addError $ SemNoMainError pos
+  
+  doFieldScalar pos typ name
+      = addEnvBinding pos name (getDUType typ pos)
+  doFieldArray pos typ name len
+      = do when (len <= 0) $ addError $ SemArraySizeError pos
+           addEnvBinding pos name
+                             (tArray pos (Just len) (getDUType typ pos))
+  
+  getMethodArg pos typ name
+    = return $ getDUType typ pos
+    
+  doMethodDecl pos typ fpos name args st
+      = do args' <- sequence args
+           let ftyp = tFunc fpos retType [t' | (_,t') <- args']
+           addEnvBinding pos name ftyp
+           local (extendEnv args' (Just retType)) st
+      where retType = getMethodType typ pos
+            getMethodType mtype
+              = case mtype of
+                  MethodReturns t -> getDUType t
+                  MethodVoid -> tVoid
+  
+  doVarDecl pos t n
+      = addEnvBinding pos n (getDUType t pos)
+                  
+  doBlock pos vdecls sts
+      = local deriveEnv $ do
+          sequence_ vdecls
+          sequence_ sts
+  doIfSt pos expr cons malt
+      = do e <- expr
+           _ <- tBool pos <==> e
+           cons
+           fromMaybe (return ()) malt
+  doForSt ipos iname spos start epos end st
+      = do t1 <- start
+           _ <- tInt spos <==> t1
+           t2 <- end
+           _ <- tInt epos <==> t2
+           local deriveEnv $ do
+             addEnvBinding ipos iname (tInt ipos)
+             enterLoop st
+  doWhileSt pos expr st
+      = do t <- expr
+           _ <- tBool pos <==> t
+           enterLoop st
+  doVoidReturn pos
+      = do env <- ask
+           let rettype = fromJust $ methReturnType env
+           _ <- rettype <==> tVoid pos
+           return ()
+  doReturn expr
+      = do t <- expr
+           env <- ask
+           let rettype = fromJust $ methReturnType env
+           _ <- rettype <==> t
+           return ()
+  doBreakSt pos
+      = do env <- ask
+           unless (isInsideLoop env) $ do
+             addError $ SemBreakOutsideLoop pos
+  doContinueSt pos
+      = do env <- ask
+           unless (isInsideLoop env) $ do
+             addError $ SemContinueOutsideLoop pos
+             
+  doAssignSt lpos loc assop expos ex
+      = do dt <- fst loc
+           et <- ex
+           checkIsScalar et expos
+           dt <- (maybe et id) <$> dt <==> et
+           case assop of
+             Assign    -> return ()
+             IncAssign -> dt <==> tInt lpos  >> return ()
+             DecAssign -> dt <==> tInt lpos   >> return ()
+
+  doBinOp oppos op e1pos e1 e2pos e2
+      = if op `elem` ["==", "!="]
+        then do t1 <- e1
+                t2 <- e2
+                _ <- t1 <==> t2
+                checkIsScalar t1 e1pos
+                return $ tBool oppos
+        else do t1 <- e1
+                _ <- t1 <==> neededType oppos
+                t2 <- e2
+                _ <- t2 <==> neededType oppos
+                return $ givesType oppos
+      where neededType
+                = if op `elem` boolArgBinOps
+                  then tBool else tInt
+            boolArgBinOps = ["&&", "||"]
+            givesType
+                = if op `elem` boolRetBinOps
+                  then tBool else tInt
+            boolRetBinOps = ["&&", "||", "<", "<=", ">=", ">", "==", "!="]
+  doUnaryOp oppos op expos ex
+      = do t <- ex
+           _ <- t <==> unType oppos
+           return $ unType oppos
+      where unType = case op of
+                       "-" -> tInt
+                       "!" -> tBool
+                       _ -> error "No such unary operator"
+                       
+  doLiteral pos typ str
+      = case typ of
+          CharLiteral -> return $ tChar pos
+          StringLiteral -> return $ tString pos
+          BooleanLiteral -> return $ tBool pos
+          IntLiteral -> error "uh oh" -- shouldn't be used
+          _ -> error "uh oh"
+  doIntLiteral pos i
+      = return $ tInt pos
+        
+  doScalarLocation pos n = (lookupOrAdd pos n, const $ return ())
+  doArrayLocation pos n epos e
+      = (arrType, const $ return ())
+      where arrType
+                = do t <- lookupOrAdd pos n
+                     t' <- e
+                     _ <- t' <==> tInt epos
+                     v <- fromJust <$> (liftS genVar)
+                     mt <- t <==> tArray pos Nothing (Var v)
+                     return $ Var v
+           
+  doNormalMethod pos name args
+      = do env <- ask
+           v <- fromJust <$> (liftS genVar)
+           targs <- sequence args
+           case envLookup name env of
+             Just t -> do _ <- t <==> tFunc pos (Var v) targs
+                          return $ Var v
+             Nothing -> local envRoot $
+                        do ft <- lookupOrAdd pos name
+                           _ <- ft <==> tFunc pos (Var v) targs
+                           return $ Var v
+  doCalloutMethod pos name cargs
+      = do sequence_ (map checkarg cargs)
+           return $ tInt pos
+      where checkarg (Left _) = return $ tInt pos -- no-op
+            checkarg (Right ex) = ex
