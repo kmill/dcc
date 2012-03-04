@@ -93,9 +93,9 @@ doCheckFile opts ifname input
                              exitWith $ ExitFailure 1
                       Right r ->
                           case doSemanticCheck r of
-                            Right x -> do if debugMode opts then
-											putStrLn ((show x) ++ "\nok.") else
-											return ()
+                            Right x -> do if debugMode opts then 
+                                              print (makeHybridAST r) else --putStrLn ((show x) ++ "\nok.") 
+                                              return ()
                             Left (udata, errors) ->
                                 do putStrLn "Semantic errors:"
                                    putStrLn ""

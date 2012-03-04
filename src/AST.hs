@@ -19,7 +19,7 @@ module AST ( PP(..)
            , Expr(..)
            , Token(..)
            , TokenType(..)
-           , getNodePos
+           , ASTNodePos(..)
            )
     where
 

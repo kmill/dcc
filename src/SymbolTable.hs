@@ -6,18 +6,29 @@ module SymbolTable where
 import AST
 import qualified Data.Map as Map
 import Data.Int
+import Text.PrettyPrint.HughesPJ
 
 data SymbolEnv = SymbolEnv
     { symbolBindings :: Map.Map String SymbolTerm 
     , parentEnv :: Maybe SymbolEnv
     } 
 instance Show SymbolEnv where 
-    show s = "TODO: Show Symbol Environment"
+    show s = "Symbols: " ++ (show $ Map.assocs $ symbolBindings s)
 
 data SymbolTerm = Term SourcePos SymbolType
                 | MethodTerm SourcePos (Maybe SymbolType)
 
+instance Show SymbolTerm where 
+    show (Term pos t) = show t
+    show (MethodTerm pos (Just t)) = show t ++ " Method"
+    show (MethodTerm pos Nothing) = "Void Method"
+
 data SymbolType = SInt | SBool | SArray SymbolType Int64
+
+instance Show SymbolType where
+    show SInt = "Int"
+    show SBool = "Bool"
+    show (SArray t len) = show t ++ " Array"
 
 emptyEnv :: SymbolEnv 
 emptyEnv = SymbolEnv { symbolBindings = Map.empty
@@ -41,7 +52,7 @@ extendEnv pairs e = SymbolEnv { symbolBindings = Map.fromList pairs
                               , parentEnv = Just e } 
 
 
-data HDProgram = HDProgram SymbolEnv SourcePos [HFieldDecl] [MethodDecl]
+data HDProgram = HDProgram SymbolEnv SourcePos [HFieldDecl] [HMethodDecl]
 data HFieldDecl = HFieldDecl SymbolEnv SourcePos DType [HFieldVar]
 data HFieldVar = HPlainVar SymbolEnv Token
                | HArrayVar SymbolEnv Token Int64
@@ -105,12 +116,19 @@ dTypeToSType DBool = SBool
 --convertTokenValue Token { tokenType = IntLiteral, tokenString=s } = read s :: Int
 --convertTokenValue Token { tokenType = BooleanLiteral, tokenString=s } = s == "true"
 
+makeHybridAST :: DProgram -> HDProgram 
+makeHybridAST p = createHybridAST emptyEnv p
+
+
+instance Show HDProgram where
+    show = render . pp
+
 class HybridAST a b | a -> b where 
     createHybridAST :: SymbolEnv -> a -> b
 
 instance HybridAST DProgram HDProgram where
     createHybridAST e (DProgram pos fields methods) 
-        = HDProgram eNew pos (map (createHybridAST e) fields) methods
+        = HDProgram eNew pos (map (createHybridAST e) fields) (map (createHybridAST e) methods)
         where eNew = envBindMany methodList (envBindMany fieldList e) 
               fieldList = concatMap fieldDeclToSTerms fields
               methodList = map methodDeclToSTerm methods
@@ -175,3 +193,111 @@ instance HybridAST MethodCall HMethodCall where
 instance HybridAST CalloutArg HCalloutArg where
     createHybridAST e (CArgExpr expr) = HCArgExpr e (createHybridAST e expr) 
     createHybridAST e (CArgString tok) = HCArgString e tok
+
+instance PP HDProgram where
+    pp (HDProgram e pos fields methods) 
+        = text "Program" <+> (text $ show pos) 
+          $$ (text $ show e)
+          $$ (nest 3 $ vcat [pp f | f <- fields])
+          $$ (nest 3 $ vcat [pp m | m <- methods])
+
+instance PP HFieldDecl where 
+    pp (HFieldDecl e pos t vars) 
+       = text "field" <+> (pp t)
+         <+> (nest 3 $ vcat [pp v | v <- vars])
+         <+> (pp pos)
+
+instance PP HFieldVar where
+    pp (HPlainVar e t) = text $ tokenString t
+    pp (HArrayVar e t l) = (text $ tokenString t) <> brackets (text $ show l)
+
+instance PP HMethodDecl where
+    pp (HMethodDecl e pos t tok args st)
+        = text "methoddecl" <+> (pp t) <+> (text $ tokenString tok) 
+           <> parens (hsep $ punctuate comma [pp a | a <- args])
+           <+> (pp pos) <+> (text $ show e)
+           $+$ (nest 3 (pp st))
+
+instance PP HMethodArg where
+    pp (HMethodArg e t tok) = (pp t) <+> (text $ tokenString tok)
+
+instance PP HStatement where
+    pp (HBlock e _ vds ss)
+        = (text $ show e)
+           $$ (nest 0 $ vcat $ map pp vds)
+           $+$ (nest 0 $ vcat $ map pp ss)
+    pp (HIfSt env pos e cs mas)
+       = text "if" <+> (pp e) <+> (pp pos)
+         $+$ (nest 3 $ pp cs)
+         $+$ (case mas of
+               Just as -> text "else" $+$ (nest 3 $ pp as)
+               Nothing -> empty)
+    pp (HForSt env pos t s e st)
+       = text "for(" <> (text $ tokenString t) 
+         <+> text "=" <+> (pp s) <> text ";"
+         <+> (pp e) <> text ")" <+> (pp pos) <+> (text $ show env)
+         $+$ (nest 3 $ pp st)
+    pp (HWhileSt env pos e st)
+       = text "while" <+> (pp e) <+> (pp pos)
+         $+$ (nest 3 $ pp st)
+    pp (HReturnSt env pos me)
+       = case me of
+           Just e -> text "return" <+> (pp e) <+> (pp pos)
+           Nothing -> text "return" <+> (pp pos)
+    pp (HBreakSt env pos) = text "break" <+> (pp pos)
+    pp (HContinueSt env pos) = text "continue" <+> (pp pos)
+    pp (HExprSt env e) = pp e <+> (pp $ getNodePos e)
+    pp (HAssignSt env pos loc op e)
+       = text "assign"
+         <+> (pp loc) <+> (pp op)
+         <+> (pp e) <+> (pp pos)
+
+instance PP HDLocation where
+    pp (HPlainLocation env _ t) = text $ tokenString t
+    pp (HArrayLocation env _ t e) = (text $ tokenString t)
+                                 <> brackets (pp e)
+
+instance PP HVarDecl where
+    pp (HVarDecl env pos t vars)
+        = text "var" <+> pp t
+          <+> (nest 3 $ vcat [text $ tokenString v | v <- vars])
+          <+> (pp pos)
+
+instance PP HMethodCall where
+    pp (HNormalMethod env _ t exps)
+       = (text $ tokenString t)
+         <> parens (hsep (punctuate (text ",") $ map pp exps))
+    pp (HCalloutMethod env _ t exps)
+       = (text "callout")
+         <> parens (hsep (punctuate (text ",") $
+                    [text $ tokenString t] ++ (map pp exps)))
+
+instance PP HCalloutArg where
+    pp (HCArgExpr env e) = pp e
+    pp (HCArgString env t) = text $ show $ tokenString t
+
+instance PP HExpr where
+    pp (HBinaryOp env _ e t e2)
+        = parens $ pp e <+> (text $ tokenString t) <+> pp e2
+    pp (HUnaryOp env _ t e)
+        = (text $ tokenString t) <> (pp e)
+    pp (HExprBoolLiteral env _ b)
+       = text $ show b
+    pp (HExprIntLiteral env _ i)
+       = text $ show i
+    pp (HExprCharLiteral env _ c)
+       = text $ show c
+    pp (HExprStringLiteral env _ s)
+       = text $ s
+    pp (HLoadLoc env _ loc) = pp loc
+    pp (HExprMethod env _ mc) = pp mc
+
+instance ASTNodePos HExpr where
+    getNodePos (HBinaryOp _ pos _ _ _) = pos
+    getNodePos (HUnaryOp _ pos _ _) = pos
+    getNodePos (HExprBoolLiteral _ pos _) = pos
+    getNodePos (HExprCharLiteral _ pos _) = pos
+    getNodePos (HExprStringLiteral _ pos _) = pos
+    getNodePos (HExprIntLiteral _ pos _) = pos
+    getNodePos (HLoadLoc _ pos _) = pos
+    getNodePos (HExprMethod _ pos _) = pos
