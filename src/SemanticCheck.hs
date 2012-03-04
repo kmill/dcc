@@ -163,6 +163,18 @@ duTypePos (DUArray pos _) = pos
 duTermPos :: DUTerm -> SourcePos
 duTermPos (Term x _) = duTypePos x
 duTermPos (Var _) = error "Attempted to retrieve source pos from unification variable"
+
+duWithPos :: DUTerm -> SourcePos -> DUTerm
+duWithPos v@(Var _) pos = v
+duWithPos (Term t x) pos = Term updatedPos x
+    where updatedPos = case t of
+                         DUInt _ -> DUInt pos
+                         DUBool _ -> DUBool pos
+                         DUChar _ -> DUChar pos
+                         DUString _ -> DUString pos
+                         DUVoid _ -> DUVoid pos
+                         DUFunc _ -> DUFunc pos
+                         DUArray _ i -> DUArray pos i
                     
 newtype SemChecker a = SemChecker { getSemChecker :: State SemCheckData a }
 
@@ -172,6 +184,11 @@ instance Functor SemChecker where
 instance Monad SemChecker where
     return = SemChecker . return
     a >>= f =  SemChecker (getSemChecker a >>= (getSemChecker . f))
+    
+instance Applicative SemChecker where
+    mf <*> mb = do f <- mf
+                   b <- mb
+                   return (f b)
 
 instance MonadState SemCheckData SemChecker where
     get = SemChecker get
@@ -272,7 +289,8 @@ checkFieldDecl (FieldDecl pos t vars)
        checkvar (ArrayVar tok1 len)
            = do when (len <= 0) $ addError $ SemArraySizeError (tokenPos tok1)
                 addEnvBinding (tokenPos tok1) (tokenString tok1)
-                                  (tArray pos Nothing (getDUType t pos))
+                                  (tArray (tokenPos tok1) Nothing
+                                              (getDUType t (tokenPos tok1)))
 
 getMethodType :: MethodType -> SourcePos -> DUTerm             
 getMethodType (MethodReturns t) = getDUType t
@@ -336,12 +354,14 @@ checkStatement (ExprSt ex) = () <$ checkExpr ex
 checkStatement (AssignSt pos loc assop ex)
     = do dt <- checkLocation loc
          et <- checkExpr ex
-         checkIsScalar et (getNodePos ex)
-         dt' <- (maybe et id) <$> dt <==> et
          case assop of
-           Assign    -> return ()
-           IncAssign -> dt' <==> tInt pos  >> return ()
-           DecAssign -> dt' <==> tInt pos  >> return ()
+           Assign -> do _ <- checkIsScalar et (getNodePos ex)
+                        _ <- (duWithPos dt (getNodePos loc))
+                             <==> (duWithPos et (getNodePos ex))
+                        return ()
+           _ -> do _ <- et <==> tInt (getNodePos ex)
+                   _ <- dt <==> tInt (getNodePos loc)
+                   return ()
 
 checkVarDecl :: VarDecl -> SemChecker ()
 checkVarDecl (VarDecl pos t vars)
@@ -354,14 +374,15 @@ checkVarDecl (VarDecl pos t vars)
 -- | Checks if a term is a scalar, if it is bound.  The assumption is
 -- that if it is not bound, then we don't need to emit an error
 -- because an error will be emitted for having made an unbound error.
-checkIsScalar :: DUTerm -> SourcePos -> SemChecker ()
+checkIsScalar :: DUTerm -> SourcePos -> SemChecker (Maybe DUTerm)
 checkIsScalar t pos = case t of
-                        (Var _) -> return ()
+                        (Var _) -> return $ Just t
                         (Term x _) ->
                              case x of
-                               (DUInt _) -> return ()
-                               (DUBool _) -> return ()
-                               _ -> addError $ SemNotScalarError t pos
+                               (DUInt _) -> return $ Just t
+                               (DUBool _) -> return $ Just t
+                               _ -> do addError $ SemNotScalarError t pos
+                                       return $ Nothing
              
 checkExpr :: Expr -> SemChecker DUTerm
 checkExpr (BinaryOp pos e1 tok e2)
@@ -369,7 +390,7 @@ checkExpr (BinaryOp pos e1 tok e2)
       then do t1 <- checkExpr e1
               t2 <- checkExpr e2
               _ <-  t1 <==> t2
-              checkIsScalar t1 (getNodePos e1)
+              _ <- checkIsScalar t1 (getNodePos e1)
               return $ tBool pos
       else do t1 <- checkExpr e1
               _ <-  t1 <==> neededType (tokenPos tok)
