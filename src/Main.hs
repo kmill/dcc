@@ -13,6 +13,7 @@ import ScannerResultPrinter
 import Text.ParserCombinators.Parsec.Pos
 import Text.ParserCombinators.Parsec.Error
 import SemanticCheck
+import SymbolTable
 import Text.Printf
 import Unify
  
