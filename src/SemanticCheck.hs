@@ -355,7 +355,7 @@ checkStatement (AssignSt pos loc assop ex)
     = do dt <- checkLocation loc
          et <- checkExpr ex
          case assop of
-           Assign -> do _ <- checkIsScalar et (getNodePos ex)
+           Assign -> do checkIsScalar et (getNodePos ex)
                         _ <- (duWithPos dt (getNodePos loc))
                              <==> (duWithPos et (getNodePos ex))
                         return ()
@@ -374,15 +374,14 @@ checkVarDecl (VarDecl pos t vars)
 -- | Checks if a term is a scalar, if it is bound.  The assumption is
 -- that if it is not bound, then we don't need to emit an error
 -- because an error will be emitted for having made an unbound error.
-checkIsScalar :: DUTerm -> SourcePos -> SemChecker (Maybe DUTerm)
+checkIsScalar :: DUTerm -> SourcePos -> SemChecker ()
 checkIsScalar t pos = case t of
-                        (Var _) -> return $ Just t
+                        (Var _) -> return ()
                         (Term x _) ->
                              case x of
-                               (DUInt _) -> return $ Just t
-                               (DUBool _) -> return $ Just t
-                               _ -> do addError $ SemNotScalarError t pos
-                                       return $ Nothing
+                               (DUInt _) -> return ()
+                               (DUBool _) -> return ()
+                               _ -> addError $ SemNotScalarError t pos
              
 checkExpr :: Expr -> SemChecker DUTerm
 checkExpr (BinaryOp pos e1 tok e2)
@@ -390,7 +389,7 @@ checkExpr (BinaryOp pos e1 tok e2)
       then do t1 <- checkExpr e1
               t2 <- checkExpr e2
               _ <-  t1 <==> t2
-              _ <- checkIsScalar t1 (getNodePos e1)
+              checkIsScalar t1 (getNodePos e1)
               return $ tBool pos
       else do t1 <- checkExpr e1
               _ <-  t1 <==> neededType (tokenPos tok)
