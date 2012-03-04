@@ -260,8 +260,11 @@ liftS m = do sd <- get
 -- the unification operator
 infix 5 <==>
 
-(<==>) :: DUTerm -> DUTerm -> SemChecker (Maybe DUTerm)
-t1 <==> t2  = liftS $ unify t1 t2
+-- | Unifies two types, storing the error messages in the SemChecker
+-- monad, and continues onward despite errors.
+(<==>) :: DUTerm -> DUTerm -> SemChecker ()
+t1 <==> t2  = do liftS $ unify t1 t2
+                 return ()
              
 checkDProgram :: DProgram -> SemChecker ()
 checkDProgram (DProgram pos fdecls mdecls)
@@ -271,7 +274,7 @@ checkDProgram (DProgram pos fdecls mdecls)
          case envLookup "main" env of
            Just t -> do v <- fromJust <$> liftS genVar
                         -- duTermPos is OK since global-def will not be var
-                        _ <- t <==> tFunc (duTermPos t) (Var v) [] -- check main has no args
+                        t <==> tFunc (duTermPos t) (Var v) [] -- check main has no args
                         return ()
            Nothing -> addError $ SemNoMainError pos
 
@@ -315,31 +318,29 @@ checkStatement (Block pos vdecls statements)
          sequence_ [checkStatement s | s <- statements]
 checkStatement (IfSt pos expr cst mast)
     = do et <- checkExpr expr
-         _ <- tBool (getNodePos expr) <==> et
+         tBool (getNodePos expr) <==> et
          checkStatement cst
          maybe (return ()) checkStatement mast
 checkStatement (ForSt pos tok start end st)
     = do t1 <- checkExpr start
-         _ <- tInt (getNodePos start) <==> t1
+         tInt (getNodePos start) <==> t1
          t2 <- checkExpr end
-         _ <- tInt (getNodePos end) <==> t2
+         tInt (getNodePos end) <==> t2
          local deriveEnv $ do -- create environment to shadow variable if needed.
            addEnvBinding (tokenPos tok) (tokenString tok) (tInt $ tokenPos tok) -- add index variable
            enterLoop $ checkStatement st
 checkStatement (WhileSt pos expr st)
     = do t <- checkExpr expr
-         _ <- tBool (getNodePos expr) <==> t
+         tBool (getNodePos expr) <==> t
          local deriveEnv $ do -- create environment to shadow variable if needed.
            enterLoop $ checkStatement st
 checkStatement (ReturnSt pos mexpr)
     = do env <- ask
          let rettype = fromJust $ methReturnType env
          case mexpr of
-           Nothing -> do _ <- rettype <==> tVoid pos
-                         return ()
+           Nothing -> rettype <==> tVoid pos
            Just expr -> do t <- checkExpr expr
-                           _ <- t <==> rettype
-                           return ()
+                           t <==> rettype
 checkStatement (BreakSt pos)
     = do env <- ask
          case isInsideLoop env of
@@ -356,12 +357,10 @@ checkStatement (AssignSt pos loc assop ex)
          et <- checkExpr ex
          case assop of
            Assign -> do checkIsScalar et (getNodePos ex)
-                        _ <- (duWithPos dt (getNodePos loc))
-                             <==> (duWithPos et (getNodePos ex))
-                        return ()
-           _ -> do _ <- et <==> tInt (getNodePos ex)
-                   _ <- dt <==> tInt (getNodePos loc)
-                   return ()
+                        (duWithPos dt (getNodePos loc))
+                           <==> (duWithPos et (getNodePos ex))
+           _ -> do et <==> tInt (getNodePos ex)
+                   dt <==> tInt (getNodePos loc)
 
 checkVarDecl :: VarDecl -> SemChecker ()
 checkVarDecl (VarDecl pos t vars)
@@ -388,13 +387,13 @@ checkExpr (BinaryOp pos e1 tok e2)
     = if tokenString tok `elem` ["==", "!="]
       then do t1 <- checkExpr e1
               t2 <- checkExpr e2
-              _ <-  t1 <==> t2
+              t1 <==> t2
               checkIsScalar t1 (getNodePos e1)
               return $ tBool pos
       else do t1 <- checkExpr e1
-              _ <-  t1 <==> neededType (tokenPos tok)
+              t1 <==> neededType (tokenPos tok)
               t2 <- checkExpr e2
-              _ <-  t2 <==> neededType (tokenPos tok)
+              t2 <==> neededType (tokenPos tok)
               return $ givesType pos
     where neededType
               = if tokenString tok `elem` boolArgBinOps
@@ -406,7 +405,7 @@ checkExpr (BinaryOp pos e1 tok e2)
           boolRetBinOps = ["&&", "||", "<", "<=", ">=", ">", "==", "!="]
 checkExpr (UnaryOp pos tok expr)
     = do t <- checkExpr expr
-         _ <-  t <==> unType (tokenPos tok)
+         t <==> unType (tokenPos tok)
          return $ unType pos
     where unType = case tokenString tok of
                      "-" -> tInt
@@ -432,9 +431,9 @@ checkLocation (PlainLocation pos tok)
 checkLocation (ArrayLocation pos tok expr) -- tok[expr]
     = do t <- lookupOrAdd pos (tokenString tok)
          t' <- checkExpr expr
-         _ <-  t' <==> tInt (getNodePos expr)
+         t' <==> tInt (getNodePos expr)
          v <- fromJust <$> (liftS genVar)
-         mt <- t <==> tArray pos Nothing (Var v)
+         t <==> tArray pos Nothing (Var v)
          return $ Var v
 
 checkMethodCall :: MethodCall -> SemChecker DUTerm
@@ -443,11 +442,11 @@ checkMethodCall (NormalMethod pos tok args)
          v <- fromJust <$> (liftS genVar)
          targs' <- targs
          case envLookup name env of
-           Just t -> do _ <-  t <==> tFunc pos (Var v) targs'
+           Just t -> do t <==> tFunc pos (Var v) targs'
                         return $ Var v
            Nothing -> local envRoot $
                       do ft <- lookupOrAdd pos name
-                         _ <-  ft <==> tFunc pos (Var v) targs'
+                         ft <==> tFunc pos (Var v) targs'
                          return $ Var v
     where targs = sequence [checkExpr a | a <- args]
           name = tokenString tok
