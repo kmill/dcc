@@ -48,6 +48,7 @@ data Expr = BinaryOp SourcePos Expr Token Expr
           | LoadLoc SourcePos DLocation
           | ExprMethod SourcePos MethodCall
 
+
 -- | This class is for being able to get the position of a node in a
 -- general way.  This hasn't been implemented for each of the nodes
 -- yet.
