@@ -49,7 +49,7 @@ deriveEnv e = SymbolEnv { symbolBindings = Map.empty
 
 extendEnv :: [(String, SymbolTerm)] -> SymbolEnv -> SymbolEnv
 extendEnv pairs e = SymbolEnv { symbolBindings = Map.fromList pairs
-                              , parentEnv = Just e } 
+                              , parentEnv = Just e }
 
 
 data HDProgram = HDProgram SymbolEnv SourcePos [HFieldDecl] [HMethodDecl]
@@ -153,9 +153,13 @@ instance HybridAST VarDecl HVarDecl where
     createHybridAST e (VarDecl pos t toks) = HVarDecl e pos t toks
 
 instance HybridAST Statement HStatement where
-    createHybridAST e (Block pos vars sts) = HBlock eNew pos (map (createHybridAST eNew) vars) (map (createHybridAST eNew) sts)
+    createHybridAST e (Block pos vars sts)
+        = HBlock eNew pos varDecls' sts'
         where eNew = extendEnv (concatMap varDeclToSTerms vars) e
-    createHybridAST e (IfSt pos expr st maybeElse ) = HIfSt e pos expr' (createHybridAST e st) hybridElse
+              varDecls' = map (createHybridAST eNew) vars
+              sts' = map (createHybridAST eNew) sts
+    createHybridAST e (IfSt pos expr st maybeElse )
+        = HIfSt e pos expr' (createHybridAST e st) hybridElse
         where hybridElse = maybeElse >>= (Just . (createHybridAST e) )
               expr' = createHybridAST e expr
     createHybridAST e (ForSt pos tok expr1 expr2 st) = HForSt eNew pos tok expr1' expr2' (createHybridAST eNew st)
@@ -173,11 +177,14 @@ instance HybridAST Statement HStatement where
 instance HybridAST Expr HExpr where 
     createHybridAST e (BinaryOp pos expr1 tok expr2) = HBinaryOp e pos (createHybridAST e expr1) tok (createHybridAST e expr2)
     createHybridAST e (UnaryOp pos tok expr) = HUnaryOp e pos tok (createHybridAST e expr) 
-    createHybridAST e (ExprLiteral pos tok) = case (tokenString tok) of 
-                                                 "true" -> HExprBoolLiteral e pos True
-                                                 "false" -> HExprBoolLiteral e pos False
-                                                 x:[] -> HExprCharLiteral e pos x 
-                                                 str -> HExprStringLiteral e pos str 
+    createHybridAST e (ExprLiteral pos tok)
+        = case (tokenType tok) of
+            CharLiteral -> HExprCharLiteral e pos x
+                where [x] = str
+            StringLiteral -> HExprStringLiteral e pos str
+            BooleanLiteral -> HExprBoolLiteral e pos (str == "true")
+            _ -> error "OH NO!"
+          where str = tokenString tok
     createHybridAST e (ExprIntLiteral pos num) = HExprIntLiteral e pos num
     createHybridAST e (LoadLoc pos loc) = HLoadLoc e pos (createHybridAST e loc)
     createHybridAST e (ExprMethod pos call) = HExprMethod e pos (createHybridAST e call) 
