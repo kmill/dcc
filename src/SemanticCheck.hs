@@ -162,6 +162,7 @@ duTypePos (DUArray pos _) = pos
 
 duTermPos :: DUTerm -> SourcePos
 duTermPos (Term x _) = duTypePos x
+duTermPos (Var _) = error "Attempted to retrieve source pos from unification variable"
                     
 newtype SemChecker a = SemChecker { getSemChecker :: State SemCheckData a }
 
@@ -217,7 +218,7 @@ lookupOrAdd pos name
 
 runSemChecker :: SemChecker a
               -> Either (UnifierData DUType, [SemError]) LexicalEnv
-runSemChecker sc = let (t, s') = runState (getSemChecker sc) s
+runSemChecker sc = let (_, s') = runState (getSemChecker sc) s
                    in case semErrors s' of
                         [] -> Right $ semLexicalEnv s'
                         errors -> Left (semUnifierData s', errors)
@@ -257,6 +258,7 @@ checkDProgram (DProgram pos fdecls mdecls)
                         return ()
            Nothing -> addError $ SemNoMainError pos
 
+getDUType :: DType -> SourcePos -> DUTerm
 getDUType DInt = tInt
 getDUType DBool = tBool
          
@@ -271,10 +273,12 @@ checkFieldDecl (FieldDecl pos t vars)
            = do when (len <= 0) $ addError $ SemArraySizeError (tokenPos tok1)
                 addEnvBinding (tokenPos tok1) (tokenString tok1)
                                   (tArray pos Nothing (getDUType t pos))
-             
+
+getMethodType :: MethodType -> SourcePos -> DUTerm             
 getMethodType (MethodReturns t) = getDUType t
 getMethodType MethodVoid = tVoid
 
+getMArg :: MethodArg -> (String, DUTerm)
 getMArg (MethodArg t tok) = (tokenString tok, getDUType t (tokenPos tok))
 
 checkMethodDecl :: MethodDecl -> SemChecker ()
@@ -307,9 +311,8 @@ checkStatement (ForSt pos tok start end st)
 checkStatement (WhileSt pos expr st)
     = do t <- checkExpr expr
          _ <- tBool (getNodePos expr) <==> t
-         -- do not do "enterLoop" because break/continue are only for
-         -- "for" loops
-         checkStatement st
+         local deriveEnv $ do -- create environment to shadow variable if needed.
+           enterLoop $ checkStatement st
 checkStatement (ReturnSt pos mexpr)
     = do env <- ask
          let rettype = fromJust $ methReturnType env
@@ -334,11 +337,11 @@ checkStatement (AssignSt pos loc assop ex)
     = do dt <- checkLocation loc
          et <- checkExpr ex
          checkIsScalar et (getNodePos ex)
-         dt <- (maybe et id) <$> dt <==> et
+         dt' <- (maybe et id) <$> dt <==> et
          case assop of
            Assign    -> return ()
-           IncAssign -> dt <==> tInt pos  >> return ()
-           DecAssign -> dt <==> tInt pos  >> return ()
+           IncAssign -> dt' <==> tInt pos  >> return ()
+           DecAssign -> dt' <==> tInt pos  >> return ()
 
 checkVarDecl :: VarDecl -> SemChecker ()
 checkVarDecl (VarDecl pos t vars)

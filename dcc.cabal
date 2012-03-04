@@ -43,7 +43,7 @@ Cabal-version:        >=1.2
 
 Executable dcc
   hs-source-dirs:     src
-  ghc-options:	      -Wall -O2
+  ghc-options:	      -Wall -fno-warn-unused-matches -O2
   -- .hs or .lhs file containing the Main module.
   Main-is:  	      Main.hs
   
