@@ -164,6 +164,7 @@ duTypePos (DUArray pos _) = pos
 
 duTermPos :: DUTerm -> SourcePos
 duTermPos (Term x _) = duTypePos x
+duTermPos (Var _) = error "Attempted to retrieve source pos from unification variable"
                     
 newtype SemChecker a = SemChecker { getSemChecker :: State SemCheckData a }
 
@@ -219,7 +220,7 @@ lookupOrAdd pos name
 
 runSemChecker :: SemChecker a
               -> Either (UnifierData DUType, [SemError]) LexicalEnv
-runSemChecker sc = let (t, s') = runState (getSemChecker sc) s
+runSemChecker sc = let (_, s') = runState (getSemChecker sc) s
                    in case semErrors s' of
                         [] -> Right $ semLexicalEnv s'
                         errors -> Left (semUnifierData s', errors)
@@ -247,6 +248,7 @@ infix 5 <==>
 (<==>) :: DUTerm -> DUTerm -> SemChecker (Maybe DUTerm)
 t1 <==> t2  = liftS $ unify t1 t2
 
+getDUType :: DType -> SourcePos -> DUTerm
 getDUType DInt = tInt
 getDUType DBool = tBool
 

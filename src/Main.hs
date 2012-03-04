@@ -13,9 +13,10 @@ import ScannerResultPrinter
 import Text.ParserCombinators.Parsec.Pos
 import Text.ParserCombinators.Parsec.Error
 import SemanticCheck
+import SymbolTable
 import Text.Printf
 import Unify
-
+ 
 -- | The main entry point to @dcc@.  See 'CLI' for command line
 -- arguments.
 main :: IO ()
@@ -29,7 +30,7 @@ main = do args <- getArgs
             TargetScan -> doScanFile opts ifname input
             TargetParse -> doParseFile opts ifname input
             TargetInter -> doCheckFile opts ifname input
-            TargetDefault -> doParseFile opts ifname input
+            TargetDefault -> doCheckFile opts ifname input
             _ -> error "No such target"
 
 
@@ -78,6 +79,7 @@ doParseFile opts ifname input
           isTokenError (TokenError {}) = True
           isTokenError _ = False
 
+-- | Performs the actions for the @inter@ target. 
 doCheckFile :: CompilerOpts -> String -> String -> IO ()
 doCheckFile opts ifname input
     = case runScanner opts ifname input of
@@ -91,8 +93,9 @@ doCheckFile opts ifname input
                              exitWith $ ExitFailure 1
                       Right r ->
                           case doSemanticCheck r of
-                            Right x -> do putStrLn (show x)
-                                          putStrLn "ok."
+                            Right x -> do if debugMode opts then
+											putStrLn ((show x) ++ "\nok.") else
+											return ()
                             Left (udata, errors) ->
                                 do putStrLn "Semantic errors:"
                                    putStrLn ""

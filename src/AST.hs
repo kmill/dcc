@@ -1,9 +1,29 @@
 -- | This is a definition of the AST for the decaf language.  The
 -- module includes a way to pretty print the AST as well.
 
-module AST where
+module AST ( PP(..)
+           , SourcePos
+           , DProgram(..) 
+           , FieldDecl(..)
+           , FieldVar(..)
+           , MethodDecl(..)
+           , MethodType(..)
+           , MethodArg(..)
+           , Statement(..)
+           , DLocation(..)
+           , VarDecl(..)
+           , DType(..)
+           , AssignOp(..)
+           , MethodCall(..)
+           , CalloutArg(..)
+           , Expr(..)
+           , Token(..)
+           , TokenType(..)
+           , getNodePos
+           )
+    where
 
-import Scanner(Token(..))
+import Scanner(Token(..),TokenType(..))
 import Text.ParserCombinators.Parsec
 import Text.PrettyPrint.HughesPJ
 import Data.Int
@@ -49,6 +69,7 @@ data Expr = BinaryOp SourcePos Expr Token Expr
           | ExprIntLiteral SourcePos Int64
           | LoadLoc SourcePos DLocation
           | ExprMethod SourcePos MethodCall
+
 
 -- | This class is for being able to get the position of a node in a
 -- general way.  This hasn't been implemented for each of the nodes
