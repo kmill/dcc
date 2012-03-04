@@ -1,0 +1,13 @@
+class Program {
+  int h(int x) {
+    return x+3;
+  }
+
+  void main() {
+    callout("oeuoe", r(2,true)==3);
+    f = g(3);
+    q = f(true, 'c');
+    if(q(h) == 2) {
+    }
+  }
+}

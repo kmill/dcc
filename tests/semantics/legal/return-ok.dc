@@ -1,0 +1,13 @@
+class Program {
+  int f() {
+    return 5;
+  }
+  boolean g() {
+    return true;
+  }
+  void h() {
+    return;
+  }
+  void main() {
+  }
+}

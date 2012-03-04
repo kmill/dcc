@@ -1,4 +1,4 @@
 class Program
 {
-	void main() { bool id; id += false; }
+	void main() { boolean id; id += false; }
 }

@@ -1,0 +1,6 @@
+class Program {
+  int a1[22], a2[22];
+  int main() {
+    a1 = a2;
+  }
+}

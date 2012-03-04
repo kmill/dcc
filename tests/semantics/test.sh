@@ -1,23 +1,37 @@
 #!/bin/sh
 
-runsemantics() {
-  `dirname $0`/../../dcc -target inter $1
+runparser() {
+  ../../dcc --target inter $1
 }
+
+cd `dirname $0`
 
 fail=0
 
-for file in `dirname $0`/illegal/*; do
-  if runsemantics $file > /dev/null 2>&1; then
-    echo "Illegal file $file semantic checked successfully.";
+for file in ./illegal/*; do
+  if runparser $file; then
+    echo "[ ] Illegal file $file incorrectly parsed successfully.";
     fail=1
+  else
+    echo "[+]" $file;
+    echo
   fi
 done
 
-for file in `dirname $0`/legal/*; do
-  if ! runsemantics $file; then
-    echo "Legal file $file failed to pass semantic checks.";
+for file in ./legal/*; do
+  if ! runparser $file; then
+    echo "[ ] Legal file $file failed to parse.";
     fail=1
+  else
+      echo "[+]" $file;
   fi
 done
+
+if [ "$fail" -eq 0 ]
+then
+    echo "\nPassed"
+else
+    echo "\nFailed"
+fi
 
 exit $fail;
