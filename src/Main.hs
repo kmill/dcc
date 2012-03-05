@@ -56,7 +56,7 @@ doScanFile :: CompilerOpts -> String -> String -> IO ()
 doScanFile opts ifname input
     = case runScanner opts ifname input of
         Left err -> reportErr (lines input) err
-        Right v -> printScannerResult v
+        Right v -> if debugMode opts then printScannerResult v else return ()
 
 -- | Perfoms the actions for the @parse@ target.
 doParseFile :: CompilerOpts -> String -> String -> IO ()
