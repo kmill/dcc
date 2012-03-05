@@ -20,4 +20,11 @@ for file in `dirname $0`/input/*; do
   rm $output;
 done
 
+if [ "$fail" -eq 0 ]
+then
+    echo "\nPassed"
+else
+    echo "\nFailed"
+fi
+
 exit $fail;

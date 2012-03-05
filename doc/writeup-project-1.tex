@@ -20,8 +20,9 @@ will perform all semantic checks on the input program. If there are no semantic
 errors and \texttt{--debug} is specified, the compiler will then generate a 
 ``Hybrid AST'' (outlined in Section~\ref{sec:ir}) and print this IR to the 
 terminal. The return values of the program specify whether or not the semantic 
-checker passed or failed. Currently, the only error code is 1, though this may 
-possibly be changed in future versions.
+checker passed or failed. Currently, an error code of 1 indicates a scanning 
+error, an error code of 2 indicates a parsing error, and an error code of 4 
+indicates a semantic error.
 
 \section{Division of Work} 
 
