@@ -32,7 +32,9 @@ doSemanticCheck :: DProgram
 doSemanticCheck ast = res
     where res = runSemChecker (checkDProgram ast)
 
---- environments
+---
+--- Lexical environments
+---
 
 data LexicalEnv = LexicalEnv
     { lexicalBindings :: Map.Map String DUTerm
@@ -47,25 +49,30 @@ emptyEnv = LexicalEnv { lexicalBindings=Map.empty
                       , parentEnv=Nothing 
                       , methReturnType=Nothing
                       , isInsideLoop=False }
-    
+
+-- | Recursively look up a binding.
 envLookup :: String -> LexicalEnv -> Maybe DUTerm
 envLookup name lenv = Map.lookup name e
                       `mplus` ((parentEnv lenv) >>= envLookup name)
     where e = lexicalBindings lenv
 
+-- | Get the root environment of a lexical environment.
 envRoot :: LexicalEnv -> LexicalEnv
 envRoot env = maybe env envRoot (parentEnv env)
 
+-- | Add binding to an environment
 envBind :: String -> DUTerm -> LexicalEnv -> LexicalEnv
 envBind name val lenv = lenv { lexicalBindings=Map.insert name val e }
     where e = lexicalBindings lenv
-          
+
+-- | Create a sub-environment of a lexical environment.
 deriveEnv :: LexicalEnv -> LexicalEnv
 deriveEnv e = LexicalEnv { lexicalBindings=Map.empty
                          , parentEnv=Just e
                          , methReturnType=methReturnType e
                          , isInsideLoop=isInsideLoop e}
 
+-- | Creates a sub-environment while extending it with multiple bindings.
 extendEnv :: [(String, DUTerm)] -> Maybe DUTerm -> LexicalEnv -> LexicalEnv
 extendEnv bindings ret e
     = LexicalEnv
@@ -73,10 +80,12 @@ extendEnv bindings ret e
       , parentEnv=Just e
       , methReturnType=ret
       , isInsideLoop=isInsideLoop e }
-      
+
+-- | This is the type which represents Decaf types, which are unified
+-- by the 'Unify' module.
 type DUTerm = Term DUType
 
--- | "Decaf Unification Type"
+-- | This is the type of the head of the 'Term' type.
 data DUType = DUInt SourcePos
             | DUBool SourcePos
             | DUChar SourcePos
@@ -86,6 +95,8 @@ data DUType = DUInt SourcePos
             | DUFunc SourcePos
               deriving (Show)
 
+-- | We have to make our own 'Eq' instance since 'SourcePos' shouldn't
+-- matter for equality.
 instance Eq DUType where
   (DUInt _) == (DUInt _) = True
   (DUBool _) == (DUBool _) = True
@@ -96,7 +107,7 @@ instance Eq DUType where
   (DUFunc _) == (DUFunc _) = True
   _ == _ = False
 
--- | Helpers for making instances of @DUTerm@.
+-- | Helpers for making instances of 'DUTerm'.
 tInt, tBool, tChar, tString, tVoid :: SourcePos -> DUTerm
 tInt pos = nullaryTerm (DUInt pos)
 tBool pos = nullaryTerm (DUBool pos)
@@ -110,6 +121,7 @@ tArray pos s t = Term (DUArray pos s) [t]
 tFunc :: SourcePos -> DUTerm -> [DUTerm] -> DUTerm
 tFunc pos r args = Term (DUFunc pos) ([r] ++ args)
 
+-- | Our version of the unifier type!
 type Unifier = ExceptionalT (UnificationError DUType) (State (UnifierData DUType))
 
 instance MonadState (UnifierData DUType) Unifier where
@@ -175,7 +187,9 @@ duWithPos (Term t x) pos = Term updatedPos x
                          DUVoid _ -> DUVoid pos
                          DUFunc _ -> DUFunc pos
                          DUArray _ i -> DUArray pos i
-                    
+
+-- | Our semantic checker monad!  We make our own state monad because
+-- we want 'MonadState' and 'MonadReader' to not come by default.
 newtype SemChecker a = SemChecker { getSemChecker :: State SemCheckData a }
 
 instance Functor SemChecker where
@@ -190,10 +204,13 @@ instance Applicative SemChecker where
                    b <- mb
                    return (f b)
 
+-- | This instance of 'MonadReader' just defers to the embedded state monad.
 instance MonadState SemCheckData SemChecker where
     get = SemChecker get
     put a = SemChecker $ put a
 
+-- | This instance of 'MonadReader' gets the lexical environment out
+-- of the semantic checker monad.
 instance MonadReader LexicalEnv SemChecker where
   ask = do s <- get
            return $ semLexicalEnv s
@@ -204,18 +221,24 @@ instance MonadReader LexicalEnv SemChecker where
                  put $ s' { semLexicalEnv = semLexicalEnv s }
                  return res
 
+-- | This modifies the lexical environment in the state monad with
+-- some arbitrary transformer function.
 modEnv :: (LexicalEnv -> LexicalEnv) -> SemChecker ()
 modEnv f = do s <- get
               put $ s { semLexicalEnv=f (semLexicalEnv s) }
-              
+
+-- | Adds an error to the current list of semantic errors.
 addError :: SemError -> SemChecker ()
 addError e = do sd <- get
                 put $ sd { semErrors=semErrors sd ++ [e] }
 
+-- | Used by the for-loop and while-loop handlers to signal when break
+-- and continue are value.
 enterLoop :: SemChecker a -> SemChecker a
 enterLoop = local (\env -> env { isInsideLoop=True })
-              
-              
+
+-- | Adds a binding to the current lexical environment, checking for
+-- duplicate definitions and adding semantic errors in such an event.
 addEnvBinding :: SourcePos -> String -> DUTerm -> SemChecker ()
 addEnvBinding pos name typ
     = do env <- ask
@@ -223,6 +246,11 @@ addEnvBinding pos name typ
            Just _ -> addError $ SemDupDef pos name
            Nothing -> modEnv $ envBind name typ
 
+-- | Attempts to look up the type of an identifier in the current
+-- lexical environment, and if it fails, it adds an error and returns
+-- a fresh unification variable as the type.  The unification variable
+-- is attached to the semantic error so that the error message will be
+-- able to include the inferred type of the unbound identifier.
 lookupOrAdd :: SourcePos -> String -> SemChecker DUTerm
 lookupOrAdd pos name
     = do env <- ask
@@ -233,6 +261,9 @@ lookupOrAdd pos name
                          addError $ SemUnboundError pos name (Var v)
                          return $ Var v
 
+-- | This runs the semantic checker and provides either the error data
+-- if there was a semantic error, or something irrelevant if there was
+-- no error.
 runSemChecker :: SemChecker a
               -> Either (UnifierData DUType, [SemError]) LexicalEnv
 runSemChecker sc = let (_, s') = runState (getSemChecker sc) s
@@ -245,6 +276,10 @@ runSemChecker sc = let (_, s') = runState (getSemChecker sc) s
               , semLexicalEnv=emptyEnv
               }
 
+-- | This lifts a unification operation up into the semantic checker.
+-- It pulls the unification data out of the state of the semantic
+-- checker monad, runs the unification monad, and then puts the
+-- resulting state back into the semantic checker monad.
 liftS :: Unifier a -> SemChecker (Maybe a)
 liftS m = do sd <- get
              let s = semUnifierData sd
@@ -261,11 +296,16 @@ liftS m = do sd <- get
 infix 5 <==>
 
 -- | Unifies two types, storing the error messages in the SemChecker
--- monad, and continues onward despite errors.
+-- monad, and continues onward despite errors.  Read @<==>@ as "make
+-- equality by modifying the structures on both sides".
 (<==>) :: DUTerm -> DUTerm -> SemChecker ()
 t1 <==> t2  = do liftS $ unify t1 t2
                  return ()
-             
+
+---
+--- The actual semantic checks
+---
+
 checkDProgram :: DProgram -> SemChecker ()
 checkDProgram (DProgram pos fdecls mdecls)
     = do sequence_ [checkFieldDecl f | f <- fdecls]
@@ -416,7 +456,7 @@ checkExpr (ExprLiteral pos tok)
         CharLiteral -> return $ tChar pos
         StringLiteral -> return $ tString pos
         BooleanLiteral -> return $ tBool pos
-        IntLiteral -> error "uh oh" --return $ tInt pos -- shouldn't be used anymore
+        IntLiteral -> error "uh oh" -- This shouldn't be used because of ExprIntLiteral
         _ -> error "uh oh"
 checkExpr (ExprIntLiteral pos tok)
     = return $ tInt pos
