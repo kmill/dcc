@@ -1,6 +1,9 @@
 {-# LANGUAGE MultiParamTypeClasses, FunctionalDependencies,
   FlexibleInstances, FlexibleContexts #-}
 
+-- | This is a definition of the Hybrid AST used for Code Generation. The module
+-- also includes a way to pretty print the Hybrid AST
+
 module SymbolTable where
 
 import AST
@@ -8,13 +11,18 @@ import qualified Data.Map as Map
 import Data.Int
 import Text.PrettyPrint.HughesPJ
 
+
+-- | SymbolEnv is a lightweight Symbol Table Component. 
+-- It consists of a map mapping names to symbol terms and a 
+-- reference to a parent SymbolEnv
 data SymbolEnv = SymbolEnv
     { symbolBindings :: Map.Map String SymbolTerm 
     , parentEnv :: Maybe SymbolEnv
     } 
+-- SymbolEnv's should just be represented as an association list
 instance Show SymbolEnv where 
     show s = "Symbols: " ++ (show $ Map.assocs $ symbolBindings s)
-
+-- Symbols can either be variables or methods
 data SymbolTerm = Term SourcePos SymbolType
                 | MethodTerm SourcePos (Maybe SymbolType)
 
@@ -30,27 +38,40 @@ instance Show SymbolType where
     show SBool = "Bool"
     show (SArray t len) = show t ++ " Array"
 
+---
+--- Functions for populating SymbolEnvs 
+---
+
 emptyEnv :: SymbolEnv 
 emptyEnv = SymbolEnv { symbolBindings = Map.empty
                      , parentEnv = Nothing
                      } 
 
+-- Add a single binding to the given SymbolEnv
 envBind :: String -> SymbolTerm -> SymbolEnv -> SymbolEnv
 envBind name val senv = senv { symbolBindings=Map.insert name val e}
     where e = symbolBindings senv
 
+-- Add a list of bindings to the given SymbolEnv
 envBindMany :: [(String, SymbolTerm)] -> SymbolEnv -> SymbolEnv
 envBindMany pairs e = e { symbolBindings= Map.union oldMap (Map.fromList pairs) }
     where oldMap = symbolBindings e
 
+-- Create an empty child SymbolEnv and attach it to the parent env
 deriveEnv :: SymbolEnv -> SymbolEnv 
 deriveEnv e = SymbolEnv { symbolBindings = Map.empty
                         , parentEnv = Just e }
 
+-- Create a child SymbolEnv with the given bindings and attach it to the parent env
 extendEnv :: [(String, SymbolTerm)] -> SymbolEnv -> SymbolEnv
 extendEnv pairs e = SymbolEnv { symbolBindings = Map.fromList pairs
                               , parentEnv = Just e }
 
+---
+--- The Hybrid AST Data
+--- Designed to mimic the AST Data in AST.hs
+--- but with references to relevant SymbolEnvs
+---
 
 data HDProgram = HDProgram SymbolEnv SourcePos [HFieldDecl] [HMethodDecl]
 data HFieldDecl = HFieldDecl SymbolEnv SourcePos DType [HFieldVar]
@@ -74,6 +95,8 @@ data HMethodCall = HNormalMethod SymbolEnv SourcePos Token [HExpr]
                  | HCalloutMethod SymbolEnv SourcePos Token [HCalloutArg]
 data HCalloutArg = HCArgExpr SymbolEnv HExpr
                  | HCArgString SymbolEnv Token
+-- Note, the HExpr type defines a few more constructors corresponding to specific literal types
+-- The createHybridAST method will convert string values from tokens to the appropriate literal type and value
 data HExpr = HBinaryOp SymbolEnv SourcePos HExpr Token HExpr
            | HUnaryOp SymbolEnv SourcePos Token HExpr
            | HExprBoolLiteral SymbolEnv SourcePos Bool 
@@ -84,6 +107,9 @@ data HExpr = HBinaryOp SymbolEnv SourcePos HExpr Token HExpr
            | HExprMethod SymbolEnv SourcePos HMethodCall
 
 
+---
+--- Functions for creating SymbolEnv bindings from AST node data
+---
 
 fieldDeclToSTerms :: FieldDecl -> [(String, SymbolTerm)]
 fieldDeclToSTerms (FieldDecl pos t decls) = map (fieldVarToSTerm t) decls
@@ -100,7 +126,6 @@ methodDeclToSTerm (MethodDecl pos t tok args _)
     where methodType (MethodReturns mt) = Just (dTypeToSType mt)
           methodType _ = Nothing
 
-
 methodArgToSTerm :: MethodArg -> (String, SymbolTerm) 
 methodArgToSTerm (MethodArg t tok) = (tokenString tok, Term (tokenPos tok) (dTypeToSType t))
 
@@ -112,19 +137,22 @@ dTypeToSType :: DType -> SymbolType
 dTypeToSType DInt = SInt
 dTypeToSType DBool = SBool
 
---convertTokenValue :: Token -> a 
---convertTokenValue Token { tokenType = IntLiteral, tokenString=s } = read s :: Int
---convertTokenValue Token { tokenType = BooleanLiteral, tokenString=s } = s == "true"
 
+-- The top level function that converts an AST to a Hybrid AST
 makeHybridAST :: DProgram -> HDProgram 
 makeHybridAST p = createHybridAST emptyEnv p
 
-
+-- | This instance just defers to 'PP' and renders
 instance Show HDProgram where
     show = render . pp
 
+-- | The 'HybridAST' class is for converting AST nodes into Hybrid AST nodes
 class HybridAST a b | a -> b where 
     createHybridAST :: SymbolEnv -> a -> b
+
+--- 
+--- HybridAST instances
+---
 
 instance HybridAST DProgram HDProgram where
     createHybridAST e (DProgram pos fields methods) 
@@ -132,7 +160,6 @@ instance HybridAST DProgram HDProgram where
         where eNew = envBindMany methodList (envBindMany fieldList e) 
               fieldList = concatMap fieldDeclToSTerms fields
               methodList = map methodDeclToSTerm methods
-
 
 instance HybridAST FieldDecl HFieldDecl where
     createHybridAST e (FieldDecl pos t vars) = HFieldDecl e pos t $ map (createHybridAST e) vars
@@ -178,6 +205,7 @@ instance HybridAST Expr HExpr where
     createHybridAST e (BinaryOp pos expr1 tok expr2) = HBinaryOp e pos (createHybridAST e expr1) tok (createHybridAST e expr2)
     createHybridAST e (UnaryOp pos tok expr) = HUnaryOp e pos tok (createHybridAST e expr) 
     createHybridAST e (ExprLiteral pos tok)
+        -- Here is where conversion of token strings to proper values happens
         = case (tokenType tok) of
             CharLiteral -> HExprCharLiteral e pos x
                 where [x] = str
@@ -200,6 +228,12 @@ instance HybridAST MethodCall HMethodCall where
 instance HybridAST CalloutArg HCalloutArg where
     createHybridAST e (CArgExpr expr) = HCArgExpr e (createHybridAST e expr) 
     createHybridAST e (CArgString tok) = HCArgString e tok
+
+---
+--- PP instances
+--- Should be nearly idential to instances in AST.hs with the addition of printing SymbolEnvs 
+--- where new symbols are defined
+--- 
 
 instance PP HDProgram where
     pp (HDProgram e pos fields methods) 
@@ -299,6 +333,7 @@ instance PP HExpr where
     pp (HLoadLoc env _ loc) = pp loc
     pp (HExprMethod env _ mc) = pp mc
 
+-- | This instance is so we can pretty print HExprs
 instance ASTNodePos HExpr where
     getNodePos (HBinaryOp _ pos _ _ _) = pos
     getNodePos (HUnaryOp _ pos _ _) = pos
