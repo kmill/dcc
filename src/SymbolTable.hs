@@ -9,6 +9,7 @@ module SymbolTable where
 import AST
 import qualified Data.Map as Map
 import Data.Int
+import Control.Monad
 import Text.PrettyPrint.HughesPJ
 
 
@@ -66,6 +67,15 @@ deriveEnv e = SymbolEnv { symbolBindings = Map.empty
 extendEnv :: [(String, SymbolTerm)] -> SymbolEnv -> SymbolEnv
 extendEnv pairs e = SymbolEnv { symbolBindings = Map.fromList pairs
                               , parentEnv = Just e }
+
+--- 
+--- Functions for retrieving data from SymbolEnvs
+---
+
+envLookup :: String -> SymbolEnv -> Maybe SymbolTerm
+envLookup name senv = Map.lookup name bindings 
+                      `mplus` ((parentEnv senv) >>= envLookup name)
+    where bindings = symbolBindings senv 
 
 ---
 --- The Hybrid AST Data

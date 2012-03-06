@@ -10,4 +10,115 @@
 
 \section{Overview}
 
+Our proposed code generator works by analyzing the hyrbid AST/Symbol Table produced as the output of the previous project to generate a tree of \textbf{``Code Blocks''} that can then be easily converted into strings of assembly code representing a correct interpretation of the input program. 
+
+The unoptimized code generator generates these Code Blocks by treating the program as a stack machine that uses the stack as the primary location of all variables. For example, expressions (described in Section~\ref{sec:expr}) are evaluated similarly to a ``Reverse Polish Notation'' calculator where an expression returns its result on the top of the stack while recursively  evaluating sub-expressions. While this design is massively inefficient, it is very simple and will hopefully allow us to quickly build a working decaf compiler. 
+
+An important part of the design of our code generator centers around where we store variables and how the code generator is aware of this. On an initial pass, the code generator looks over the global variables defined in the list of field decls and assigns each of them an offset. This offset represents that variable's memory offset (in bytes) from the end of the program text which is represented by a label in the generated assembly. These offsets are subsequently stored in the symbol table attached to the Hybrid AST. Similarly, method arguments, local variables, and index variables are also assigned an offset, this time with the value representing a stack offset from the value contained in the Base-Pointer register of the current stack frame. This simple implementation could later be re-vamped to create locations beyond simple offsets (such as registers, temporary stack locations, etc.). 
+
+After creating locations for all variables, the code generator then performs a second pass over the Hybrid AST, recursively creating code blocks for each node in the AST. How these code blocks are generated is explained in greater detail in the following sections. 
+
+\section {Translation of Expressions into Code Blocks}
+\label{sec:expr}
+
+Translating Expressions in the AST into Code Blocks with our unoptimized scheme is fairly simple. The general pattern of expression code generation is as follows: 
+
+\begin{verbatim}
+1. evaluate sub-expressions from left to right.
+2. pop results of sub-expressions off the stack into registers if needed.
+3. perform computation with results of sub-expressions.
+4. push result onto stack. 
+\end{verbatim}
+
+To see how this scheme works in action, here are some possible implementations for common expressions. 
+
+\subsection{Translation of Literal Expressions} 
+
+A literal expression can simply push its literal value onto the stack: 
+
+\begin{verbatim} 
+pushq $LITERAL_VALUE 
+\end{verbatim}
+
+\subsection{Translation of Load Location Expressions} 
+
+Expressions loading a specific value from memory can generate code to load the value into a register based on its symbol table offset, and then push that register onto the stack: 
+
+\begin{verbatim}
+movq VARIABLE_LOC, %rax
+pushq %rax
+\end{verbatim}
+
+\subsection{Translation of Binary Operation Expressions} 
+To translate a binary operation, the expression first evaluates its sub expressions and then performs the requested operation on their resulting value, subsequently pushing the result of this opertation onto the stack: 
+
+\begin{verbatim}
+# Evaluate LeftExpr
+# Evaluate RightExpr
+popq %rbx
+popq %rax
+BIN_OP %rax, %rbx
+pushq %rax
+\end{verbatim}
+
+For binary operations that need \textbf{Short Circuit Evaluation} (such as boolean operators) the code might look more like: 
+
+\begin{verbatim}
+# Evaluate LeftExpr
+popq %rax 
+cmp %rax, 0
+jne or_expr_x_done
+# Evaluate RightExpr
+...
+...
+or_expr_x_done: 
+pushq %rax
+\end{verbatim}
+
+
+\section {Translation of Statements into Code Blocks}
+Statements are slightly more complex than expressions to translate because they involve a manipulating the Instruction Pointer register in clever ways. 
+
+Statements need to keep track of relevant labels, particularly so expressions such as break or continue expressions can jmp to the appropriate locations in memory. 
+
+Some Simple code translations might include: 
+
+\subsection{Translation of Break Statements} 
+
+\begin{verbatim}
+jmp current_loop_end
+\end{verbatim}
+
+\subsection{Translation of Continue Statements}
+
+\begin{verbatim}
+jmp current_loop_begin
+\end{verbatim}
+
+TODO: Talk a bit about how if, for, and while statements will be evaluated. 
+
+\section {Translation of Methods into Code Blocks}
+Methods are very similar to expressions, the main difference being we can simply use the C calling conventions to generate their code. All methods should look like this: 
+
+\begin{verbatim}
+enter $x, $x
+# Save Callee saved registers
+...
+Generated Method Code
+...
+# Store result in %rax
+# Restore Callee saved registers
+leave $x, $x
+ret
+\end{verbatim}
+
+Method calls subsequently look like: 
+\begin{verbatim}
+# Method Prolog
+call method_name
+# Method Epilog
+pushq %rax
+\end{verbatim}
+
+in keeping with the simple expression code generation. 
 \end{document}
