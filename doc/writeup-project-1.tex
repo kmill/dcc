@@ -10,9 +10,19 @@
 
 \section{Overview} 
 
-For this project, we extended the decaf scanner/parser created in project 0 to check for semantic errors and to build a useful intermediate representation for code generation. The project is split up into two distinct phases that can occur in parallel: semantic checking and IR generation. 
+For this project, we extended the decaf scanner/parser created in project 0 to 
+check for semantic errors and to build a useful intermediate representation for 
+code generation. The project is split up into two distinct phases that can 
+occur in parallel: semantic checking and IR generation. 
 
-When \texttt{--target inter} is specified on the command line, the compiler will perform all semantic checks on the input program. If there are no semantic errors and \texttt{--debug} is specified, the compiler will then generate a ``Hybrid AST'' (outlined in Section~\ref{sec:ir}) and print this IR to the terminal. 
+When \texttt{--target inter} is specified on the command line, the compiler 
+will perform all semantic checks on the input program. If there are no semantic 
+errors and \texttt{--debug} is specified, the compiler will then generate a 
+``Hybrid AST'' (outlined in Section~\ref{sec:ir}) and print this IR to the 
+terminal. The return values of the program specify whether or not the semantic 
+checker passed or failed. Currently, an error code of 1 indicates a scanning 
+error, an error code of 2 indicates a parsing error, and an error code of 4 
+indicates a semantic error.
 
 \section{Division of Work} 
 
@@ -32,7 +42,7 @@ determines whether the AST is semantically valid by evaluating the
 tree in a context which keeps track of the types of all of the
 variables defined in the current lexical scope, whether the current
 scope is inside a looping construct, the current unification data, and
-a list of all of uncovered the semantic errors.
+a list of all of the discovered semantic errors.
 
 For semi-intelligent error messages, we decided to use the unification
 algorithm to drive the type-checking required by the semantics for
@@ -147,27 +157,62 @@ checkStatement (ForSt itok start end statement)
            enterLoop $ checkStatement statement
 \end{verbatim}
 The \texttt{deriveEnv} function takes the current lexical environment
-and makes a new subenvironment.
+and makes a new sub-environment.
 
 \section{IR for Code Generation}
 \label{sec:ir}
 
-After finishing all Semantic Checks with the Unification system, the compiler creates a new IR called the ``Hybrid AST'' designed for ease of use for code generation. The Hybrid AST' defined in SymbolTable.hs is a hybrid of an abstract syntax tree and a symbol table. It is constructed very similarly to the AST defined in AST.hs with the addition that each node in the AST now contains a reference to the ``Symbol Environment''  the node has access to. We decided to design the IR in this way because Code generation will require us to have informatio pertaining to both the AST \emph{and} the symbol table. Combining the two into a hybrid data structure should simplify the process of code generation greatly.
+After finishing all Semantic Checks with the Unification system, the compiler 
+creates a new IR called the ``Hybrid AST'' designed for ease of use for code 
+generation. The ``Hybrid AST'' defined in SymbolTable.hs is a hybrid of an 
+abstract syntax tree and a symbol table. It is constructed very similarly to 
+the AST defined in AST.hs with the addition that each node in the AST now 
+contains a reference to the ``Symbol Environment''  the node has access to. We 
+decided to design the IR in this way because Code Generation will require us to 
+have information pertaining to both the AST \emph{and} the symbol table.  
+Combining the two into a hybrid data structure should simplify the process of 
+code generation greatly.
 
-The Symbol Environments are types that contain information about all symbols available at a certain portion of the program. Each Symbol Environment is composed of a Haskell Map mapping names to symbol information and a pointer to a Parent Symbol Environment. It is important to note that since Symbol Environments are deeply connected with the AST, a Symbol Environment \emph{does not} contain a reference to any of its child Symbol Environments. If that information is needed, then the AST will have to be navigated to find the child Symbol Environment, which will then have a reference to its parent Symbol Environment. We chose to design the IR this way for greater simplicity and we believe this decision is correct because a node in the program would normally not have any access to symbols declared in a child environment, so providing this information in the Symbol Environments would serve no useful purpose. 
+The Symbol Environments are types that contain information about all symbols 
+available at a certain portion of the program. Each Symbol Environment is 
+composed of a Haskell Map mapping names to symbol information and a pointer to 
+a Parent Symbol Environment. It is important to note that since Symbol 
+Environments are deeply connected with the AST, the Symbol Environment 
+\emph{does not} contain a reference to any of its children Symbol Environments.  
+If that information is needed, then the AST will have to be navigated to find 
+the child Symbol Environment, which will then have a reference to its parent 
+Symbol Environment. We chose to design the IR this way for greater simplicity 
+and we believe this decision is correct because a node in the program would 
+normally not have any access to symbols declared in a child environment, so 
+providing this information in the Symbol Environments would serve no useful 
+purpose.  
 
-The Hybrid AST is created directly from the AST generated by the parser. Since the Hybrid AST is only created after the program has passed all semantic checks, it operates under the assumption that there are no semantic errors. The Haskell typeclass ``HybridAST'' defines a function called ``createHybridAST'' with type 
-\begin{verbatim}
+The Hybrid AST is created directly from the AST generated by the parser. Since 
+the Hybrid AST is only created after the program has passed all semantic 
+checks, it operates under the assumption that there are no semantic errors. The 
+Haskell typeclass ``HybridAST'' defines a function called ``createHybridAST'' 
+with type \begin{verbatim}
 createHybridAST :: SymbolEnv -> a -> b
 \end{verbatim} 
 
-SymbolTable.hs then defines an instance of HybridAST for each type representing a node in the AST (from AST.hs) that transforms a node of that type into a corresponding hybrid node that contains the SymbolEnv information. The createHybridAST function also handles creating and populating the Symbol Environments.
+SymbolTable.hs then defines an instance of HybridAST for each type representing 
+a node in the AST (from AST.hs) that transforms a node of that type into a 
+corresponding hybrid node that contains the SymbolEnv information. The 
+createHybridAST function also handles creating and populating the Symbol 
+Environments.
 
-For printing purposes the only nodes in the Hybrid AST that print their corresponding Symbol Environments are the nodes that derive a new symbol environment (such as method decls, blocks, and for statements). 
+For printing purposes the only nodes in the Hybrid AST that print their 
+corresponding Symbol Environments are the nodes that derive a new symbol 
+environment (such as method decls, blocks, and for statements). 
 
 \section{Test Plan}
 \label{sec:test}
-The tests/semantics directory contains at least one illegal file for each semantic rule - these tests test exactly one semantic rule that fails. They have been immensely useful over the course of this segment of the project. We also modified test.sh to not print the output of the compiler when the test succeeds, which makes things a lot cleaner.
+The tests/semantics directory contains at least one illegal file for each 
+semantic rule - these tests test exactly one semantic rule that fails. They 
+have been immensely useful over the course of this project. We also modified 
+test.sh to conceal the output of the Semantic Checker when the test succeeds, 
+which makes things a lot cleaner, and prevents the tester from having to scan 
+past the print outs of the Hybrid ASTs.
 
 
 \end{document}

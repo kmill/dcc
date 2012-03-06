@@ -69,7 +69,7 @@ doParseFile opts ifname input
               [] -> case runDParser opts ifname v of
                       Left err ->
                           do reportErr (lines input) err
-                             exitWith $ ExitFailure 1
+                             exitWith $ ExitFailure 2
                       Right r ->
                           do unless (compatMode opts) $ print r
                              exitSuccess
@@ -90,7 +90,7 @@ doCheckFile opts ifname input
               [] -> case runDParser opts ifname v of
                       Left err ->
                           do reportErr (lines input) err
-                             exitWith $ ExitFailure 1
+                             exitWith $ ExitFailure 2
                       Right r ->
                           case doSemanticCheck r of
                             Right x -> do if debugMode opts then 
@@ -101,7 +101,7 @@ doCheckFile opts ifname input
                                    putStrLn ""
                                    sequence_ [putStrLn (showSemError (lines input) udata e)
                                               | e <- errors]
-                                   exitWith $ ExitFailure 1
+                                   exitWith $ ExitFailure 4
               errors -> do printScannerResult errors
                            exitWith $ ExitFailure 1
     where getErrors = filter isTokenError
