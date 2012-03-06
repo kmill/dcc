@@ -23,6 +23,13 @@ data SymbolEnv = SymbolEnv
 -- SymbolEnv's should just be represented as an association list
 instance Show SymbolEnv where 
     show s = "Symbols: " ++ (show $ Map.assocs $ symbolBindings s)
+
+instance PP SymbolEnv where
+    pp env = text "env = {"
+             <> ((vcat [text (k ++ " :: " ++ show v)
+                         | (k,v) <- Map.assocs $ symbolBindings env])
+                 <> text "}")
+
 -- Symbols can either be variables or methods
 data SymbolTerm = Term SourcePos SymbolType
                 | MethodTerm SourcePos (Maybe SymbolType)
@@ -246,11 +253,11 @@ instance HybridAST CalloutArg HCalloutArg where
 --- 
 
 instance PP HDProgram where
-    pp (HDProgram e pos fields methods) 
+    pp (HDProgram env pos fields methods) 
         = text "Program" <+> (text $ show pos) 
-          $$ (text $ show e)
-          $$ (nest 3 $ vcat [pp f | f <- fields])
-          $$ (nest 3 $ vcat [pp m | m <- methods])
+          $+$ (pp env)
+          $+$ (nest 3 $ vcat [pp f | f <- fields])
+          $+$ (nest 3 $ vcat [pp m | m <- methods])
 
 instance PP HFieldDecl where 
     pp (HFieldDecl e pos t vars) 
@@ -263,34 +270,35 @@ instance PP HFieldVar where
     pp (HArrayVar e t l) = (text $ tokenString t) <> brackets (text $ show l)
 
 instance PP HMethodDecl where
-    pp (HMethodDecl e pos t tok args st)
+    pp (HMethodDecl env pos t tok args st)
         = text "methoddecl" <+> (pp t) <+> (text $ tokenString tok) 
            <> parens (hsep $ punctuate comma [pp a | a <- args])
-           <+> (pp pos) <+> (text $ show e)
-           $+$ (nest 3 (pp st))
+           <+> (pp pos)
+           $+$ (pp env)
+           $+$ (pp st)
 
 instance PP HMethodArg where
     pp (HMethodArg e t tok) = (pp t) <+> (text $ tokenString tok)
 
 instance PP HStatement where
-    pp (HBlock e _ vds ss)
-        = (text $ show e)
-           $$ (nest 0 $ vcat $ map pp vds)
-           $+$ (nest 0 $ vcat $ map pp ss)
+    pp (HBlock env _ vds ss)
+        = --(text $ "block") $+$
+           (nest 3 $ pp env)
+           $+$ (nest 3 $ vcat $ map pp ss)
     pp (HIfSt env pos e cs mas)
        = text "if" <+> (pp e) <+> (pp pos)
-         $+$ (nest 3 $ pp cs)
+         $+$ (pp cs)
          $+$ (case mas of
-               Just as -> text "else" $+$ (nest 3 $ pp as)
+               Just as -> text "else" $+$ (pp as)
                Nothing -> empty)
     pp (HForSt env pos t s e st)
        = text "for(" <> (text $ tokenString t) 
          <+> text "=" <+> (pp s) <> text ";"
          <+> (pp e) <> text ")" <+> (pp pos) <+> (text $ show env)
-         $+$ (nest 3 $ pp st)
+         $+$ (pp st)
     pp (HWhileSt env pos e st)
        = text "while" <+> (pp e) <+> (pp pos)
-         $+$ (nest 3 $ pp st)
+         $+$ (pp st)
     pp (HReturnSt env pos me)
        = case me of
            Just e -> text "return" <+> (pp e) <+> (pp pos)
