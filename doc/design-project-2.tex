@@ -10,7 +10,7 @@
 
 \section{Overview}
 
-Our proposed code generator works by analyzing the hyrbid AST/Symbol Table produced as the output of the previous project to generate a tree of \textbf{``Code Blocks''} that can then be easily converted into strings of assembly code representing a correct interpretation of the input program. 
+Our proposed code generator works by analyzing the hybrid AST/Symbol Table produced as the output of the previous project to generate a tree of \textbf{``Code Blocks''} that can then be easily converted into strings of assembly code representing a correct interpretation of the input program. 
 
 Code Blocks are simple types that are either ``Constant'' code blocks (such as a push, add, or mov) or ``Compound'' code blocks which combine constant and other compound code blocks into a single self-connected piece of code. At the end of code generation, these code blocks are translated into strings recursively and written to a file with the ``.s'' extension. 
 
@@ -32,7 +32,7 @@ Translating Expressions in the AST into Code Blocks with our unoptimized scheme 
 4. push result onto stack. 
 \end{verbatim}
 
-To see how this scheme works in action, here are some possible implementations for common expressions. 
+\noindent To see how this scheme works in action, here are some possible implementations for common expressions. 
 
 \subsection{Translation of Literal Expressions} 
 
@@ -52,7 +52,7 @@ pushq %rax
 \end{verbatim}
 
 \subsection{Translation of Binary Operation Expressions} 
-To translate a binary operation, the expression first evaluates its sub expressions and then performs the requested operation on their resulting value, subsequently pushing the result of this opertation onto the stack: 
+To translate a binary operation, the expression first evaluates its sub expressions and then performs the requested operation on their resulting value, subsequently pushing the result of this operation onto the stack: 
 
 \begin{verbatim}
 # Evaluate LeftExpr
@@ -63,13 +63,13 @@ BIN_OP %rax, %rbx
 pushq %rax
 \end{verbatim}
 
-For binary operations that need \textbf{Short Circuit Evaluation} (such as boolean operators) the code might look more like: 
+\noindent For binary operations that need \textbf{Short Circuit Evaluation} (such as boolean operators) the code might look more like: 
 
 \begin{verbatim}
 # Evaluate LeftExpr
 popq %rax 
 cmp %rax, 0
-jne or_expr_x_done
+jnz or_expr_x_done
 # Evaluate RightExpr
 ...
 ...
@@ -79,11 +79,7 @@ pushq %rax
 
 
 \section {Translation of Statements into Code Blocks}
-Statements are slightly more complex than expressions to translate because they involve a manipulating the Instruction Pointer register in clever ways. 
-
-Statements need to keep track of relevant labels, particularly so expressions such as break or continue expressions can jmp to the appropriate locations in memory. 
-
-Some Simple code translations might include: 
+Statements are slightly more complex than expressions to translate because they involve manipulating the Instruction Pointer register in clever ways. Statements need to keep track of relevant labels, particularly so expressions such as break or continue expressions can jump to the appropriate locations in memory. Some simple and naive code translations might include the following. 
 
 \subsection{Translation of Break Statements} 
 
@@ -97,7 +93,25 @@ jmp current_loop_end
 jmp current_loop_begin
 \end{verbatim}
 
-TODO: Talk a bit about how if, for, and while statements will be evaluated. 
+\subsection{Translation of If Statements} 
+
+\begin{verbatim}
+
+# Evaluate Conditional Expression 
+popq %rax 
+cmp %rax, 0
+jz else_block
+... 
+# Code for true block
+... 
+jmp done_if
+else_block
+...
+# Code for else block (might be empty if there is no else block)
+...
+done_if
+
+\end{verbatim}
 
 \section {Translation of Methods into Code Blocks}
 Methods are very similar to expressions, the main difference being we can simply use the C calling conventions to generate their code. All methods should look like this: 
@@ -114,7 +128,7 @@ leave $x, $x
 ret
 \end{verbatim}
 
-Method calls subsequently look like: 
+\noindent Method calls subsequently look like this: 
 \begin{verbatim}
 # Method Prolog
 call method_name
@@ -122,5 +136,17 @@ call method_name
 pushq %rax
 \end{verbatim}
 
-in keeping with the simple expression code generation. 
+\section {Placing Bounds Checks for Array Accesses}
+Since the decaf spec requires us to perform run-time checks on array accesses, we need to insert this code during code generation. This is done by the expression code generator when it encounters an array access. Array accesses subsequently look like this: 
+
+\begin{verbatim}
+# Evaluate index expression
+popq %rax 
+cmp %rax, $STATIC_ARRAY_SIZE
+jnz exit_fail
+mov ARRAY_LOC(%rax), %rax
+pushq %rax
+
+\end{verbatim}
+
 \end{document}
