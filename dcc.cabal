@@ -54,7 +54,8 @@ Executable dcc
     parsec >= 2,
     pretty,
     mtl >= 1.1,
-    containers >= 0.3
+    containers >= 0.3,
+    filepath
 --  extensions:
 --    MultiParamTypeClasses
   

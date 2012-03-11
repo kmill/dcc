@@ -34,12 +34,22 @@ instance PP (SymbolEnv a) where
 data SymbolTerm = Term SourcePos SymbolType
                 | MethodTerm SourcePos (Maybe SymbolType)
 
+termSize :: SymbolTerm -> Int64 
+termSize (Term _ t) = typeSize t
+termSize (MethodTerm _ _) = 0
+
+
 instance Show SymbolTerm where 
     show (Term pos t) = show t
     show (MethodTerm pos (Just t)) = show t ++ " Method"
     show (MethodTerm pos Nothing) = "Void Method"
 
 data SymbolType = SInt | SBool | SArray SymbolType Int64
+
+typeSize :: SymbolType -> Int64
+typeSize SInt = 8
+typeSize SBool = 8
+typeSize (SArray t len) = len*(typeSize t)
 
 instance Show SymbolType where
     show SInt = "Int"
@@ -259,11 +269,11 @@ instance HybridAST CalloutArg (HCalloutArg Int) Int where
 ---
 ---
 
-transformHDProgram :: ((a ->b) -> SymbolEnv b -> SymbolEnv a -> SymbolEnv b) -> (a->b) -> HDProgram a -> HDProgram b
-transformHDProgram f g program@(HDProgram env pos fields methods) = HDProgram eNew pos fields' methods'
-    where eNew = SymbolEnv { symbolBindings = symbolBindings env, parentEnv = Nothing, customValue = g $ customValue env }
+transformHDProgram :: (Maybe (SymbolEnv b) -> SymbolEnv a -> SymbolEnv b) -> HDProgram a -> HDProgram b
+transformHDProgram f program@(HDProgram env pos fields methods) = HDProgram eNew pos fields' methods'
+    where eNew = f Nothing env
           fields' = map (transformHFieldDecl eNew) fields
-          methods' = map (transformHMethodDecl (f g) eNew) methods
+          methods' = map (transformHMethodDecl f eNew) methods
 
 transformHFieldDecl :: SymbolEnv b -> HFieldDecl a -> HFieldDecl b
 transformHFieldDecl eNew (HFieldDecl _ pos t vars) = HFieldDecl eNew pos t vars'
@@ -273,18 +283,18 @@ transformHFieldVar :: SymbolEnv b -> HFieldVar a -> HFieldVar b
 transformHFieldVar eNew (HPlainVar _ tok) = HPlainVar eNew tok
 transformHFieldVar eNew (HArrayVar _ tok len) = HArrayVar eNew tok len
 
-transformHMethodDecl :: (SymbolEnv b -> SymbolEnv a -> SymbolEnv b) -> SymbolEnv b -> HMethodDecl a -> HMethodDecl b
+transformHMethodDecl :: (Maybe (SymbolEnv b) -> SymbolEnv a -> SymbolEnv b) -> SymbolEnv b -> HMethodDecl a -> HMethodDecl b
 transformHMethodDecl f eParent (HMethodDecl env pos t tok args st) = HMethodDecl eNew pos t tok args' st'
-    where eNew = f eParent env 
+    where eNew = f (Just eParent) env 
           args' = map (transformHMethodArg eNew) args
           st' = transformHStatement f eNew st
 
 transformHMethodArg :: SymbolEnv b -> HMethodArg a -> HMethodArg b
 transformHMethodArg eNew (HMethodArg _ t tok) = HMethodArg eNew t tok
 
-transformHStatement :: (SymbolEnv b -> SymbolEnv a -> SymbolEnv b) -> SymbolEnv b -> HStatement a -> HStatement b
+transformHStatement :: (Maybe (SymbolEnv b) -> SymbolEnv a -> SymbolEnv b) -> SymbolEnv b -> HStatement a -> HStatement b
 transformHStatement f eParent (HBlock env pos vars sts) = HBlock eNew pos vars' sts'
-    where eNew = f eParent env
+    where eNew = f (Just eParent) env
           vars' = map (transformHVarDecl eNew) vars
           sts' = map (transformHStatement f eNew) sts
 transformHStatement f eParent (HIfSt env pos expr st1 maybeSt) = HIfSt eParent pos expr' st1' maybeSt'
@@ -292,7 +302,7 @@ transformHStatement f eParent (HIfSt env pos expr st1 maybeSt) = HIfSt eParent p
           st1' = transformHStatement f eParent st1
           maybeSt' = maybeSt >>= (return . (transformHStatement f eParent) )
 transformHStatement f eParent (HForSt env pos tok expr1 expr2 st) = HForSt eNew pos tok expr1' expr2' st'
-    where eNew = f eParent env
+    where eNew = f (Just eParent) env
           expr1' = transformHExpr eNew expr1
           expr2' = transformHExpr eNew expr2
           st' = transformHStatement f eNew st
