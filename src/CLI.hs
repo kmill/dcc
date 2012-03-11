@@ -52,7 +52,7 @@ options =
     [ Option ['o']  ["out"]     (ReqArg outfile' "FILE")    "output FILE"
     , Option ['t']  ["target"]  (ReqArg target' "TARGET")   "set target type"
     , Option []     ["debug"]   (NoArg debug')              "enables debug mode"
-    , Option []  ["compat"]  (NoArg compat')             "enables compatibility mode with 6.035 output spec"
+    , Option []     ["compat"]  (NoArg compat')             "enables compatibility mode with 6.035 output spec"
     , Option ['h']  ["help"]    (NoArg help')               "prints this usage information"
     ]
     where outfile' s opts = opts { outputFile = Just s }
