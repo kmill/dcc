@@ -16,6 +16,7 @@ import SemanticCheck
 import SymbolTable
 import Text.Printf
 import Unify
+import CodeGenerate
  
 -- | The main entry point to @dcc@.  See 'CLI' for command line
 -- arguments.
@@ -31,6 +32,7 @@ main = do args <- getArgs
             TargetParse -> doParseFile opts ifname input
             TargetInter -> doCheckFile opts ifname input
             TargetDefault -> doCheckFile opts ifname input
+            TargetCodeGen -> doGenerateCode opts ifname input
             _ -> error "No such target"
 
 
@@ -96,6 +98,34 @@ doCheckFile opts ifname input
                             Right x -> do if debugMode opts then 
                                               print (makeHybridAST r) else --putStrLn ((show x) ++ "\nok.") 
                                               return ()
+                            Left (udata, errors) ->
+                                do putStrLn "Semantic errors:"
+                                   putStrLn ""
+                                   sequence_ [putStrLn (showSemError (lines input) udata e)
+                                              | e <- errors]
+                                   exitWith $ ExitFailure 4
+              errors -> do printScannerResult errors
+                           exitWith $ ExitFailure 1
+    where getErrors = filter isTokenError
+          isTokenError (TokenError {}) = True
+          isTokenError _ = False
+
+-- | Generates unoptimized code for the @codegen@ target
+doGenerateCode :: CompilerOpts -> String -> String -> IO ()
+doGenerateCode opts ifname input 
+    = case runScanner opts ifname input of
+        Left err -> do reportErr (lines input) err
+                       exitWith $ ExitFailure 1
+        Right v ->
+            case getErrors v of
+              [] -> case runDParser opts ifname v of
+                      Left err ->
+                          do reportErr (lines input) err
+                             exitWith $ ExitFailure 2
+                      Right r ->
+                          case doSemanticCheck r of
+                            Right x -> let code = runGenerateCode (makeHybridAST r) ifname in
+                                       putStrLn (show code) 
                             Left (udata, errors) ->
                                 do putStrLn "Semantic errors:"
                                    putStrLn ""
