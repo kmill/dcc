@@ -36,39 +36,39 @@ class PP a where
 --- AST data
 ---
 
-data DProgram = DProgram SourcePos [FieldDecl] [MethodDecl]
-data FieldDecl = FieldDecl SourcePos DType [FieldVar]
+data DProgram = DProgram !SourcePos [FieldDecl] [MethodDecl]
+data FieldDecl = FieldDecl !SourcePos DType [FieldVar]
 data FieldVar = PlainVar Token
               | ArrayVar Token Int64
-data MethodDecl = MethodDecl SourcePos MethodType Token [MethodArg] Statement
+data MethodDecl = MethodDecl !SourcePos MethodType Token [MethodArg] Statement
 data MethodType = MethodReturns DType
                 | MethodVoid
 data MethodArg = MethodArg DType Token
-data Statement = Block SourcePos [VarDecl] [Statement]
-               | IfSt SourcePos Expr Statement (Maybe Statement)
-               | ForSt SourcePos Token Expr Expr Statement
-               | WhileSt SourcePos Expr Statement
-               | ReturnSt SourcePos (Maybe Expr)
-               | BreakSt SourcePos
-               | ContinueSt SourcePos
+data Statement = Block !SourcePos [VarDecl] [Statement]
+               | IfSt !SourcePos Expr Statement (Maybe Statement)
+               | ForSt !SourcePos Token Expr Expr Statement
+               | WhileSt !SourcePos Expr Statement
+               | ReturnSt !SourcePos (Maybe Expr)
+               | BreakSt !SourcePos
+               | ContinueSt !SourcePos
                | ExprSt Expr
-               | AssignSt SourcePos DLocation AssignOp Expr
-data DLocation = PlainLocation SourcePos Token
-               | ArrayLocation SourcePos Token Expr
-data VarDecl = VarDecl SourcePos DType [Token]
+               | AssignSt !SourcePos DLocation AssignOp Expr
+data DLocation = PlainLocation !SourcePos Token
+               | ArrayLocation !SourcePos Token Expr
+data VarDecl = VarDecl !SourcePos DType [Token]
 data DType = DInt
            | DBool
 data AssignOp = Assign | IncAssign | DecAssign
-data MethodCall = NormalMethod SourcePos Token [Expr]
-                | CalloutMethod SourcePos Token [CalloutArg]
+data MethodCall = NormalMethod !SourcePos Token [Expr]
+                | CalloutMethod !SourcePos Token [CalloutArg]
 data CalloutArg = CArgExpr Expr
                 | CArgString Token
-data Expr = BinaryOp SourcePos Expr Token Expr
-          | UnaryOp SourcePos Token Expr
-          | ExprLiteral SourcePos Token
-          | ExprIntLiteral SourcePos Int64
-          | LoadLoc SourcePos DLocation
-          | ExprMethod SourcePos MethodCall
+data Expr = BinaryOp !SourcePos Expr Token Expr
+          | UnaryOp !SourcePos Token Expr
+          | ExprLiteral !SourcePos Token
+          | ExprIntLiteral !SourcePos Int64
+          | LoadLoc !SourcePos DLocation
+          | ExprMethod !SourcePos MethodCall
 
 
 -- | This class is for being able to get the position of a node in a
