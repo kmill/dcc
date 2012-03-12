@@ -1,0 +1,20 @@
+class Program { 
+
+int x;
+
+void main() {
+
+x = 7;
+if(x > 4) {
+     if (x > 6) {
+     	callout("printf", "Hello, world!");
+     }
+     if (x < 20) {
+     	callout("printf", "goodbye, world!");
+     }
+}
+
+}
+
+
+}
