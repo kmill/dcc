@@ -12,8 +12,19 @@ data Location = Reg String
               | BaseOffset Int
               | GlobalOffset Int64 Int64
 
+instance Show Location where
+    show (Reg s) = "%" ++ s
+    show (MemLoc s) = s
+    show (BaseOffset i) = (show i) ++ "(%rbp)"
+    show (GlobalOffset i _) = (show i) ++ "(GLOBALS)" 
+                                                 
 data LocInfo = LocInfo { symbolLocs :: Map.Map String Location 
                        , finalStackOffset :: Int }
+
+lookupLocInfo :: String -> SymbolEnv LocInfo ->  Maybe Location
+lookupLocInfo name env = Map.lookup name locations 
+                         `mplus` ((parentEnv env) >>= lookupLocInfo name)
+    where locations = symbolLocs $ customValue env
 
 -- Function to transform the intial HAST into an HAST with location information
 createSymbolLocations :: Maybe (SymbolEnv LocInfo) -> SymbolEnv Int -> SymbolEnv LocInfo
@@ -105,6 +116,20 @@ pushLoc (MemLoc i) = ConstantBlock ["pushq " ++ (show i)]
 pushLoc (BaseOffset i) = ConstantBlock ["pushq " ++ (show i) ++ "(%rbp)"]
 pushLoc (GlobalOffset i s) = ConstantBlock ["pushq " ++ (show i) ++ "(GLOBALS)"]
 
+moveLoc :: Location -> Location -> CodeBlock 
+moveLoc loc1 loc2 = stringBlock $ "movq " ++ (show loc1) ++ ", " ++ (show loc2)
+
+
+hdLocToLoc :: (HDLocation LocInfo) -> Location 
+hdLocToLoc (HPlainLocation env _ tok) = let name = tokenString tok 
+                                         in case (lookupLocInfo name env) of 
+                                              Just loc -> loc
+                                              Nothing -> error "Attempted to lookup name that doesn't exist"
+hdLocToLoc (HArrayLocation env _ tok  _) = let name = tokenString tok 
+                                            in case (lookupLocInfo name env) of 
+                                                 Just loc -> loc 
+                                                 Nothing -> error "Attempted to lookup name that doesn't exist"
+
 labelBlock :: CodeLabel -> CodeBlock 
 labelBlock label = ConstantBlock [(show label)++":"]
 
@@ -120,6 +145,7 @@ methodToCode codeState (HMethodDecl env _ _ tok args st)
           statementCode = CompoundBlock statementCodes 
           (_, statementCodes) = statementToCode (codeState { currentLabel = methodLabel}) st (initialBlockState, [])
 
+-- | Convert Block statements to a code block 
 statementToCode :: CodeState -> (HStatement LocInfo) -> (BlockState, [CodeBlock]) -> (BlockState, [CodeBlock]) 
 statementToCode codeState (HBlock env _ _ sts) (blockState, codeBlocks) 
     = (blockState, [CompoundBlock childCodes])
@@ -228,7 +254,15 @@ statementToCode codeState (HAssignSt env _ loc op expr) (blockState, codeBlocks)
     where codeBlock = CompoundBlock [ evalExprCode
                                     , moveResultCode]
           evalExprCode = stringBlock "# Eval assignment expr here"
-          moveResultCode = stringBlock "# Move result into location here" 
+          moveResultCode = case loc of 
+                             (HPlainLocation _ _ tok) -> CompoundBlock [stringBlock "# Move result into location here"
+                                                                       , stringBlock "popq %rax"
+                                                                       , moveLoc (Reg "rax") (hdLocToLoc loc)] 
+                             (HArrayLocation _ _ tok arrayIndex) -> CompoundBlock [stringBlock "# Evaluate array index here"
+                                                                                  , stringBlock "popq %rbx"
+                                                                                  , stringBlock "popq %rax"
+                                                                                  , stringBlock $ "movq %rax, %rbx(" ++ (show $ hdLocToLoc loc) ++ ")"]
+
 
 
 
