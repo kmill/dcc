@@ -179,15 +179,23 @@ statementToCode codeState (HIfSt env _ expr st maybeelse) (blockState, codeBlock
           ifFalseLabel = CodeLabel { lblName = "false", lblParent = Just ifLabel }
           ifEndLabel = CodeLabel { lblName = "end", lblParent = Just ifLabel }
           codeBlock = CompoundBlock [labelBlock ifLabel
+                                    , stringBlock "pushq %rax"
                                     , evalExprCode
                                     , labelBlock ifTrueLabel
                                     , trueCode
+                                    , overFalseCode
                                     , labelBlock ifFalseLabel
                                     , falseCode
-                                    , labelBlock ifEndLabel]
-          evalExprCode = stringBlock "# Eval if Expr here"
+                                    , labelBlock ifEndLabel
+                                    , stringBlock "popq %rax"]
+          evalExprCode = CompoundBlock [ stringBlock "# Eval if Expr here"
+                                       , exprToCode codeState expr (initialBlockState, [])
+                                       , stringBlock "popq %rax"
+                                       , stringBlock "cmp 1, %rax"
+                                       , stringBlock ("jne " ++ (show ifFalseLabel))]
           trueCode = CompoundBlock [stringBlock "# Perform if true", CompoundBlock trueCodes]
           (_, trueCodes) = statementToCode codeState st (initialBlockState, [])
+          overFalseCode = stringBlock ("jmp " ++ (show ifEndLabel))
           falseCode = case maybeelse of 
                         Just stelse -> let (_, falseCodes) = statementToCode codeState stelse (initialBlockState, [])
                                        in CompoundBlock [stringBlock "# Perform Otherwise", CompoundBlock falseCodes]
