@@ -202,7 +202,7 @@ statementToCode codeState (HIfSt env _ expr st maybeelse) (blockState, codeBlock
                         Nothing -> CompoundBlock []
 
 -- | Convert For loops to a code block 
-statementToCode codeState (HForSt env _ _ expr1 expr2 st) (blockState, codeBlocks)
+statementToCode codeState (HForSt env _ tok expr1 expr2 st) (blockState, codeBlocks)
     = (blockState {numFors = forIndex+1}, codeBlock:codeBlocks)
     where forIndex = numFors blockState
           forLabel = CodeLabel { lblName = "for_" ++ (show forIndex), lblParent = Just (currentLabel codeState) }
@@ -218,11 +218,28 @@ statementToCode codeState (HForSt env _ _ expr1 expr2 st) (blockState, codeBlock
                                     , labelBlock forReloopLabel
                                     , postLoopCode
                                     , labelBlock forEndLabel]
-          initCode = stringBlock "# init looping variable here"
-          evalExprCode = stringBlock "# Eval the for expr here" 
+          initCode = CompoundBlock [ stringBlock "# init looping variable here"
+                                   , iECode
+                                   , putTokBlock]
+          (iECode, _) = exprToCode newState expr1 initialBlockState
+          evalExprCode = CompoundBlock [ stringBlock "# Eval the for expr here"
+                                       , eECode
+                                       , stringBlock "popq %rax"
+                                       , getTokBlock
+                                       , stringBlock "popq %rbx"
+                                       , stringBlock "cmp %rax, %rbx"
+                                       , stringBlock ("jge " ++ (show forEndLabel))] 
+          (eECode, _) = exprToCode newState expr2 initialBlockState
           loopStCode = CompoundBlock [stringBlock "# Inner loop code here", CompoundBlock loopCodes]
           (_, loopCodes) = statementToCode newState st (initialBlockState, [])
-          postLoopCode = stringBlock "# Increment loop variable and re-loop here"
+          postLoopCode = CompoundBlock [ stringBlock "# Increment loop variable and re-loop here"
+                                       , getTokBlock
+                                       , stringBlock "popq %rax"
+                                       , stringBlock "addc 1, %rax"
+                                       , stringBlock "pushq %rax"
+                                       , putTokBlock]
+          getTokBlock = stringBlock "#Get Value from Tok and put on stack"
+          putTokBlock = stringBlock "#Put Value from Stack and put in Tok"
 
 -- | Convert While loops to a code block
 statementToCode codeState (HWhileSt env _ expr st) (blockState, codeBlocks) 
