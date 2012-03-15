@@ -419,7 +419,11 @@ equalsExprToCode codeState leftExpr rightExpr blockState
                                     , rightBlock 
                                     , stringBlock "popq %rax"
                                     , stringBlock "popq %rbx" 
-                                    , stringBlock "TODO: Insert equality test here" ]
+                                    , stringBlock "cmpq %rax, %rbx"
+                                    , stringBlock "pushfq"
+                                    , stringBlock "popq %rax"
+                                    , stringBlock "andq 0x40, %rax" 
+                                    , stringBlock "pushq %rax" ]
       in (codeBlock, rightBlockState)
 
 notEqualsExprToCode :: CodeState -> (HExpr LocInfo) -> (HExpr LocInfo) -> BlockState -> (CodeBlock, BlockState) 
@@ -430,7 +434,12 @@ notEqualsExprToCode codeState leftExpr rightExpr blockState
                                     , rightBlock 
                                     , stringBlock "popq %rax"
                                     , stringBlock "popq %rbx" 
-                                    , stringBlock "TODO: Insert inequality test here" ]
+                                    , stringBlock "cmpq %rax, %rbx"
+                                    , stringBlock "pushfq"
+                                    , stringBlock "popq %rax"
+                                    , stringBlock "andq 0x40, %rax"
+                                    , stringBlock "notq %rax"
+                                    , stringBlock "pushq %rax" ]
       in (codeBlock, rightBlockState)
 
 ltExprToCode :: CodeState -> (HExpr LocInfo) -> (HExpr LocInfo) -> BlockState -> (CodeBlock, BlockState) 
@@ -441,7 +450,11 @@ ltExprToCode codeState leftExpr rightExpr blockState
                                     , rightBlock 
                                     , stringBlock "popq %rax"
                                     , stringBlock "popq %rbx" 
-                                    , stringBlock "TODO: Insert less than test here" ]
+                                    , stringBlock "cmpq %rax, %rbx"
+                                    , stringBlock "pushfq"
+                                    , stringBlock "popq %rax"
+                                    , stringBlock "andq 0x80, %rax"
+                                    , stringBlock "pushq %rax" ]
       in (codeBlock, rightBlockState)
 
 gtExprToCode :: CodeState -> (HExpr LocInfo) -> (HExpr LocInfo) -> BlockState -> (CodeBlock, BlockState) 
@@ -452,7 +465,11 @@ gtExprToCode codeState leftExpr rightExpr blockState
                                     , rightBlock 
                                     , stringBlock "popq %rax"
                                     , stringBlock "popq %rbx" 
-                                    , stringBlock "TODO: Insert greater than test here" ]
+                                    , stringBlock "cmpq %rbx, %rax"
+                                    , stringBlock "pushfq"
+                                    , stringBlock "popq %rax"
+                                    , stringBlock "andq 0x80, %rax"
+                                    , stringBlock "pushq %rax" ]
       in (codeBlock, rightBlockState)
 
 ltEqualsExprToCode :: CodeState -> (HExpr LocInfo) -> (HExpr LocInfo) -> BlockState -> (CodeBlock, BlockState) 
@@ -463,7 +480,11 @@ ltEqualsExprToCode codeState leftExpr rightExpr blockState
                                     , rightBlock 
                                     , stringBlock "popq %rax"
                                     , stringBlock "popq %rbx" 
-                                    , stringBlock "TODO: Insert <= test here" ]
+                                    , stringBlock "cmpq %rax, %rbx"
+                                    , stringBlock "pushfq"
+                                    , stringBlock "popq %rax"
+                                    , stringBlock "andq 0xC0, %rax"
+                                    , stringBlock "pushq %rax" ]
       in (codeBlock, rightBlockState)
 
 gtEqualsExprToCode :: CodeState -> (HExpr LocInfo) -> (HExpr LocInfo) -> BlockState -> (CodeBlock, BlockState) 
@@ -474,7 +495,11 @@ gtEqualsExprToCode codeState leftExpr rightExpr blockState
                                     , rightBlock 
                                     , stringBlock "popq %rax"
                                     , stringBlock "popq %rbx" 
-                                    , stringBlock "TODO: Insert >= here" ]
+                                    , stringBlock "cmpq %rbx, %rax"
+                                    , stringBlock "pushfq"
+                                    , stringBlock "popq %rax"
+                                    , stringBlock "andq 0xC0, %rax"
+                                    , stringBlock "pushq %rax" ]
       in (codeBlock, rightBlockState)
 
 orExprToCode :: CodeState -> (HExpr LocInfo) -> (HExpr LocInfo) -> BlockState -> (CodeBlock, BlockState) 
