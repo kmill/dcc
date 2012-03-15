@@ -1,6 +1,8 @@
 module CodeGenerate where
 
 import qualified Data.Map as Map 
+import qualified Data.List as List
+import Data.Char
 import Data.Int
 import Control.Monad.State
 import SymbolTable
@@ -74,10 +76,7 @@ instance Show CodeBlock where
 
 -- Simple function that does the same thing as unlines without including a newLine after the final element
 unlinesWithoutEnd :: [String] -> String
-unlinesWithoutEnd  [] = []
-unlinesWithoutEnd  (x:[]) = x
-unlinesWithoutEnd  (x:xs) = x ++ "\n" ++ (unlinesWithoutEnd xs)
-
+unlinesWithoutEnd = List.intercalate "\n"
 
 data CodeLabel = CodeLabel { lblName :: String, 
                              lblParent :: Maybe CodeLabel }
@@ -297,20 +296,76 @@ statementToCode codeState (HAssignSt env _ loc op expr) (blockState, codeBlocks)
 ---
 
 exprToCode :: CodeState -> (HExpr LocInfo) -> BlockState ->  (CodeBlock, BlockState)
+
 exprToCode codeState (HBinaryOp env _ expr1 tok expr2) blockState
     = binOpExprToCode codeState expr1 expr2 (tokenString tok) blockState
+
 exprToCode codeState (HUnaryOp env _ tok expr) blockState 
     = unaryOpExprToCode codeState expr (tokenString tok) blockState 
-exprToCode codeState _ blockState = (stringBlock "TODO: implement the rest of the expressions", blockState)
+
+exprToCode codeState (HExprBoolLiteral _ _ value) blockState
+    = (boolToBlock value, blockState)
+
+exprToCode codeState (HExprIntLiteral _ _ value) blockState
+    = (intToBlock value, blockState)
+
+exprToCode codeState (HExprCharLiteral _ _ value) blockState
+    = (charToBlock value, blockState)
+
+exprToCode codeState (HExprStringLiteral _ _ value) blockState
+    = (stringBlock "TODO: figure out string literals", blockState)
+
+exprToCode codeState (HLoadLoc env _ loc) blockState
+    = (stringBlock "TODO: figure out location loading", blockState)
+
+exprToCode codeState (HExprMethod env _ method) blockState
+    = (stringBlock "TODO: figure out method calls", blockState)
+
+---
+--- Literals
+---
+
+boolToBlock :: Bool -> CodeBlock
+boolToBlock value = CompoundBlock [ stringBlock instr ]
+    where instr = case value of
+                    False -> "pushq 0x00"
+                    True -> "pushq 0x01"
+
+intToBlock :: Int64 -> CodeBlock
+intToBlock value = CompoundBlock [ stringBlock $ "pushq " ++ show value ]
+
+charToBlock :: Char -> CodeBlock
+charToBlock value = CompoundBlock [ stringBlock instr ]
+    where instr = "pushq " ++ (show $ ord value)
 
 --- 
 --- Unary operations code 
 --- 
 unaryOpExprToCode :: CodeState -> (HExpr LocInfo) -> String -> BlockState -> (CodeBlock, BlockState)
 unaryOpExprToCode codeState expr opStr blockState 
-    = let codeBlock = stringBlock "TODO: insert unary expression evaluation here"
-      in (codeBlock, blockState) 
+    = let f = case opStr of
+                "!" -> notExprToCode
+                "-" -> negExprToCode
+                s   -> error $ "Unexpected token \"" ++ s ++ "\" for unary operator"
+      in f codeState expr blockState 
 
+notExprToCode :: CodeState -> (HExpr LocInfo) -> BlockState -> (CodeBlock, BlockState) 
+notExprToCode codeState expr blockState 
+    = let (exprBlock, exprBlockState) = exprToCode codeState expr blockState
+          codeBlock = CompoundBlock [ exprBlock
+                                    , stringBlock "popq %rax" 
+                                    , stringBlock "xorq 0x01, %rax" -- will only xor booleans
+                                    , stringBlock "pushq %rax" ]
+      in (codeBlock, exprBlockState)
+
+negExprToCode :: CodeState -> (HExpr LocInfo) -> BlockState -> (CodeBlock, BlockState) 
+negExprToCode codeState expr blockState 
+    = let (exprBlock, exprBlockState) = exprToCode codeState expr blockState
+          codeBlock = CompoundBlock [ exprBlock
+                                    , stringBlock "popq %rax" 
+                                    , stringBlock "negq %rax"
+                                    , stringBlock "pushq %rax" ]
+      in (codeBlock, exprBlockState)
 
 ---
 --- Binary operations code 
@@ -331,7 +386,7 @@ binOpExprToCode codeState exprLeft exprRight opStr blockState
                 ">" -> gtExprToCode
                 "<=" -> ltEqualsExprToCode 
                 ">=" -> gtEqualsExprToCode 
-                _ -> error "Unexpected token for operator" 
+                s -> error $ "Unexpected token \"" ++ s ++ "\" for binary operator" 
       in f codeState exprLeft exprRight blockState 
 
 addExprToCode :: CodeState -> (HExpr LocInfo) -> (HExpr LocInfo) -> BlockState -> (CodeBlock, BlockState) 
@@ -421,7 +476,7 @@ notEqualsExprToCode codeState leftExpr rightExpr blockState
                                     , stringBlock "pushfq"
                                     , stringBlock "popq %rax"
                                     , stringBlock "andq 0x40, %rax"
-                                    , stringBlock "notq %rax"
+                                    , stringBlock "xorq 0x40, %rax"
                                     , stringBlock "pushq %rax" ]
       in (codeBlock, rightBlockState)
 
