@@ -151,13 +151,13 @@ stringBlock str = ConstantBlock [str]
 methodToCode :: CodeState -> (HMethodDecl LocInfo) -> CodeBlock 
 methodToCode codeState (HMethodDecl env _ _ tok args st) 
       = CompoundBlock [stringBlock "", methodEntry, statementCode, methodExit, stringDefs, stringBlock ""]
-    where methodLabel = CodeLabel { lblName = (tokenString tok), lblParent = Just $ currentLabel codeState}
-          methodEntry = ConstantBlock [(show methodLabel) ++ ":", "# Perform method entry stuff"]
-          methodExit = ConstantBlock ["# Perform method exit stuff"]
-          statementCode = CompoundBlock statementCodes 
-          stringLabel = CodeLabel { lblName = "string", lblParent = Just methodLabel}
-          stringDefs = CompoundBlock $ (labelBlock stringLabel):(map stringDataBlock $ stringTable finalBlockState)
-          (finalBlockState, statementCodes) = statementToCode (codeState { currentLabel = methodLabel}) st (initialBlockState, [])
+  where methodLabel = CodeLabel { lblName = (tokenString tok), lblParent = Just $ currentLabel codeState}
+        methodEntry = ConstantBlock [(show methodLabel) ++ ":", "# Perform method entry stuff"]
+        methodExit = ConstantBlock ["# Perform method exit stuff"]
+        statementCode = CompoundBlock statementCodes 
+        stringLabel = CodeLabel { lblName = "string", lblParent = Just methodLabel}
+        stringDefs = CompoundBlock $ (labelBlock stringLabel):(map stringDataBlock $ stringTable finalBlockState)
+        (finalBlockState, statementCodes) = statementToCode (codeState { currentLabel = methodLabel}) st (initialBlockState, [])
 
 
 ---
