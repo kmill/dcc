@@ -29,8 +29,8 @@ lookupLocInfo name env = Map.lookup name locations
 -- Function to transform the intial HAST into an HAST with location information
 createSymbolLocations :: Maybe (SymbolEnv LocInfo) -> SymbolEnv Int -> SymbolEnv LocInfo
 createSymbolLocations (Just eParent) env = SymbolEnv { symbolBindings = symbolBindings env
-                                                       , parentEnv = Just eParent
-                                                       , customValue = locInfo }
+                                                     , parentEnv = Just eParent
+                                                     , customValue = locInfo }
     where methodCall = case (parentEnv eParent) of
                          Just _ -> False
                          Nothing -> True
@@ -128,13 +128,13 @@ moveLoc loc1 loc2 = stringBlock $ "movq " ++ (show loc1) ++ ", " ++ (show loc2)
 
 hdLocToLoc :: (HDLocation LocInfo) -> Location 
 hdLocToLoc (HPlainLocation env _ tok) = let name = tokenString tok 
-                                         in case (lookupLocInfo name env) of 
-                                              Just loc -> loc
-                                              Nothing -> error "Attempted to lookup name that doesn't exist"
+                                        in case (lookupLocInfo name env) of 
+                                          Just loc -> loc
+                                          Nothing -> error "Attempted to lookup name that doesn't exist"
 hdLocToLoc (HArrayLocation env _ tok  _) = let name = tokenString tok 
-                                            in case (lookupLocInfo name env) of 
-                                                 Just loc -> loc 
-                                                 Nothing -> error "Attempted to lookup name that doesn't exist"
+                                           in case (lookupLocInfo name env) of 
+                                             Just loc -> loc 
+                                             Nothing -> error "Attempted to lookup name that doesn't exist"
 
 stringDataBlock :: String -> CodeBlock 
 stringDataBlock str = ConstantBlock [".string \"" ++ str ++ "\""]
