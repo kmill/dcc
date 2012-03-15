@@ -178,26 +178,26 @@ statementToCode codeState (HIfSt env _ expr st maybeelse) (blockState, codeBlock
           ifTrueLabel = CodeLabel { lblName = "true", lblParent = Just ifLabel }
           ifFalseLabel = CodeLabel { lblName = "false", lblParent = Just ifLabel }
           ifEndLabel = CodeLabel { lblName = "end", lblParent = Just ifLabel }
+          newCodeState = codeState { currentLabel = ifLabel }
           codeBlock = CompoundBlock [labelBlock ifLabel
-                                    , stringBlock "pushq %rax"
                                     , evalExprCode
                                     , labelBlock ifTrueLabel
                                     , trueCode
                                     , overFalseCode
                                     , labelBlock ifFalseLabel
                                     , falseCode
-                                    , labelBlock ifEndLabel
-                                    , stringBlock "popq %rax"]
+                                    , labelBlock ifEndLabel]
           evalExprCode = CompoundBlock [ stringBlock "# Eval if Expr here"
-                                       , exprToCode codeState expr (initialBlockState, [])
+                                       , exprCode
                                        , stringBlock "popq %rax"
                                        , stringBlock "cmp 1, %rax"
                                        , stringBlock ("jne " ++ (show ifFalseLabel))]
+          (_, exprCode) = exprToCode newCodeState expr (initialBlockState, [])
           trueCode = CompoundBlock [stringBlock "# Perform if true", CompoundBlock trueCodes]
-          (_, trueCodes) = statementToCode codeState st (initialBlockState, [])
+          (_, trueCodes) = statementToCode newCodeState st (initialBlockState, [])
           overFalseCode = stringBlock ("jmp " ++ (show ifEndLabel))
           falseCode = case maybeelse of 
-                        Just stelse -> let (_, falseCodes) = statementToCode codeState stelse (initialBlockState, [])
+                        Just stelse -> let (_, falseCodes) = statementToCode newCodeState stelse (initialBlockState, [])
                                        in CompoundBlock [stringBlock "# Perform Otherwise", CompoundBlock falseCodes]
                         Nothing -> CompoundBlock []
 
