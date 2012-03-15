@@ -29,8 +29,8 @@ lookupLocInfo name env = Map.lookup name locations
 -- Function to transform the intial HAST into an HAST with location information
 createSymbolLocations :: Maybe (SymbolEnv LocInfo) -> SymbolEnv Int -> SymbolEnv LocInfo
 createSymbolLocations (Just eParent) env = SymbolEnv { symbolBindings = symbolBindings env
-                                                       , parentEnv = Just eParent
-                                                       , customValue = locInfo }
+                                                     , parentEnv = Just eParent
+                                                     , customValue = locInfo }
     where methodCall = case (parentEnv eParent) of
                          Just _ -> False
                          Nothing -> True
@@ -128,13 +128,13 @@ moveLoc loc1 loc2 = stringBlock $ "movq " ++ (show loc1) ++ ", " ++ (show loc2)
 
 hdLocToLoc :: (HDLocation LocInfo) -> Location 
 hdLocToLoc (HPlainLocation env _ tok) = let name = tokenString tok 
-                                         in case (lookupLocInfo name env) of 
-                                              Just loc -> loc
-                                              Nothing -> error "Attempted to lookup name that doesn't exist"
+                                        in case (lookupLocInfo name env) of 
+                                          Just loc -> loc
+                                          Nothing -> error "Attempted to lookup name that doesn't exist"
 hdLocToLoc (HArrayLocation env _ tok  _) = let name = tokenString tok 
-                                            in case (lookupLocInfo name env) of 
-                                                 Just loc -> loc 
-                                                 Nothing -> error "Attempted to lookup name that doesn't exist"
+                                           in case (lookupLocInfo name env) of 
+                                             Just loc -> loc 
+                                             Nothing -> error "Attempted to lookup name that doesn't exist"
 
 stringDataBlock :: String -> CodeBlock 
 stringDataBlock str = ConstantBlock [".string \"" ++ str ++ "\""]
@@ -151,13 +151,13 @@ stringBlock str = ConstantBlock [str]
 methodToCode :: CodeState -> (HMethodDecl LocInfo) -> CodeBlock 
 methodToCode codeState (HMethodDecl env _ _ tok args st) 
       = CompoundBlock [stringBlock "", methodEntry, statementCode, methodExit, stringDefs, stringBlock ""]
-    where methodLabel = CodeLabel { lblName = (tokenString tok), lblParent = Just $ currentLabel codeState}
-          methodEntry = ConstantBlock [(show methodLabel) ++ ":", "# Perform method entry stuff"]
-          methodExit = ConstantBlock ["# Perform method exit stuff"]
-          statementCode = CompoundBlock statementCodes 
-          stringLabel = CodeLabel { lblName = "string", lblParent = Just methodLabel}
-          stringDefs = CompoundBlock $ (labelBlock stringLabel):(map stringDataBlock $ stringTable finalBlockState)
-          (finalBlockState, statementCodes) = statementToCode (codeState { currentLabel = methodLabel}) st (initialBlockState, [])
+  where methodLabel = CodeLabel { lblName = (tokenString tok), lblParent = Just $ currentLabel codeState}
+        methodEntry = ConstantBlock [(show methodLabel) ++ ":", "# Perform method entry stuff"]
+        methodExit = ConstantBlock ["# Perform method exit stuff"]
+        statementCode = CompoundBlock statementCodes 
+        stringLabel = CodeLabel { lblName = "string", lblParent = Just methodLabel}
+        stringDefs = CompoundBlock $ (labelBlock stringLabel):(map stringDataBlock $ stringTable finalBlockState)
+        (finalBlockState, statementCodes) = statementToCode (codeState { currentLabel = methodLabel}) st (initialBlockState, [])
 
 
 ---
@@ -178,18 +178,26 @@ statementToCode codeState (HIfSt env _ expr st maybeelse) (blockState, codeBlock
           ifTrueLabel = CodeLabel { lblName = "true", lblParent = Just ifLabel }
           ifFalseLabel = CodeLabel { lblName = "false", lblParent = Just ifLabel }
           ifEndLabel = CodeLabel { lblName = "end", lblParent = Just ifLabel }
+          newCodeState = codeState { currentLabel = ifLabel }
           codeBlock = CompoundBlock [labelBlock ifLabel
                                     , evalExprCode
                                     , labelBlock ifTrueLabel
                                     , trueCode
+                                    , overFalseCode
                                     , labelBlock ifFalseLabel
                                     , falseCode
                                     , labelBlock ifEndLabel]
-          evalExprCode = stringBlock "# Eval if Expr here"
+          evalExprCode = CompoundBlock [ stringBlock "# Eval if Expr here"
+                                       , exprCode
+                                       , stringBlock "popq %rax"
+                                       , stringBlock "cmp 1, %rax"
+                                       , stringBlock ("jne " ++ (show ifFalseLabel))]
+          (exprCode, _) = exprToCode newCodeState expr initialBlockState
           trueCode = CompoundBlock [stringBlock "# Perform if true", CompoundBlock trueCodes]
-          (_, trueCodes) = statementToCode codeState st (initialBlockState, [])
+          (_, trueCodes) = statementToCode newCodeState st (initialBlockState, [])
+          overFalseCode = stringBlock ("jmp " ++ (show ifEndLabel))
           falseCode = case maybeelse of 
-                        Just stelse -> let (_, falseCodes) = statementToCode codeState stelse (initialBlockState, [])
+                        Just stelse -> let (_, falseCodes) = statementToCode newCodeState stelse (initialBlockState, [])
                                        in CompoundBlock [stringBlock "# Perform Otherwise", CompoundBlock falseCodes]
                         Nothing -> CompoundBlock []
 
