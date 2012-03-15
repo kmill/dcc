@@ -192,7 +192,7 @@ statementToCode codeState (HIfSt env _ expr st maybeelse) (blockState, codeBlock
                                        , stringBlock "popq %rax"
                                        , stringBlock "cmp 1, %rax"
                                        , stringBlock ("jne " ++ (show ifFalseLabel))]
-          (_, exprCode) = exprToCode newCodeState expr (initialBlockState, [])
+          (exprCode, _) = exprToCode newCodeState expr initialBlockState
           trueCode = CompoundBlock [stringBlock "# Perform if true", CompoundBlock trueCodes]
           (_, trueCodes) = statementToCode newCodeState st (initialBlockState, [])
           overFalseCode = stringBlock ("jmp " ++ (show ifEndLabel))
