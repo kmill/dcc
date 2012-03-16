@@ -304,6 +304,8 @@ unaryOpExprToCode codeState expr opStr blockState
       in (codeBlock, blockState) 
 
 
+
+
 ---
 --- Binary operations code 
 --- 
@@ -449,7 +451,7 @@ gtEqualsExprToCode codeState leftExpr rightExpr blockState
                                     , rightBlock 
                                     , stringBlock "popq %rax"
                                     , stringBlock "popq %rbx" 
-                                    , stringBlock "TODO: Insert >= here" ]
+                                    , stringBlock "TODO: Insert >= test here" ]
       in (codeBlock, rightBlockState)
 
 orExprToCode :: CodeState -> (HExpr LocInfo) -> (HExpr LocInfo) -> BlockState -> (CodeBlock, BlockState) 
