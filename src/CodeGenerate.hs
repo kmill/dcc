@@ -279,11 +279,10 @@ statementToCode codeState (HAssignSt env _ loc op expr) (blockState, codeBlocks)
     = (blockState, codeBlock:codeBlocks)
     where codeBlock = CompoundBlock [ evalExprCode
                                     , moveResultCode]
-          evalExprCode = stringBlock "# Eval assignment expr here"
+          (evalExprCode, newBlockState) = exprToCode codeState expr blockState
           moveResultCode = case loc of 
-                             (HPlainLocation _ _ tok) -> CompoundBlock [stringBlock "# Move result into location here"
-                                                                       , stringBlock "popq %rax"
-                                                                       , moveLoc (Reg "rax") (hdLocToLoc loc)] 
+                             (HPlainLocation _ _ tok) -> CompoundBlock [ stringBlock "popq %rax"
+                                                                       , moveLoc (Reg "rax") (hdLocToLoc loc)]
                              (HArrayLocation _ _ tok arrayIndex) -> CompoundBlock [stringBlock "# Evaluate array index here"
                                                                                   , stringBlock "popq %rbx"
                                                                                   , stringBlock $ "addq %rbx, $" ++ (show $ hdLocToLoc loc)
@@ -316,10 +315,23 @@ exprToCode codeState (HExprStringLiteral _ _ value) blockState
     = (stringBlock "TODO: figure out string literals", blockState)
 
 exprToCode codeState (HLoadLoc env _ loc) blockState
-    = (stringBlock "TODO: figure out location loading", blockState)
+    = (pushLoc $ hdLocToLoc $ loc, blockState)
 
 exprToCode codeState (HExprMethod env _ method) blockState
-    = (stringBlock "TODO: figure out method calls", blockState)
+    = methodCallToCode method blockState
+
+---
+--- Method calls
+---
+
+methodCallToCode (HNormalMethod env _ tok args) blockState = (codeBlock, blockState)
+    where codeBlock = CompoundBlock [preCallCode, callCode, postCallCode]
+          preCallCode = stringBlock "# TODO: implement expr evaluation"
+          callCode = stringBlock $ "jmp " ++ (show tok)
+          postCallCode = stringBlock "# TODO: implement post-call code"
+
+methodCallToCode (HCalloutMethod env _ tok args) blockState = (codeBlock, blockState)
+    where codeBlock = stringBlock "# TODO: implement call-outs"
 
 ---
 --- Literals
