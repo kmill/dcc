@@ -257,7 +257,12 @@ statementToCode codeState (HWhileSt env _ expr st) (blockState, codeBlocks)
                                     , labelBlock  whileReloopLabel
                                     , postLoopCode
                                     , labelBlock whileEndLabel]
-          evalExprCode = stringBlock "# Eval the while expr here" 
+          evalExprCode = CompoundBlock [ stringBlock "# Eval the expr" 
+                                       , eCode
+                                       , stringBlock "popq %rax"
+                                       , stringBlock "cmp 1, %rax"
+                                       , stringBlock $ "jne " ++ (show whileEndLabal)] 
+          (eCode, _) = exprToCode newState expr initialBlockState
           loopStCode = CompoundBlock [stringBlock "# inner loop code here", CompoundBlock loopCodes]
           (_, loopCodes) = statementToCode newState st (initialBlockState, [])
           postLoopCode = stringBlock $ "jmp " ++ (show whileEvalLabel)
