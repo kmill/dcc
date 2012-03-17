@@ -261,7 +261,7 @@ statementToCode codeState (HWhileSt env _ expr st) (blockState, codeBlocks)
                                        , eCode
                                        , stringBlock "popq %rax"
                                        , stringBlock "cmp 1, %rax"
-                                       , stringBlock $ "jne " ++ (show whileEndLabal)] 
+                                       , stringBlock $ "jne " ++ (show whileEndLabel)] 
           (eCode, _) = exprToCode newState expr initialBlockState
           loopStCode = CompoundBlock [stringBlock "# inner loop code here", CompoundBlock loopCodes]
           (_, loopCodes) = statementToCode newState st (initialBlockState, [])
