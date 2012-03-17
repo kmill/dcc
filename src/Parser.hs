@@ -87,7 +87,7 @@ dclosebr = dkeyword "}" >> return ()
 -- | This is the main entry point for parsing a decaf program.
 dprogram :: DParser DProgram
 dprogram = DProgram <$> getPosition
-           <* header
+           <*  header
            <*> many fieldDecl
            <*> many methodDecl
            <* dkeyword "}"
