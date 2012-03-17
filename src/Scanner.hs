@@ -213,7 +213,8 @@ dctoken = keywords <|> boolLiteral <|> identifier <|> intLiteral
 
 -- | This scanner matches the reserved keywords in decaf.
 keywords :: Scanner Token
-keywords = choice $ map keyword reservedWords
+keywords = (choice $ map keyword reservedWords)
+           <?> "keyword"
     where
       reservedWords :: [String]
       reservedWords
@@ -223,6 +224,7 @@ keywords = choice $ map keyword reservedWords
 -- | This scanner matches operators and punctuation symbols.
 symbolTokens :: Scanner Token
 symbolTokens = choice [makeToken Keyword (try $ string s) | s <- symbols]
+               <?> "operator or punctuation"
     where
       -- This list of operators and punctuation is ordered so the
       -- prefixes of a symbol don't appear before it.

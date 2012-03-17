@@ -1,6 +1,8 @@
 module CodeGenerate where
 
 import qualified Data.Map as Map 
+import qualified Data.List as List
+import Data.Char
 import Data.Int
 import Control.Monad.State
 import SymbolTable
@@ -29,8 +31,8 @@ lookupLocInfo name env = Map.lookup name locations
 -- Function to transform the intial HAST into an HAST with location information
 createSymbolLocations :: Maybe (SymbolEnv LocInfo) -> SymbolEnv Int -> SymbolEnv LocInfo
 createSymbolLocations (Just eParent) env = SymbolEnv { symbolBindings = symbolBindings env
-                                                       , parentEnv = Just eParent
-                                                       , customValue = locInfo }
+                                                     , parentEnv = Just eParent
+                                                     , customValue = locInfo }
     where methodCall = case (parentEnv eParent) of
                          Just _ -> False
                          Nothing -> True
@@ -74,10 +76,7 @@ instance Show CodeBlock where
 
 -- Simple function that does the same thing as unlines without including a newLine after the final element
 unlinesWithoutEnd :: [String] -> String
-unlinesWithoutEnd  [] = []
-unlinesWithoutEnd  (x:[]) = x
-unlinesWithoutEnd  (x:xs) = x ++ "\n" ++ (unlinesWithoutEnd xs)
-
+unlinesWithoutEnd = List.intercalate "\n"
 
 data CodeLabel = CodeLabel { lblName :: String, 
                              lblParent :: Maybe CodeLabel }
@@ -128,13 +127,13 @@ moveLoc loc1 loc2 = stringBlock $ "movq " ++ (show loc1) ++ ", " ++ (show loc2)
 
 hdLocToLoc :: (HDLocation LocInfo) -> Location 
 hdLocToLoc (HPlainLocation env _ tok) = let name = tokenString tok 
-                                         in case (lookupLocInfo name env) of 
-                                              Just loc -> loc
-                                              Nothing -> error "Attempted to lookup name that doesn't exist"
+                                        in case (lookupLocInfo name env) of 
+                                          Just loc -> loc
+                                          Nothing -> error "Attempted to lookup name that doesn't exist"
 hdLocToLoc (HArrayLocation env _ tok  _) = let name = tokenString tok 
-                                            in case (lookupLocInfo name env) of 
-                                                 Just loc -> loc 
-                                                 Nothing -> error "Attempted to lookup name that doesn't exist"
+                                           in case (lookupLocInfo name env) of 
+                                             Just loc -> loc 
+                                             Nothing -> error "Attempted to lookup name that doesn't exist"
 
 stringDataBlock :: String -> CodeBlock 
 stringDataBlock str = ConstantBlock [".string \"" ++ str ++ "\""]
@@ -151,13 +150,13 @@ stringBlock str = ConstantBlock [str]
 methodToCode :: CodeState -> (HMethodDecl LocInfo) -> CodeBlock 
 methodToCode codeState (HMethodDecl env _ _ tok args st) 
       = CompoundBlock [stringBlock "", methodEntry, statementCode, methodExit, stringDefs, stringBlock ""]
-    where methodLabel = CodeLabel { lblName = (tokenString tok), lblParent = Just $ currentLabel codeState}
-          methodEntry = ConstantBlock [(show methodLabel) ++ ":", "# Perform method entry stuff"]
-          methodExit = ConstantBlock ["# Perform method exit stuff"]
-          statementCode = CompoundBlock statementCodes 
-          stringLabel = CodeLabel { lblName = "string", lblParent = Just methodLabel}
-          stringDefs = CompoundBlock $ (labelBlock stringLabel):(map stringDataBlock $ stringTable finalBlockState)
-          (finalBlockState, statementCodes) = statementToCode (codeState { currentLabel = methodLabel}) st (initialBlockState, [])
+  where methodLabel = CodeLabel { lblName = (tokenString tok), lblParent = Just $ currentLabel codeState}
+        methodEntry = ConstantBlock [(show methodLabel) ++ ":", "# Perform method entry stuff"]
+        methodExit = ConstantBlock ["# Perform method exit stuff"]
+        statementCode = CompoundBlock statementCodes 
+        stringLabel = CodeLabel { lblName = "string", lblParent = Just methodLabel}
+        stringDefs = CompoundBlock $ (labelBlock stringLabel):(map stringDataBlock $ stringTable finalBlockState)
+        (finalBlockState, statementCodes) = statementToCode (codeState { currentLabel = methodLabel}) st (initialBlockState, [])
 
 
 ---
@@ -178,23 +177,31 @@ statementToCode codeState (HIfSt env _ expr st maybeelse) (blockState, codeBlock
           ifTrueLabel = CodeLabel { lblName = "true", lblParent = Just ifLabel }
           ifFalseLabel = CodeLabel { lblName = "false", lblParent = Just ifLabel }
           ifEndLabel = CodeLabel { lblName = "end", lblParent = Just ifLabel }
+          newCodeState = codeState { currentLabel = ifLabel }
           codeBlock = CompoundBlock [labelBlock ifLabel
                                     , evalExprCode
                                     , labelBlock ifTrueLabel
                                     , trueCode
+                                    , overFalseCode
                                     , labelBlock ifFalseLabel
                                     , falseCode
                                     , labelBlock ifEndLabel]
-          evalExprCode = stringBlock "# Eval if Expr here"
+          evalExprCode = CompoundBlock [ stringBlock "# Eval if Expr here"
+                                       , exprCode
+                                       , stringBlock "popq %rax"
+                                       , stringBlock "cmp 1, %rax"
+                                       , stringBlock ("jne " ++ (show ifFalseLabel))]
+          (exprCode, _) = exprToCode newCodeState expr initialBlockState
           trueCode = CompoundBlock [stringBlock "# Perform if true", CompoundBlock trueCodes]
-          (_, trueCodes) = statementToCode codeState st (initialBlockState, [])
+          (_, trueCodes) = statementToCode newCodeState st (initialBlockState, [])
+          overFalseCode = stringBlock ("jmp " ++ (show ifEndLabel))
           falseCode = case maybeelse of 
-                        Just stelse -> let (_, falseCodes) = statementToCode codeState stelse (initialBlockState, [])
+                        Just stelse -> let (_, falseCodes) = statementToCode newCodeState stelse (initialBlockState, [])
                                        in CompoundBlock [stringBlock "# Perform Otherwise", CompoundBlock falseCodes]
                         Nothing -> CompoundBlock []
 
 -- | Convert For loops to a code block 
-statementToCode codeState (HForSt env _ _ expr1 expr2 st) (blockState, codeBlocks)
+statementToCode codeState (HForSt env _ tok expr1 expr2 st) (blockState, codeBlocks)
     = (blockState {numFors = forIndex+1}, codeBlock:codeBlocks)
     where forIndex = numFors blockState
           forLabel = CodeLabel { lblName = "for_" ++ (show forIndex), lblParent = Just (currentLabel codeState) }
@@ -210,11 +217,28 @@ statementToCode codeState (HForSt env _ _ expr1 expr2 st) (blockState, codeBlock
                                     , labelBlock forReloopLabel
                                     , postLoopCode
                                     , labelBlock forEndLabel]
-          initCode = stringBlock "# init looping variable here"
-          evalExprCode = stringBlock "# Eval the for expr here" 
+          initCode = CompoundBlock [ stringBlock "# init looping variable here"
+                                   , iECode
+                                   , putTokBlock]
+          (iECode, _) = exprToCode newState expr1 initialBlockState
+          evalExprCode = CompoundBlock [ stringBlock "# Eval the for expr here"
+                                       , eECode
+                                       , stringBlock "popq %rax"
+                                       , getTokBlock
+                                       , stringBlock "popq %rbx"
+                                       , stringBlock "cmp %rax, %rbx"
+                                       , stringBlock ("jge " ++ (show forEndLabel))] 
+          (eECode, _) = exprToCode newState expr2 initialBlockState
           loopStCode = CompoundBlock [stringBlock "# Inner loop code here", CompoundBlock loopCodes]
           (_, loopCodes) = statementToCode newState st (initialBlockState, [])
-          postLoopCode = stringBlock "# Increment loop variable and re-loop here"
+          postLoopCode = CompoundBlock [ stringBlock "# Increment loop variable and re-loop here"
+                                       , getTokBlock
+                                       , stringBlock "popq %rax"
+                                       , stringBlock "addc 1, %rax"
+                                       , stringBlock "pushq %rax"
+                                       , putTokBlock]
+          getTokBlock = stringBlock "#Get Value from Tok and put on stack"
+          putTokBlock = stringBlock "#Put Value from Stack and put in Tok"
 
 -- | Convert While loops to a code block
 statementToCode codeState (HWhileSt env _ expr st) (blockState, codeBlocks) 
@@ -232,7 +256,12 @@ statementToCode codeState (HWhileSt env _ expr st) (blockState, codeBlocks)
                                     , labelBlock  whileReloopLabel
                                     , postLoopCode
                                     , labelBlock whileEndLabel]
-          evalExprCode = stringBlock "# Eval the while expr here" 
+          evalExprCode = CompoundBlock [ stringBlock "# Eval the expr" 
+                                       , eCode
+                                       , stringBlock "popq %rax"
+                                       , stringBlock "cmp 1, %rax"
+                                       , stringBlock $ "jne " ++ (show whileEndLabel)] 
+          (eCode, _) = exprToCode newState expr initialBlockState
           loopStCode = CompoundBlock [stringBlock "# inner loop code here", CompoundBlock loopCodes]
           (_, loopCodes) = statementToCode newState st (initialBlockState, [])
           postLoopCode = stringBlock $ "jmp " ++ (show whileEvalLabel)
@@ -272,11 +301,10 @@ statementToCode codeState (HAssignSt env _ loc op expr) (blockState, codeBlocks)
     = (blockState, codeBlock:codeBlocks)
     where codeBlock = CompoundBlock [ evalExprCode
                                     , moveResultCode]
-          evalExprCode = stringBlock "# Eval assignment expr here"
+          (evalExprCode, newBlockState) = exprToCode codeState expr blockState
           moveResultCode = case loc of 
-                             (HPlainLocation _ _ tok) -> CompoundBlock [stringBlock "# Move result into location here"
-                                                                       , stringBlock "popq %rax"
-                                                                       , moveLoc (Reg "rax") (hdLocToLoc loc)] 
+                             (HPlainLocation _ _ tok) -> CompoundBlock [ stringBlock "popq %rax"
+                                                                       , moveLoc (Reg "rax") (hdLocToLoc loc)]
                              (HArrayLocation _ _ tok arrayIndex) -> CompoundBlock [stringBlock "# Evaluate array index here"
                                                                                   , stringBlock "popq %rbx"
                                                                                   , stringBlock $ "addq %rbx, $" ++ (show $ hdLocToLoc loc)
@@ -289,20 +317,89 @@ statementToCode codeState (HAssignSt env _ loc op expr) (blockState, codeBlocks)
 ---
 
 exprToCode :: CodeState -> (HExpr LocInfo) -> BlockState ->  (CodeBlock, BlockState)
+
 exprToCode codeState (HBinaryOp env _ expr1 tok expr2) blockState
     = binOpExprToCode codeState expr1 expr2 (tokenString tok) blockState
+
 exprToCode codeState (HUnaryOp env _ tok expr) blockState 
     = unaryOpExprToCode codeState expr (tokenString tok) blockState 
-exprToCode codeState _ blockState = (stringBlock "TODO: implement the rest of the expressions", blockState)
+
+exprToCode codeState (HExprBoolLiteral _ _ value) blockState
+    = (boolToBlock value, blockState)
+
+exprToCode codeState (HExprIntLiteral _ _ value) blockState
+    = (intToBlock value, blockState)
+
+exprToCode codeState (HExprCharLiteral _ _ value) blockState
+    = (charToBlock value, blockState)
+
+exprToCode codeState (HExprStringLiteral _ _ value) blockState
+    = (stringBlock "TODO: figure out string literals", blockState)
+
+exprToCode codeState (HLoadLoc env _ loc) blockState
+    = (pushLoc $ hdLocToLoc $ loc, blockState)
+
+exprToCode codeState (HExprMethod env _ method) blockState
+    = methodCallToCode method blockState
+
+---
+--- Method calls
+---
+
+methodCallToCode (HNormalMethod env _ tok args) blockState = (codeBlock, blockState)
+    where codeBlock = CompoundBlock [preCallCode, callCode, postCallCode]
+          preCallCode = stringBlock "# TODO: implement expr evaluation"
+          callCode = stringBlock $ "jmp " ++ (show tok)
+          postCallCode = stringBlock "# TODO: implement post-call code"
+
+methodCallToCode (HCalloutMethod env _ tok args) blockState = (codeBlock, blockState)
+    where codeBlock = stringBlock "# TODO: implement call-outs"
+
+---
+--- Literals
+---
+
+boolToBlock :: Bool -> CodeBlock
+boolToBlock value = CompoundBlock [ stringBlock instr ]
+    where instr = case value of
+                    False -> "pushq 0x00"
+                    True -> "pushq 0x01"
+
+intToBlock :: Int64 -> CodeBlock
+intToBlock value = CompoundBlock [ stringBlock $ "pushq " ++ show value ]
+
+charToBlock :: Char -> CodeBlock
+charToBlock value = CompoundBlock [ stringBlock instr ]
+    where instr = "pushq " ++ (show $ ord value)
 
 --- 
 --- Unary operations code 
 --- 
 unaryOpExprToCode :: CodeState -> (HExpr LocInfo) -> String -> BlockState -> (CodeBlock, BlockState)
 unaryOpExprToCode codeState expr opStr blockState 
-    = let codeBlock = stringBlock "TODO: insert unary expression evaluation here"
-      in (codeBlock, blockState) 
+    = let f = case opStr of
+                "!" -> notExprToCode
+                "-" -> negExprToCode
+                s   -> error $ "Unexpected token \"" ++ s ++ "\" for unary operator"
+      in f codeState expr blockState 
 
+notExprToCode :: CodeState -> (HExpr LocInfo) -> BlockState -> (CodeBlock, BlockState) 
+notExprToCode codeState expr blockState 
+    = let (exprBlock, exprBlockState) = exprToCode codeState expr blockState
+          codeBlock = CompoundBlock [ exprBlock
+                                    , stringBlock "popq %rax" 
+                                    , stringBlock "xorq 0x01, %rax" -- will only xor booleans
+                                    , stringBlock "pushq %rax" ]
+      in (codeBlock, exprBlockState)
+
+negExprToCode :: CodeState -> (HExpr LocInfo) -> BlockState -> (CodeBlock, BlockState) 
+negExprToCode codeState expr blockState 
+    = let (exprBlock, exprBlockState) = exprToCode codeState expr blockState
+          codeBlock = CompoundBlock [ exprBlock
+                                    , stringBlock "popq %rax" 
+                                    , stringBlock "negq %rax"
+                                    , stringBlock "pushq %rax" ]
+      in (codeBlock, exprBlockState)
 
 
 
@@ -325,7 +422,7 @@ binOpExprToCode codeState exprLeft exprRight opStr blockState
                 ">" -> gtExprToCode
                 "<=" -> ltEqualsExprToCode 
                 ">=" -> gtEqualsExprToCode 
-                _ -> error "Unexpected token for operator" 
+                s -> error $ "Unexpected token \"" ++ s ++ "\" for binary operator" 
       in f codeState exprLeft exprRight blockState 
 
 addExprToCode :: CodeState -> (HExpr LocInfo) -> (HExpr LocInfo) -> BlockState -> (CodeBlock, BlockState) 
@@ -396,7 +493,11 @@ equalsExprToCode codeState leftExpr rightExpr blockState
                                     , rightBlock 
                                     , stringBlock "popq %rax"
                                     , stringBlock "popq %rbx" 
-                                    , stringBlock "TODO: Insert equality test here" ]
+                                    , stringBlock "cmpq %rax, %rbx"
+                                    , stringBlock "pushfq"
+                                    , stringBlock "popq %rax"
+                                    , stringBlock "andq 0x40, %rax" 
+                                    , stringBlock "pushq %rax" ]
       in (codeBlock, rightBlockState)
 
 notEqualsExprToCode :: CodeState -> (HExpr LocInfo) -> (HExpr LocInfo) -> BlockState -> (CodeBlock, BlockState) 
@@ -407,7 +508,12 @@ notEqualsExprToCode codeState leftExpr rightExpr blockState
                                     , rightBlock 
                                     , stringBlock "popq %rax"
                                     , stringBlock "popq %rbx" 
-                                    , stringBlock "TODO: Insert inequality test here" ]
+                                    , stringBlock "cmpq %rax, %rbx"
+                                    , stringBlock "pushfq"
+                                    , stringBlock "popq %rax"
+                                    , stringBlock "andq 0x40, %rax"
+                                    , stringBlock "xorq 0x40, %rax"
+                                    , stringBlock "pushq %rax" ]
       in (codeBlock, rightBlockState)
 
 ltExprToCode :: CodeState -> (HExpr LocInfo) -> (HExpr LocInfo) -> BlockState -> (CodeBlock, BlockState) 
@@ -418,7 +524,11 @@ ltExprToCode codeState leftExpr rightExpr blockState
                                     , rightBlock 
                                     , stringBlock "popq %rax"
                                     , stringBlock "popq %rbx" 
-                                    , stringBlock "TODO: Insert less than test here" ]
+                                    , stringBlock "cmpq %rax, %rbx"
+                                    , stringBlock "pushfq"
+                                    , stringBlock "popq %rax"
+                                    , stringBlock "andq 0x80, %rax"
+                                    , stringBlock "pushq %rax" ]
       in (codeBlock, rightBlockState)
 
 gtExprToCode :: CodeState -> (HExpr LocInfo) -> (HExpr LocInfo) -> BlockState -> (CodeBlock, BlockState) 
@@ -429,7 +539,11 @@ gtExprToCode codeState leftExpr rightExpr blockState
                                     , rightBlock 
                                     , stringBlock "popq %rax"
                                     , stringBlock "popq %rbx" 
-                                    , stringBlock "TODO: Insert greater than test here" ]
+                                    , stringBlock "cmpq %rbx, %rax"
+                                    , stringBlock "pushfq"
+                                    , stringBlock "popq %rax"
+                                    , stringBlock "andq 0x80, %rax"
+                                    , stringBlock "pushq %rax" ]
       in (codeBlock, rightBlockState)
 
 ltEqualsExprToCode :: CodeState -> (HExpr LocInfo) -> (HExpr LocInfo) -> BlockState -> (CodeBlock, BlockState) 
@@ -440,7 +554,11 @@ ltEqualsExprToCode codeState leftExpr rightExpr blockState
                                     , rightBlock 
                                     , stringBlock "popq %rax"
                                     , stringBlock "popq %rbx" 
-                                    , stringBlock "TODO: Insert <= test here" ]
+                                    , stringBlock "cmpq %rax, %rbx"
+                                    , stringBlock "pushfq"
+                                    , stringBlock "popq %rax"
+                                    , stringBlock "andq 0xC0, %rax"
+                                    , stringBlock "pushq %rax" ]
       in (codeBlock, rightBlockState)
 
 gtEqualsExprToCode :: CodeState -> (HExpr LocInfo) -> (HExpr LocInfo) -> BlockState -> (CodeBlock, BlockState) 
@@ -451,7 +569,11 @@ gtEqualsExprToCode codeState leftExpr rightExpr blockState
                                     , rightBlock 
                                     , stringBlock "popq %rax"
                                     , stringBlock "popq %rbx" 
-                                    , stringBlock "TODO: Insert >= test here" ]
+                                    , stringBlock "cmpq %rbx, %rax"
+                                    , stringBlock "pushfq"
+                                    , stringBlock "popq %rax"
+                                    , stringBlock "andq 0xC0, %rax"
+                                    , stringBlock "pushq %rax" ]
       in (codeBlock, rightBlockState)
 
 orExprToCode :: CodeState -> (HExpr LocInfo) -> (HExpr LocInfo) -> BlockState -> (CodeBlock, BlockState) 
