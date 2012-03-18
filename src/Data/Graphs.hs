@@ -13,6 +13,9 @@ import Text.Regex
 import Debug.Trace
 
 type Vertex = Int
+
+-- | A pointed directed multigraph.  That is, there is a specified
+-- "start vertex" to the graph.
 data Ord e => Graph v e
     = Graph (Map.Map Vertex (v, Map.Map e Vertex)) Vertex
       deriving Show
@@ -33,6 +36,9 @@ edges :: Ord e => Graph v e -> [(Vertex, e, Vertex)]
 edges (Graph m st) = concatMap (\(i,(_,es)) -> [(i,l,e) | (l,e) <- Map.assocs es])
                      (Map.assocs m)
 
+hasEdge :: Ord e => Graph v e -> Vertex -> e -> Bool
+hasEdge (Graph m _) v e = e `Map.member` (snd $ fromJust $ Map.lookup v m)
+
 withStartVertex :: Vertex -> [(e, Vertex)] -> [(Vertex,e,Vertex)]
 withStartVertex v es = map (\(l,end) -> (v,l,end)) es
 
@@ -42,6 +48,7 @@ adjEdges (Graph m st) i = Map.assocs $ snd $ fromJust $ Map.lookup i m
 adjVertices :: Ord e => Graph v e -> Vertex -> [Vertex]
 adjVertices (Graph m st) i = map snd $ Map.assocs $ snd $ fromJust $ Map.lookup i m
 
+-- | The vertices which lead to a particular vertex.
 preVertices :: Ord e => Graph v e -> Vertex -> [Vertex]
 preVertices g v = [vert | vert <- vertices g, v `elem` (adjVertices g vert)]
 
@@ -75,6 +82,8 @@ testReplVerts
 --- Graph algorithms!
 ---
 
+-- | Walk through the graph and return the subgraph reachable by the
+-- start vertex.
 cullGraph :: Ord e => Graph v e -> Graph v e
 cullGraph g@(Graph m st) = cullGraph' [] [st]
     where cullGraph' visited visit
@@ -109,6 +118,11 @@ gReplace :: [Vertex] -- | ^ vertices to replace
          -> GraphPattern v e ([Vertex], [(Vertex,v)], [(Vertex,e,Vertex)])
 gReplace vs newvs edges = return (vs, newvs, edges)
 
+-- | Takes a graph and a rewrite rule, and walks along the graph,
+-- possibly rewriting stuff.  TODO make sure this is a reasonable way
+-- to do this!  As of now, doesn't check to see if we reach a fixed
+-- point, for instance (which can be fixed by essentially running the
+-- algorithm a number of times).
 rewriteGraph :: (Show v, Show e, Ord e) => Graph v e -> RewriteRule v e -> Graph v e
 rewriteGraph g rule = rewriteGraph' g [] [startVertex g]
     where rewriteGraph' g visited toVisit

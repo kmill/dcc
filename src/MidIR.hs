@@ -19,7 +19,7 @@ import Data.List
 import Data.Graphs
 
 data MidIRField = MidIRField SourcePos String (Maybe Int64)
-data MidIRMethod = MidIRMethod SourcePos String [String] MidIRGraph
+data MidIRMethod = MidIRMethod SourcePos Bool String [String] MidIRGraph
 
 type MidIRGraph = Graph MidBasicBlock Bool
 
@@ -99,7 +99,7 @@ programToMidIR (HDProgram _ _ fields methods)
 
 methodToMidIR :: IREnv -> HMethodDecl a -> MidIRMethod
 methodToMidIR env (HMethodDecl _ _ typ tok args st)
-    = MidIRMethod (tokenPos tok) name margs (normalizeBlocks ir)
+    = MidIRMethod (tokenPos tok) returnsSomething name margs (normalizeBlocks ir)
       where name = tokenString tok
             (margs, ir) = evalState methodToMidIR' initState
             methodToMidIR' = do (sargs', env') <- newLocalEnvEntries sargs env
@@ -121,6 +121,9 @@ methodToMidIR env (HMethodDecl _ _ typ tok args st)
             methReturn = case typ of
                            MethodVoid -> Nothing
                            _ -> Just (OperConst 0)
+            returnsSomething = case typ of
+                                 MethodVoid -> False
+                                 _ -> True
 
 statementToMidIR :: IREnv
                  -> Int -- ^ BasicBlock on success
@@ -395,20 +398,23 @@ expressionToMidIR env s out (HExprMethod _ _ call)
                   arg'' (Left s) = Left s
                   arg'' (Right t) = Right $ OperVar t
 
+-- | Check to see if the block leading to this block unconditionally
+-- goes to this block.
 normalizeBlocks_rule_join_true:: RewriteRule MidBasicBlock Bool
 normalizeBlocks_rule_join_true g v
     = do let preVerts = preVertices g v
          guard $ 1 == length preVerts
          let [w] = preVerts
-         guard $ v /= w
-         guard $ checkIsTrue $ blockTest (g !!! w)
+         guard $ v /= w -- make sure it's not a self-loop!
+         case blockTest (g !!! w) of
+           IRTestTrue -> guard $ hasEdge g w True
+           IRTestFalse -> guard $ hasEdge g w False
+           _ -> mzero
          let newblock = BasicBlock
                         { blockCode = blockCode (g !!! w) ++ blockCode (g !!! v)
                         , blockTest = blockTest (g !!! v) }
          let newouts = withStartVertex w (adjEdges g v)
          gReplace [v,w] [(w,newblock)] newouts
-    where checkIsTrue IRTestTrue = True
-          checkIsTrue _ = False
 
 normalizeBlocks :: MidIRGraph -> MidIRGraph
 normalizeBlocks g = rewriteGraph g rules
@@ -432,9 +438,9 @@ instance PP MidIRRepr where
             methods = vcat [pp m | m <- midIRMethods m]
 
 instance PP MidIRMethod where
-    pp (MidIRMethod pos name args ir)
+    pp (MidIRMethod pos retp name args ir)
         = text ("{" ++ show pos ++ "}")
-           $+$ text name
+           $+$ (if retp then text "ret" else text "void") <+> text name
            <+> parens (hsep $ punctuate comma [text a | a <- args])
            $+$ (text $ "start = " ++ show (startVertex ir))
            $+$ (nest 3 (vcat [showVertex v | v <- labels ir]))
@@ -448,11 +454,12 @@ instance PP MidIRMethod where
 midIRToGraphViz m = "digraph name {\n"
                     ++ (concatMap showMethod (midIRMethods m))
                     ++ "}"
-  where showMethod (MidIRMethod pos name args g)
+  where showMethod (MidIRMethod pos retp name args g)
             = graphToGraphVizSubgraph g (name ++ "_")
               (name ++ " [shape=doubleoctagon,label="++show mlabel++"];\n"
               ++ name ++ " -> " ++ name ++ "_" ++ show (startVertex g) ++ ";\n")
-            where mlabel = name ++ " (" ++ intercalate ", " args ++ ")"
+            where mlabel = (if retp then "ret " else "void ")
+                           ++ name ++ " (" ++ intercalate ", " args ++ ")"
 --         toName methname v = methname ++ "_" ++ show v
 --         showVertex m edges (v,bb) = toName m v ++ " [shape=box, label="
 --                                     ++ (leftAlign $ show $ render (pp bb) ++ "\n") ++ "];\n"
