@@ -104,9 +104,9 @@ fieldDecl = FieldDecl <$> getPosition
                            tLookAhead (ident *> (dsemi <|> dopensb <|> dcomma))
             <*> sepBy1 (arrayVar <|> plainVar) dcomma
             <* dsemi
-    where plainVar = PlainVar <$> try ident
-          arrayVar = ArrayVar
-                     <$> do try $ ident <* dopensb -- two symbol lookahead
+    where plainVar = PlainVar <$> getPosition <*> try ident
+          arrayVar = ArrayVar <$> getPosition
+                     <*> do try $ ident <* dopensb -- two symbol lookahead
                      <*> (parseInt64 False <$> (tokenString <$> dtoken IntLiteral))
                      <* dclosesb
 

@@ -68,7 +68,10 @@ showGraphViz (LabGraph gr lab)
     where showEdge (from, t, to) = show from ++ " -> " ++ show to ++
 				   " [label = \"" ++ show t ++ "\"];\n"
           showNode v = show v ++ " [label = " ++ (show $ lab v) ++ "];\n"
- 
+          
+instance (Show a, Show b) => Show (LabGraph a b) where
+    show = showGraphViz
+          
 edges :: Graph e -> [Edge e]
 edges g = [ (v, l, w) | v <- indices g, (l, w) <- g!v ]
 

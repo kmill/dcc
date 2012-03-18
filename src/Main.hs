@@ -17,6 +17,7 @@ import SymbolTable
 import Text.Printf
 import Unify
 import CodeGenerate
+import MidIR
  
 -- | The main entry point to @dcc@.  See 'CLI' for command line
 -- arguments.
@@ -31,6 +32,7 @@ main = do args <- getArgs
             TargetScan -> doScanFile opts ifname input
             TargetParse -> doParseFile opts ifname input
             TargetInter -> doCheckFile opts ifname input
+            TargetMidIR -> doMidIRFile opts ifname input
             TargetDefault -> doCheckFile opts ifname input
             TargetCodeGen -> doGenerateCode opts ifname input
             _ -> error "No such target"
@@ -98,6 +100,36 @@ doCheckFile opts ifname input
                             Right x -> do if debugMode opts then 
                                               print (makeHybridAST r) else --putStrLn ((show x) ++ "\nok.") 
                                               return ()
+                            Left (udata, errors) ->
+                                do putStrLn "Semantic errors:"
+                                   putStrLn ""
+                                   sequence_ [putStrLn (showSemError (lines input) udata e)
+                                              | e <- errors]
+                                   exitWith $ ExitFailure 4
+              errors -> do printScannerResult errors
+                           exitWith $ ExitFailure 1
+    where getErrors = filter isTokenError
+          isTokenError (TokenError {}) = True
+          isTokenError _ = False
+
+doMidIRFile :: CompilerOpts -> String -> String -> IO ()
+doMidIRFile opts ifname input 
+    = case runScanner opts ifname input of
+        Left err -> do reportErr (lines input) err
+                       exitWith $ ExitFailure 1
+        Right v ->
+            case getErrors v of
+              [] -> case runDParser opts ifname v of
+                      Left err ->
+                          do reportErr (lines input) err
+                             exitWith $ ExitFailure 2
+                      Right r ->
+                          case doSemanticCheck r of
+                            Right _ -> let hast = makeHybridAST r
+                                           midir = generateMidIR hast
+                                       in do
+                                         putStrLn input
+                                         putStrLn $ show midir
                             Left (udata, errors) ->
                                 do putStrLn "Semantic errors:"
                                    putStrLn ""

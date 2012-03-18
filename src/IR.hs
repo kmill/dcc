@@ -6,6 +6,11 @@ import Text.PrettyPrint.HughesPJ
 import Data.Graphs
 import AST
 import Data.List
+import Data.Int
+
+boolToInt :: Bool -> Int64
+boolToInt True = 1
+boolToInt False = 0
 
 data BasicBlock a b = BasicBlock
     { blockCode :: [a]
@@ -20,7 +25,9 @@ type MidIR = LabGraph MidBasicBlock Bool
 data IRTest b = IRTestTrue
               | IRTestFalse
               | IRTestBinOp CmpBinOp b b
+              | IRTest b
               | IRTestNot b
+              | IRReturn (Maybe b)
 
 data X86Reg = RAX -- temp reg, return value
             | RBX -- callee-saved
@@ -50,6 +57,7 @@ data BinOp = OpAdd
            | OpSub
            | OpMul
            | OpDiv
+           | OpMod
            | OpBinCmp CmpBinOp
 data UnOp = OpNeg
           | OpNot
@@ -61,6 +69,7 @@ instance Show BinOp where
     show OpSub = "-"
     show OpMul = "*"
     show OpDiv = "/"
+    show OpMod = "%"
     show (OpBinCmp cop) = show cop
 instance Show UnOp where
     show OpNeg = "-"
@@ -79,10 +88,9 @@ data CmpBinOp = CmpLT
 
 data CmpUnOp =  CmpZero
               | CmpNZero
-              | Return
 
 data LowOper = OperReg RegName
-             | LowOperConst Int
+             | LowOperConst Int64
 
 data MemAddr = MemAddr { memBaseReg :: RegName
                        , memDisplace :: Int
@@ -106,7 +114,7 @@ data LowIRInst
     | LowCallout SourcePos String Int
 
 data MidOper = OperVar String
-             | OperConst Int
+             | OperConst Int64
 
 data MidIRInst
     = BinAssign SourcePos String BinOp MidOper MidOper
@@ -136,7 +144,6 @@ instance Show CmpBinOp where
 instance Show CmpUnOp where
     show CmpZero = "0=="
     show CmpNZero = "0!="
-    show Return = "return"
 
 instance Show LowOper where
     show (OperReg r) = show r
@@ -205,20 +212,20 @@ instance Show MidOper where
 instance Show MidIRInst where
     show (BinAssign pos r op oper1 oper2)
         = printf "%s <- %s %s %s  {%s}"
-          (show r) (show oper1) (show op) (show oper2) (show pos)
+          r (show oper1) (show op) (show oper2) (show pos)
     show (UnAssign pos r op oper)
         = printf "%s <- %s %s  {%s}"
-          (show r) (show op) (show oper) (show pos)
+          r (show op) (show oper) (show pos)
     show (ValAssign pos r oper)
         = printf "%s <- %s  {%s}"
-          (show r) (show oper) (show pos)
+          r (show oper) (show pos)
     show (CondAssign pos dest cmp cmp1 cmp2 src)
         = printf "%s <- (if %s %s %s) %s  {%s}"
-          (show dest) (show cmp1) (show cmp) (show cmp2)
+          dest (show cmp1) (show cmp) (show cmp2)
           (show src) (show pos)
     show (IndAssign pos dest oper)
         = printf "*%s <- %s  {%s}"
-          (show dest) (show oper) (show pos)
+          dest (show oper) (show pos)
     show (MidCall pos dest name args)
         = printf "%scall %s(%s)  {%s}"
           d (show name) (intercalate ", " $ map show args) (show pos)
@@ -241,7 +248,10 @@ instance Show b => Show (IRTest b) where
   show (IRTestBinOp op oper1 oper2)
       = printf "%s %s %s"
         (show oper1) (show op) (show oper2)
+  show (IRTest oper) = show oper
   show (IRTestNot oper) = "!" ++ (show oper)
+  show (IRReturn Nothing) = "return"
+  show (IRReturn (Just oper)) = "return " ++ (show oper)
 
 instance (Show a, Show b) => Show (BasicBlock a b) where
   show (BasicBlock code test)
@@ -251,3 +261,8 @@ instance (Show a, Show b) => PP (BasicBlock a b) where
   pp (BasicBlock code test)
       = (vcat $ map (text . show) code)
         $+$ (text $ "(" ++ show test ++ ")")
+
+--instance (Show a, Show b) => PP (LabGraph (BasicBlock a b) Bool) where
+--    show (LabGraph gr l)
+--        = vcat $ map (\v -> text ("L" ++ v ++ ":")
+--                            $+$ (nest 3 (pp $ l v))

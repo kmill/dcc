@@ -55,7 +55,8 @@ Executable dcc
     pretty,
     mtl >= 1.1,
     containers >= 0.3,
-    filepath
+    filepath,
+    array >= 0.3
 --  extensions:
 --    MultiParamTypeClasses
   

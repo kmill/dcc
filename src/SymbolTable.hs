@@ -111,8 +111,8 @@ envLookup name senv = Map.lookup name bindings
 
 data HDProgram a = HDProgram (SymbolEnv a) SourcePos [(HFieldDecl a)] [(HMethodDecl a)]
 data HFieldDecl a = HFieldDecl (SymbolEnv a) SourcePos DType [(HFieldVar a)]
-data HFieldVar a = HPlainVar (SymbolEnv a) Token
-                 | HArrayVar (SymbolEnv a) Token Int64
+data HFieldVar a = HPlainVar (SymbolEnv a) SourcePos Token
+                 | HArrayVar (SymbolEnv a) SourcePos Token Int64
 data HMethodDecl a = HMethodDecl (SymbolEnv a) SourcePos MethodType Token [(HMethodArg a)] (HStatement a)
 data HMethodArg a = HMethodArg (SymbolEnv a) DType Token
 data HStatement a = HBlock (SymbolEnv a) SourcePos [(HVarDecl a)] [(HStatement a)]
@@ -151,9 +151,9 @@ fieldDeclToSTerms :: FieldDecl -> [(String, SymbolTerm)]
 fieldDeclToSTerms (FieldDecl pos t decls) = map (fieldVarToSTerm t) decls
 
 fieldVarToSTerm :: DType -> FieldVar -> (String, SymbolTerm)
-fieldVarToSTerm t (PlainVar tok) 
+fieldVarToSTerm t (PlainVar pos tok) 
     = (tokenString tok, Term (tokenPos tok) (dTypeToSType t))
-fieldVarToSTerm t (ArrayVar tok len) 
+fieldVarToSTerm t (ArrayVar pos tok len) 
     = (tokenString tok, Term (tokenPos tok) (SArray (dTypeToSType t) len) )
 
 methodDeclToSTerm :: MethodDecl -> (String, SymbolTerm)
@@ -201,8 +201,8 @@ instance HybridAST FieldDecl (HFieldDecl Int) Int where
     createHybridAST e (FieldDecl pos t vars) = HFieldDecl e pos t $ map (createHybridAST e) vars
 
 instance HybridAST FieldVar (HFieldVar Int) Int where
-    createHybridAST e (PlainVar tok) = HPlainVar e tok
-    createHybridAST e (ArrayVar tok len) = HArrayVar e tok len 
+    createHybridAST e (PlainVar pos tok) = HPlainVar e pos tok
+    createHybridAST e (ArrayVar pos tok len) = HArrayVar e pos tok len 
 
 instance HybridAST MethodDecl (HMethodDecl Int) Int where
     createHybridAST e (MethodDecl pos t tok args st) 
@@ -280,8 +280,8 @@ transformHFieldDecl eNew (HFieldDecl _ pos t vars) = HFieldDecl eNew pos t vars'
     where vars' = map (transformHFieldVar eNew) vars
 
 transformHFieldVar :: SymbolEnv b -> HFieldVar a -> HFieldVar b
-transformHFieldVar eNew (HPlainVar _ tok) = HPlainVar eNew tok
-transformHFieldVar eNew (HArrayVar _ tok len) = HArrayVar eNew tok len
+transformHFieldVar eNew (HPlainVar _ pos tok) = HPlainVar eNew pos tok
+transformHFieldVar eNew (HArrayVar _ pos tok len) = HArrayVar eNew pos tok len
 
 transformHMethodDecl :: (Maybe (SymbolEnv b) -> SymbolEnv a -> SymbolEnv b) -> SymbolEnv b -> HMethodDecl a -> HMethodDecl b
 transformHMethodDecl f eParent (HMethodDecl env pos t tok args st) = HMethodDecl eNew pos t tok args' st'
@@ -376,8 +376,8 @@ instance PP (HFieldDecl a) where
          <+> (pp pos)
 
 instance PP (HFieldVar a) where
-    pp (HPlainVar e t) = text $ tokenString t
-    pp (HArrayVar e t l) = (text $ tokenString t) <> brackets (text $ show l)
+    pp (HPlainVar e pos t) = text $ tokenString t
+    pp (HArrayVar e pos t l) = (text $ tokenString t) <> brackets (text $ show l)
 
 instance PP (HMethodDecl a) where
     pp (HMethodDecl env pos t tok args st)

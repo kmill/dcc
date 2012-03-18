@@ -38,8 +38,8 @@ class PP a where
 
 data DProgram = DProgram !SourcePos [FieldDecl] [MethodDecl]
 data FieldDecl = FieldDecl !SourcePos DType [FieldVar]
-data FieldVar = PlainVar Token
-              | ArrayVar Token Int64
+data FieldVar = PlainVar SourcePos Token
+              | ArrayVar SourcePos Token Int64
 data MethodDecl = MethodDecl !SourcePos MethodType Token [MethodArg] Statement
 data MethodType = MethodReturns DType
                 | MethodVoid
@@ -147,8 +147,8 @@ instance PP FieldDecl where
           <+> (pp pos)
 
 instance PP FieldVar where
-    pp (PlainVar t) = text $ tokenString t
-    pp (ArrayVar t l) = (text $ tokenString t) <> brackets (text $ show l)
+    pp (PlainVar pos t) = text $ tokenString t
+    pp (ArrayVar pos t l) = (text $ tokenString t) <> brackets (text $ show l)
 
 instance PP MethodDecl where
     pp (MethodDecl pos t tok args st)

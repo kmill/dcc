@@ -200,6 +200,7 @@ instance Monad SemChecker where
     a >>= f =  SemChecker (getSemChecker a >>= (getSemChecker . f))
     
 instance Applicative SemChecker where
+    pure = return
     mf <*> mb = do f <- mf
                    b <- mb
                    return (f b)
@@ -299,7 +300,7 @@ infix 5 <==>
 -- monad, and continues onward despite errors.  Read @<==>@ as "make
 -- equality by modifying the structures on both sides".
 (<==>) :: DUTerm -> DUTerm -> SemChecker ()
-t1 <==> t2  = do liftS $ unify t1 t2
+t1 <==> t2  = do _ <- liftS $ unify t1 t2
                  return ()
 
 ---
@@ -326,10 +327,10 @@ checkFieldDecl :: FieldDecl -> SemChecker ()
 checkFieldDecl (FieldDecl pos t vars)
      = sequence_ [checkvar v | v <- vars]
      where
-       checkvar (PlainVar tok)
+       checkvar (PlainVar pos' tok)
            = addEnvBinding (tokenPos tok) (tokenString tok)
              (getDUType t (tokenPos tok))
-       checkvar (ArrayVar tok1 len)
+       checkvar (ArrayVar pos' tok1 len)
            = do when (len <= 0) $ addError $ SemArraySizeError (tokenPos tok1)
                 addEnvBinding (tokenPos tok1) (tokenString tok1)
                                   (tArray (tokenPos tok1) Nothing
