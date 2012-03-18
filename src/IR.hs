@@ -3,7 +3,7 @@ module IR where
 import Text.ParserCombinators.Parsec
 import Text.Printf
 import Text.PrettyPrint.HughesPJ
-import Data.Graphs
+--import Data.Graphs
 import AST
 import Data.List
 import Data.Int
@@ -19,8 +19,8 @@ data BasicBlock a b = BasicBlock
 type LowBasicBlock = BasicBlock LowIRInst LowOper
 type MidBasicBlock = BasicBlock MidIRInst MidOper
 
-type LowIR = LabGraph LowBasicBlock Bool
-type MidIR = LabGraph MidBasicBlock Bool
+--type LowIR = LabGraph LowBasicBlock Bool
+--type MidIR = LabGraph MidBasicBlock Bool
 
 data IRTest b = IRTestTrue
               | IRTestFalse
@@ -256,8 +256,8 @@ instance Show b => Show (IRTest b) where
   show (IRTestFail s) = "fail " ++ show s
 
 instance (Show a, Show b) => Show (BasicBlock a b) where
-  show (BasicBlock code test)
-      = "{" ++ intercalate ", " (map show code) ++ "} (" ++ show test ++ ")"
+  show bb = render $ pp bb
+--      = "{" ++ intercalate ", " (map show code) ++ "} (" ++ show test ++ ")"
 
 instance (Show a, Show b) => PP (BasicBlock a b) where
   pp (BasicBlock code test)

@@ -6,7 +6,6 @@ import IR
 import Control.Monad.State
 import qualified Data.Map as Map
 import Data.Array
-import Data.Graphs
 import Text.ParserCombinators.Parsec (SourcePos)
 import Text.PrettyPrint.HughesPJ
 import AST
@@ -16,10 +15,13 @@ import Debug.Trace
 import IR
 import Data.Maybe
 import Data.Char
-import Text.Regex
+import Data.List
+import Data.Graphs
 
 data MidIRField = MidIRField SourcePos String (Maybe Int64)
-data MidIRMethod = MidIRMethod SourcePos String [String] ([(Int,MidBasicBlock)],[(Int,Bool,Int)], Int)
+data MidIRMethod = MidIRMethod SourcePos String [String] MidIRGraph
+
+type MidIRGraph = Graph MidBasicBlock Bool
 
 data MidIRRepr = MidIRRepr
     { midIRFields :: [MidIRField]
@@ -97,19 +99,19 @@ programToMidIR (HDProgram _ _ fields methods)
 
 methodToMidIR :: IREnv -> HMethodDecl a -> MidIRMethod
 methodToMidIR env (HMethodDecl _ _ typ tok args st)
-    = MidIRMethod (tokenPos tok) name margs ir
+    = MidIRMethod (tokenPos tok) name margs (normalizeBlocks ir)
       where name = tokenString tok
             (margs, ir) = evalState methodToMidIR' initState
             methodToMidIR' = do (sargs', env') <- newLocalEnvEntries sargs env
                                 endBlock <- newBlock [] (IRReturn methReturn)
                                 startBlock <- statementToMidIR env' endBlock no no st
                                 state <- get
-                                return (sargs', (currBasicBlocks state,
-                                                 currEdges state,
-                                                 startBlock))
+                                return (sargs', createGraph
+                                                  (currBasicBlocks state)
+                                                  (currEdges state)
+                                                  startBlock)
                 where no = error "continue/break used when converting to MidIR :-("
             sargs = [tokenString t | (HMethodArg _ _ t) <- args]
-            irempty = LabGraph (array (0,0) []) (\i -> BasicBlock [] IRTestFalse)
             initState = MidIRState
                       { genVarId = 0
                       , genBlockId = 0
@@ -392,7 +394,24 @@ expressionToMidIR env s out (HExprMethod _ _ call)
                   evalArg (Right t) (HCArgExpr _ expr) s' = expressionToMidIR env s' t expr
                   arg'' (Left s) = Left s
                   arg'' (Right t) = Right $ OperVar t
-               
+
+normalizeBlocks_rule_join_true:: RewriteRule MidBasicBlock Bool
+normalizeBlocks_rule_join_true g v
+    = do let preVerts = preVertices g v
+         guard $ 1 == length preVerts
+         let [w] = preVerts
+         guard $ checkIsTrue $ blockTest (g !!! w)
+         let newblock = BasicBlock
+                        { blockCode = blockCode (g !!! w) ++ blockCode (g !!! v)
+                        , blockTest = blockTest (g !!! v) }
+         let newouts = withStartVertex w (adjEdges g v)
+         gReplace [v,w] [(w,newblock)] newouts
+    where checkIsTrue IRTestTrue = True
+          checkIsTrue _ = False
+
+normalizeBlocks :: MidIRGraph -> MidIRGraph
+normalizeBlocks g = rewriteGraph g rules
+    where rules = normalizeBlocks_rule_join_true
 
 instance Show MidIRRepr where
   show = render . pp
@@ -416,29 +435,28 @@ instance PP MidIRMethod where
         = text ("{" ++ show pos ++ "}")
            $+$ text name
            <+> parens (hsep $ punctuate comma [text a | a <- args])
-           $+$ (text $ "start = " ++ show start)
-           $+$ (nest 3 (vcat [showVertex v | v <- vertices]))
-        where (vertices, edges, start) = ir
-              showVertex (i, bb) = text (show i)
+           $+$ (text $ "start = " ++ show (startVertex ir))
+           $+$ (nest 3 (vcat [showVertex v | v <- labels ir]))
+        where showVertex (i,bb) = text (show i)
                                    <+> (nest 3 (pp bb))
                                    $+$ (nest 5 (vcat (map showEdge outedges)))
-                  where outedges = filter (\(x,_,_) -> x == i) edges
-                        showEdge (_,b,y) = text (show b ++ " -> " ++ show y)
+                  where outedges = adjEdges ir i
+                        showEdge (b,y) = text (show b ++ " -> " ++ show y)
                         
 
 midIRToGraphViz m = "digraph name {\n"
                     ++ (concatMap showMethod (midIRMethods m))
                     ++ "}"
-  where showMethod (MidIRMethod pos name args (vertices, edges, start))
-            = name ++ " [shape=doublecircle];\n"
-              ++ name ++ " -> " ++ toName name start ++ ";\n"
-              ++ (concatMap (showVertex name edges) vertices)
-        toName methname v = methname ++ "_" ++ show v
-        showVertex m edges (v,bb) = toName m v ++ " [shape=box, label="
-                                    ++ (leftAlign $ show $ render (pp bb) ++ "\n") ++ "];\n"
-                                    ++ (concatMap showEdge outedges)
-            where outedges = filter (\(x,_,_) -> x == v) edges
-                  showEdge (_,b,y) = toName m v ++ " -> " ++ toName m y
-                                     ++ " [label=" ++ show b ++ "];\n"
-                  leftAlign t = subRegex (mkRegex "\\\\n") t "\\l"
-                  
+  where showMethod (MidIRMethod pos name args g)
+            = graphToGraphVizSubgraph g (name ++ "_")
+              (name ++ " [shape=doubleoctagon,label="++show mlabel++"];\n"
+              ++ name ++ " -> " ++ name ++ "_" ++ show (startVertex g) ++ ";\n")
+            where mlabel = name ++ " (" ++ intercalate ", " args ++ ")"
+--         toName methname v = methname ++ "_" ++ show v
+--         showVertex m edges (v,bb) = toName m v ++ " [shape=box, label="
+--                                     ++ (leftAlign $ show $ render (pp bb) ++ "\n") ++ "];\n"
+--                                     ++ (concatMap showEdge outedges)
+--             where outedges = filter (\(x,_,_) -> x == v) edges
+--                   showEdge (_,b,y) = toName m v ++ " -> " ++ toName m y
+--                                      ++ " [label=" ++ show b ++ "];\n"
+--                   leftAlign t = subRegex (mkRegex "\\\\n") t "\\l"
