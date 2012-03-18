@@ -400,6 +400,7 @@ normalizeBlocks_rule_join_true g v
     = do let preVerts = preVertices g v
          guard $ 1 == length preVerts
          let [w] = preVerts
+         guard $ v /= w
          guard $ checkIsTrue $ blockTest (g !!! w)
          let newblock = BasicBlock
                         { blockCode = blockCode (g !!! w) ++ blockCode (g !!! v)

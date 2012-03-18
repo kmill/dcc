@@ -99,16 +99,16 @@ data MemAddr = MemAddr { memBaseReg :: RegName
                        , memScalar :: Int } -- ^ [base + displace + offset * scalar]
 
 data LowIRInst
-    = RegBin SourcePos RegName BinOp LowOper LowOper -- ^ "r <- r + r"
-    | RegUn SourcePos RegName UnOp LowOper -- ^ "r <- -r"
-    | RegVal SourcePos RegName LowOper -- ^ "r <- r"
+    = RegBin SourcePos RegName BinOp LowOper LowOper -- ^ "r := r + r"
+    | RegUn SourcePos RegName UnOp LowOper -- ^ "r := -r"
+    | RegVal SourcePos RegName LowOper -- ^ "r := r"
     | RegCond
       { regCondSourcePos :: SourcePos
       , regCondDest :: RegName
       , regCondCmp :: CmpBinOp 
       , regCondCmp1 :: LowOper 
       , regCondCmp2 :: LowOper 
-      , regCondSrc :: LowOper } -- ^ "r <- (if r < r) r"
+      , regCondSrc :: LowOper } -- ^ "r := (if r < r) r"
     | StoreMem SourcePos MemAddr LowOper
     | LoadMem SourcePos RegName MemAddr
     | LowCall SourcePos String Int -- ^ int is number of args
@@ -182,23 +182,23 @@ instance Show X86Reg where
 
 instance Show LowIRInst where
     show (RegBin pos r op oper1 oper2)
-        = printf "%s <- %s %s %s  {%s}"
+        = printf "%s := %s %s %s  {%s}"
           (show r) (show oper1) (show op) (show oper2) (showPos pos)
     show (RegUn pos r op oper)
-        = printf "%s <- %s %s  {%s}"
+        = printf "%s := %s %s  {%s}"
           (show r) (show op) (show oper) (showPos pos)
     show (RegVal pos r oper)
-        = printf "%s <- %s  {%s}"
+        = printf "%s := %s  {%s}"
           (show r) (show oper) (showPos pos)
     show (RegCond pos dest cmp cmp1 cmp2 src)
-        = printf "%s <- (if %s %s %s) %s  {%s}"
+        = printf "%s := (if %s %s %s) %s  {%s}"
           (show dest) (show cmp1) (show cmp) (show cmp2)
           (show src) (showPos pos)
     show (StoreMem pos mem oper)
-        = printf "%s <- %s  {%s}"
+        = printf "%s := %s  {%s}"
           (show mem) (show oper) (showPos pos)
     show (LoadMem pos reg mem)
-        = printf "%s <- %s  {%s}"
+        = printf "%s := %s  {%s}"
           (show reg) (show mem) (showPos pos)
     show (LowCall pos name numargs)
         = printf "call %s(%s)  {%s}" (show name) (show numargs) (showPos pos)
@@ -212,32 +212,32 @@ instance Show MidOper where
           
 instance Show MidIRInst where
     show (BinAssign pos r op oper1 oper2)
-        = printf "%s <- %s %s %s  {%s}"
+        = printf "%s := %s %s %s  {%s}"
           r (show oper1) (show op) (show oper2) (showPos pos)
     show (UnAssign pos r op oper)
-        = printf "%s <- %s %s  {%s}"
+        = printf "%s := %s %s  {%s}"
           r (show op) (show oper) (showPos pos)
     show (ValAssign pos r oper)
-        = printf "%s <- %s  {%s}"
+        = printf "%s := %s  {%s}"
           r (show oper) (showPos pos)
     show (CondAssign pos dest cmp cmp1 cmp2 src)
-        = printf "%s <- (if %s %s %s) %s  {%s}"
+        = printf "%s := (if %s %s %s) %s  {%s}"
           dest (show cmp1) (show cmp) (show cmp2)
           (show src) (showPos pos)
     show (IndAssign pos dest oper)
-        = printf "*%s <- %s  {%s}"
+        = printf "*%s := %s  {%s}"
           dest (show oper) (showPos pos)
     show (MidCall pos dest name args)
         = printf "%scall %s(%s)  {%s}"
           d name (intercalate ", " $ map show args) (showPos pos)
         where d = case dest of
-                    Just d' -> d' ++ " <- "
+                    Just d' -> d' ++ " := "
                     Nothing -> ""
     show (MidCallout pos dest name args)
         = printf "%scallout %s (%s)  {%s}"
           d (show name) (intercalate ", " $ map show' args) (showPos pos)
         where d = case dest of
-                    Just d' -> d' ++ " <- "
+                    Just d' -> d' ++ " := "
                     Nothing -> ""
               show' e = case e of
                           Left s -> show s
