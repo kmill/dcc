@@ -407,8 +407,8 @@ normalizeBlocks_rule_join_true g v
          let [w] = preVerts
          guard $ v /= w -- make sure it's not a self-loop!
          case blockTest (g !!! w) of
-           IRTestTrue -> guard $ hasEdge g w True
-           IRTestFalse -> guard $ hasEdge g w False
+           IRTestTrue -> guard $ hasEdgeTo g w True v
+           IRTestFalse -> guard $ hasEdgeTo g w False v
            _ -> mzero
          let newblock = BasicBlock
                         { blockCode = blockCode (g !!! w) ++ blockCode (g !!! v)
