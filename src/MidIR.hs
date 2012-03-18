@@ -159,7 +159,7 @@ statementToMidIR env s c b (HForSt _ pos tok exprlow exprhigh st)
          --    doHigh
          --    initBlock (enter new env, too)
          -- L: checkBlock
-         --    if true : continue; else : goto E
+         --    if true : next line; else : goto E
          --    stblock
          --    incrBlock
          --    goto L
@@ -377,7 +377,7 @@ expressionToMidIR env s out (HExprMethod _ _ call)
                                          (map OperVar tmps)]
                                IRTestTrue
                addEdge callFunction True s
-               evalArgs <- foldr (=<<) (return callFunction)
+               evalArgs <- foldl (>>=) (return callFunction)
                            [(\s' -> expressionToMidIR env s' t e)
                             | (t,e) <- zip tmps exprs]
                return evalArgs
@@ -387,7 +387,7 @@ expressionToMidIR env s out (HExprMethod _ _ call)
                                          (map arg'' tmps)]
                                IRTestTrue
                addEdge callFunction True s
-               evalArgs <- foldr (=<<) (return callFunction)
+               evalArgs <- foldl (>>=) (return callFunction)
                            [evalArg t a | (t,a) <- zip tmps args]
                return evalArgs
             where arg' (HCArgString _ s) = return $ Left (tokenString s)
@@ -400,7 +400,7 @@ expressionToMidIR env s out (HExprMethod _ _ call)
 
 -- | Check to see if the block leading to this block unconditionally
 -- goes to this block.
-normalizeBlocks_rule_join_true:: RewriteRule MidBasicBlock Bool
+normalizeBlocks_rule_join_true :: RewriteRule MidBasicBlock Bool
 normalizeBlocks_rule_join_true g v
     = do let preVerts = preVertices g v
          guard $ 1 == length preVerts
@@ -460,11 +460,3 @@ midIRToGraphViz m = "digraph name {\n"
               ++ name ++ " -> " ++ name ++ "_" ++ show (startVertex g) ++ ";\n")
             where mlabel = (if retp then "ret " else "void ")
                            ++ name ++ " (" ++ intercalate ", " args ++ ")"
---         toName methname v = methname ++ "_" ++ show v
---         showVertex m edges (v,bb) = toName m v ++ " [shape=box, label="
---                                     ++ (leftAlign $ show $ render (pp bb) ++ "\n") ++ "];\n"
---                                     ++ (concatMap showEdge outedges)
---             where outedges = filter (\(x,_,_) -> x == v) edges
---                   showEdge (_,b,y) = toName m v ++ " -> " ++ toName m y
---                                      ++ " [label=" ++ show b ++ "];\n"
---                   leftAlign t = subRegex (mkRegex "\\\\n") t "\\l"
