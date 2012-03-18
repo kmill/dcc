@@ -15,6 +15,8 @@ import Data.Int
 import Debug.Trace
 import IR
 import Data.Maybe
+import Data.Char
+import Text.Regex
 
 data MidIRField = MidIRField SourcePos String (Maybe Int64)
 data MidIRMethod = MidIRMethod SourcePos String [String] ([(Int,MidBasicBlock)],[(Int,Bool,Int)], Int)
@@ -100,11 +102,12 @@ methodToMidIR env (HMethodDecl _ _ typ tok args st)
             (margs, ir) = evalState methodToMidIR' initState
             methodToMidIR' = do (sargs', env') <- newLocalEnvEntries sargs env
                                 endBlock <- newBlock [] (IRReturn methReturn)
-                                startBlock <- statementToMidIR env' endBlock (-1) (-1) st
+                                startBlock <- statementToMidIR env' endBlock no no st
                                 state <- get
                                 return (sargs', (currBasicBlocks state,
                                                  currEdges state,
                                                  startBlock))
+                where no = error "continue/break used when converting to MidIR :-("
             sargs = [tokenString t | (HMethodArg _ _ t) <- args]
             irempty = LabGraph (array (0,0) []) (\i -> BasicBlock [] IRTestFalse)
             initState = MidIRState
@@ -200,26 +203,53 @@ statementToMidIR env s c b (HExprSt _ expr)
     = do t <- genTmpVar
          expressionToMidIR env s t expr
 -- | Assign
-statementToMidIR env s c b (HAssignSt _ pos loc op expr)
+statementToMidIR env s c b (HAssignSt senv pos loc op expr)
     = case loc of
         HPlainLocation _ pos tok ->
-            let var = fromJust $ lookup (tokenString tok) env
-            in expressionToMidIR env s var expr
-        HArrayLocation _ pos tok expr ->
-            let var = fromJust $ lookup (tokenString tok) env
-            in do t <- genTmpVar
-                  storeBlock <- newBlock [IndAssign pos var (OperVar t)]
+            let var' = fromJust $ lookup (tokenString tok) env
+            in expressionToMidIR env s var' expr
+        HArrayLocation _ pos tok iexpr ->
+            let var = tokenString tok
+                var' = fromJust $ lookup var env
+                -- | it's convenient to use envLookup here since it
+                -- keeps track of the length of the arrays!
+                (Term _ (SArray _ len)) = fromJust $ envLookup var senv
+            in do ts <- genTmpVar
+                  td <- genTmpVar
+                  ti <- genTmpVar
+                  storeBlock <- newBlock [ BinAssign pos ti OpMul
+                                            (OperVar ti) (OperConst 8)
+                                         , BinAssign pos td OpAdd
+                                           (OperVar var') (OperVar ti)
+                                         , IndAssign pos td (OperVar ts)]
                                 IRTestTrue
                   addEdge storeBlock True s
-                  expressionToMidIR env storeBlock t expr
+                  evalexpr <- expressionToMidIR env storeBlock ts expr
+                  failBounds <- newBlock []
+                                (IRTestFail ("Array index out of bounds at "
+                                             ++ show pos))
+                  checkBounds2 <- newBlock []
+                                  (IRTestBinOp CmpGTE (OperVar ti) (OperConst 0))
+                  addEdge checkBounds2 False failBounds
+                  addEdge checkBounds2 True evalexpr
+                  checkBounds <- newBlock []
+                                 (IRTestBinOp CmpLT (OperVar ti) (OperConst len))
+                  addEdge checkBounds False failBounds
+                  addEdge checkBounds True checkBounds2
+                  evaliexpr <- expressionToMidIR env checkBounds ti iexpr
+                  return evaliexpr
 
+
+---
+--- Expressions
+---
 
 expressionToMidIR :: IREnv
                   -> Int -- ^ BasicBlock on success
                   -> String -- ^ variable to output to
                   -> HExpr a -> State MidIRState Int
-expressionToMidIR env s out (HBinaryOp _ pos expr1 tok expr2)
-    = case tokenString tok of
+expressionToMidIR env s out (HBinaryOp _ pos expr1 optok expr2)
+    = case tokenString optok of
         "||" -> orExpr
         "&&" -> andExpr
         "+" -> normalExpr OpAdd
@@ -233,6 +263,7 @@ expressionToMidIR env s out (HBinaryOp _ pos expr1 tok expr2)
         ">" -> normalExpr (OpBinCmp CmpGT)
         "<=" -> normalExpr (OpBinCmp CmpLTE)
         ">=" -> normalExpr (OpBinCmp CmpGTE)
+        _ -> error "Unknown operator type in expressionToMidIR"
       where orExpr = do trueBlock <- newBlock [ValAssign pos out
                                                (OperConst $ boolToInt True)]
                                      IRTestTrue
@@ -267,6 +298,14 @@ expressionToMidIR env s out (HBinaryOp _ pos expr1 tok expr2)
                                expr2Block <- expressionToMidIR env opBlock t2 expr2
                                expr1Block <- expressionToMidIR env expr2Block t1 expr1
                                return expr1Block
+expressionToMidIR env s out (HUnaryOp _ pos optok expr)
+    = case tokenString optok of
+        "!" -> normalExpr OpNot
+        "-" -> normalExpr OpNeg
+    where normalExpr op = do opBlock <- newBlock [UnAssign pos out op (OperVar out)]
+                                        IRTestTrue
+                             addEdge opBlock True s
+                             expressionToMidIR env opBlock out expr
       
 expressionToMidIR env s out (HExprBoolLiteral _ pos bool)
     = do block <- newBlock
@@ -280,6 +319,80 @@ expressionToMidIR env s out (HExprIntLiteral _ pos i)
                   IRTestTrue
          addEdge block True s
          return block
+expressionToMidIR env s out (HExprCharLiteral _ pos c)
+    = do block <- newBlock
+                  [ValAssign pos out (OperConst $ fromIntegral $ ord c)]
+                  IRTestTrue
+         addEdge block True s
+         return block
+expressionToMidIR env s out (HExprStringLiteral _ pos _)
+    = error "Unexpected string literal in expressionToMidIR :-("
+expressionToMidIR env s out (HLoadLoc senv pos loc)
+    = case loc of
+        HPlainLocation _ pos tok ->
+            let var' = fromJust $ lookup (tokenString tok) env
+            in do assblock <- newBlock [ValAssign pos out (OperVar var')]
+                              IRTestTrue
+                  addEdge assblock True s
+                  return assblock
+        HArrayLocation _ pos tok iexpr ->
+            let var = tokenString tok
+                var' = fromJust $ lookup var env
+                -- | it's convenient to use envLookup here since it
+                -- keeps track of the length of the arrays!
+                (Term _ (SArray _ len)) = fromJust $ envLookup var senv
+            in do ts <- genTmpVar
+                  ti <- genTmpVar
+                  loadBlock <- newBlock [ UnAssign pos ts OpAddr (OperVar var')
+                                        , BinAssign pos ti OpMul
+                                            (OperVar ti) (OperConst 8)
+                                         , BinAssign pos ts OpAdd
+                                           (OperVar ts) (OperVar ti)
+                                         , UnAssign pos out OpDeref (OperVar ts)]
+                               IRTestTrue
+                  addEdge loadBlock True s
+                  failBounds <- newBlock []
+                                (IRTestFail ("Array index out of bounds at "
+                                             ++ show pos))
+                  checkBounds2 <- newBlock []
+                                  (IRTestBinOp CmpGTE (OperVar ti) (OperConst 0))
+                  addEdge checkBounds2 False failBounds
+                  addEdge checkBounds2 True loadBlock
+                  checkBounds <- newBlock []
+                                 (IRTestBinOp CmpLT (OperVar ti) (OperConst len))
+                  addEdge checkBounds False failBounds
+                  addEdge checkBounds True checkBounds2
+                  evaliexpr <- expressionToMidIR env checkBounds ti iexpr
+                  return evaliexpr
+expressionToMidIR env s out (HExprMethod _ _ call)
+    = case call of
+        HNormalMethod _ pos tok exprs ->
+            do tmps <- replicateM (length exprs) genTmpVar
+               callFunction <- newBlock [MidCall pos (Just out) (tokenString tok)
+                                         (map OperVar tmps)]
+                               IRTestTrue
+               addEdge callFunction True s
+               evalArgs <- foldr (=<<) (return callFunction)
+                           [(\s' -> expressionToMidIR env s' t e)
+                            | (t,e) <- zip tmps exprs]
+               return evalArgs
+        HCalloutMethod _ pos tok args ->
+            do tmps <- mapM arg' args
+               callFunction <- newBlock [MidCallout pos (Just out) (tokenString tok)
+                                         (map arg'' tmps)]
+                               IRTestTrue
+               addEdge callFunction True s
+               evalArgs <- foldr (=<<) (return callFunction)
+                           [evalArg t a | (t,a) <- zip tmps args]
+               return evalArgs
+            where arg' (HCArgString _ s) = return $ Left (tokenString s)
+                  arg' (HCArgExpr _ expr) = do t <- genTmpVar
+                                               return $ Right t
+                  evalArg t (HCArgString _ str) s' = return s'
+                  evalArg (Right t) (HCArgExpr _ expr) s' = expressionToMidIR env s' t expr
+                  arg'' (Left s) = Left s
+                  arg'' (Right t) = Right $ OperVar t
+               
 
 instance Show MidIRRepr where
   show = render . pp
@@ -304,8 +417,28 @@ instance PP MidIRMethod where
            $+$ text name
            <+> parens (hsep $ punctuate comma [text a | a <- args])
            $+$ (text $ "start = " ++ show start)
-           $+$ (nest 3 (vcat [showVertex v | v <- vertices]
-                        $+$ vcat [text (show e) | e <- edges]))
+           $+$ (nest 3 (vcat [showVertex v | v <- vertices]))
         where (vertices, edges, start) = ir
               showVertex (i, bb) = text (show i)
-                                   $+$ (nest 3 (pp bb))
+                                   <+> (nest 3 (pp bb))
+                                   $+$ (nest 5 (vcat (map showEdge outedges)))
+                  where outedges = filter (\(x,_,_) -> x == i) edges
+                        showEdge (_,b,y) = text (show b ++ " -> " ++ show y)
+                        
+
+midIRToGraphViz m = "digraph name {\n"
+                    ++ (concatMap showMethod (midIRMethods m))
+                    ++ "}"
+  where showMethod (MidIRMethod pos name args (vertices, edges, start))
+            = name ++ " [shape=doublecircle];\n"
+              ++ name ++ " -> " ++ toName name start ++ ";\n"
+              ++ (concatMap (showVertex name edges) vertices)
+        toName methname v = methname ++ "_" ++ show v
+        showVertex m edges (v,bb) = toName m v ++ " [shape=box, label="
+                                    ++ (leftAlign $ show $ render (pp bb) ++ "\n") ++ "];\n"
+                                    ++ (concatMap showEdge outedges)
+            where outedges = filter (\(x,_,_) -> x == v) edges
+                  showEdge (_,b,y) = toName m v ++ " -> " ++ toName m y
+                                     ++ " [label=" ++ show b ++ "];\n"
+                  leftAlign t = subRegex (mkRegex "\\\\n") t "\\l"
+                  

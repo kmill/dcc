@@ -192,13 +192,16 @@ class HybridAST a b c |  b -> c where
 
 instance HybridAST DProgram (HDProgram Int) Int where
     createHybridAST e (DProgram pos fields methods) 
-        = HDProgram eNew pos (map (createHybridAST e) fields) (map (createHybridAST e) methods)
+        = HDProgram eNew pos
+          (map (createHybridAST eNew) fields)
+          (map (createHybridAST eNew) methods)
           where eNew = envBindMany methodList (envBindMany fieldList e) 
                 fieldList = concatMap fieldDeclToSTerms fields
                 methodList = map methodDeclToSTerm methods
 
 instance HybridAST FieldDecl (HFieldDecl Int) Int where
-    createHybridAST e (FieldDecl pos t vars) = HFieldDecl e pos t $ map (createHybridAST e) vars
+    createHybridAST e (FieldDecl pos t vars)
+        = HFieldDecl e pos t $ map (createHybridAST e) vars
 
 instance HybridAST FieldVar (HFieldVar Int) Int where
     createHybridAST e (PlainVar pos tok) = HPlainVar e pos tok
@@ -206,7 +209,9 @@ instance HybridAST FieldVar (HFieldVar Int) Int where
 
 instance HybridAST MethodDecl (HMethodDecl Int) Int where
     createHybridAST e (MethodDecl pos t tok args st) 
-        = HMethodDecl eNew pos t tok (map (createHybridAST eNew) args) (createHybridAST eNew st)
+        = HMethodDecl eNew pos t tok
+          (map (createHybridAST eNew) args)
+          (createHybridAST eNew st)
         where eNew = extendEnv (+1) (map methodArgToSTerm args) e 
 
 instance HybridAST MethodArg (HMethodArg Int) Int where
@@ -225,12 +230,15 @@ instance HybridAST Statement (HStatement Int) Int where
         = HIfSt e pos expr' (createHybridAST e st) hybridElse
         where hybridElse = maybeElse >>= (Just . (createHybridAST e) )
               expr' = createHybridAST e expr
-    createHybridAST e (ForSt pos tok expr1 expr2 st) = HForSt eNew pos tok expr1' expr2' (createHybridAST eNew st)
+    createHybridAST e (ForSt pos tok expr1 expr2 st)
+        = HForSt eNew pos tok expr1' expr2' (createHybridAST eNew st)
         where eNew = envBind (tokenString tok) (Term (tokenPos tok) SInt) (deriveEnv (+1) e)
               expr1' = createHybridAST eNew expr1
               expr2' = createHybridAST eNew expr2
-    createHybridAST e (WhileSt pos expr st) = HWhileSt e pos (createHybridAST e expr) (createHybridAST e st)
-    createHybridAST e (ReturnSt pos maybeExpr) = HReturnSt e pos maybeExpr'
+    createHybridAST e (WhileSt pos expr st)
+        = HWhileSt e pos (createHybridAST e expr) (createHybridAST e st)
+    createHybridAST e (ReturnSt pos maybeExpr)
+        = HReturnSt e pos maybeExpr'
         where maybeExpr' = maybeExpr >>= (Just . (createHybridAST e) )
     createHybridAST e (BreakSt pos) = HBreakSt e pos 
     createHybridAST e (ContinueSt pos) = HContinueSt e pos

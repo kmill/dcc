@@ -128,8 +128,7 @@ doMidIRFile opts ifname input
                             Right _ -> let hast = makeHybridAST r
                                            midir = generateMidIR hast
                                        in do
-                                         putStrLn input
-                                         putStrLn $ show midir
+                                         putStrLn $ midIRToGraphViz midir
                             Left (udata, errors) ->
                                 do putStrLn "Semantic errors:"
                                    putStrLn ""

@@ -28,6 +28,7 @@ data IRTest b = IRTestTrue
               | IRTest b
               | IRTestNot b
               | IRReturn (Maybe b)
+              | IRTestFail String
 
 data X86Reg = RAX -- temp reg, return value
             | RBX -- callee-saved
@@ -182,27 +183,27 @@ instance Show X86Reg where
 instance Show LowIRInst where
     show (RegBin pos r op oper1 oper2)
         = printf "%s <- %s %s %s  {%s}"
-          (show r) (show oper1) (show op) (show oper2) (show pos)
+          (show r) (show oper1) (show op) (show oper2) (showPos pos)
     show (RegUn pos r op oper)
         = printf "%s <- %s %s  {%s}"
-          (show r) (show op) (show oper) (show pos)
+          (show r) (show op) (show oper) (showPos pos)
     show (RegVal pos r oper)
         = printf "%s <- %s  {%s}"
-          (show r) (show oper) (show pos)
+          (show r) (show oper) (showPos pos)
     show (RegCond pos dest cmp cmp1 cmp2 src)
         = printf "%s <- (if %s %s %s) %s  {%s}"
           (show dest) (show cmp1) (show cmp) (show cmp2)
-          (show src) (show pos)
+          (show src) (showPos pos)
     show (StoreMem pos mem oper)
         = printf "%s <- %s  {%s}"
-          (show mem) (show oper) (show pos)
+          (show mem) (show oper) (showPos pos)
     show (LoadMem pos reg mem)
         = printf "%s <- %s  {%s}"
-          (show reg) (show mem) (show pos)
+          (show reg) (show mem) (showPos pos)
     show (LowCall pos name numargs)
-        = printf "call %s(%s)  {%s}" (show name) (show numargs) (show pos)
+        = printf "call %s(%s)  {%s}" (show name) (show numargs) (showPos pos)
     show (LowCallout pos name numargs)
-        = printf "callout %s(%s)  {%s}" (show name) (show numargs) (show pos)
+        = printf "callout %s(%s)  {%s}" (show name) (show numargs) (showPos pos)
           
           
 instance Show MidOper where
@@ -212,31 +213,31 @@ instance Show MidOper where
 instance Show MidIRInst where
     show (BinAssign pos r op oper1 oper2)
         = printf "%s <- %s %s %s  {%s}"
-          r (show oper1) (show op) (show oper2) (show pos)
+          r (show oper1) (show op) (show oper2) (showPos pos)
     show (UnAssign pos r op oper)
         = printf "%s <- %s %s  {%s}"
-          r (show op) (show oper) (show pos)
+          r (show op) (show oper) (showPos pos)
     show (ValAssign pos r oper)
         = printf "%s <- %s  {%s}"
-          r (show oper) (show pos)
+          r (show oper) (showPos pos)
     show (CondAssign pos dest cmp cmp1 cmp2 src)
         = printf "%s <- (if %s %s %s) %s  {%s}"
           dest (show cmp1) (show cmp) (show cmp2)
-          (show src) (show pos)
+          (show src) (showPos pos)
     show (IndAssign pos dest oper)
         = printf "*%s <- %s  {%s}"
-          dest (show oper) (show pos)
+          dest (show oper) (showPos pos)
     show (MidCall pos dest name args)
         = printf "%scall %s(%s)  {%s}"
-          d (show name) (intercalate ", " $ map show args) (show pos)
+          d name (intercalate ", " $ map show args) (showPos pos)
         where d = case dest of
-                    Just d' -> show d' ++ " <- "
+                    Just d' -> d' ++ " <- "
                     Nothing -> ""
     show (MidCallout pos dest name args)
-        = printf "%scallout %s(%s)  {%s}"
-          d (show name) (intercalate ", " $ map show' args) (show pos)
+        = printf "%scallout %s (%s)  {%s}"
+          d (show name) (intercalate ", " $ map show' args) (showPos pos)
         where d = case dest of
-                    Just d' -> show d' ++ " <- "
+                    Just d' -> d' ++ " <- "
                     Nothing -> ""
               show' e = case e of
                           Left s -> show s
@@ -252,6 +253,7 @@ instance Show b => Show (IRTest b) where
   show (IRTestNot oper) = "!" ++ (show oper)
   show (IRReturn Nothing) = "return"
   show (IRReturn (Just oper)) = "return " ++ (show oper)
+  show (IRTestFail s) = "fail " ++ show s
 
 instance (Show a, Show b) => Show (BasicBlock a b) where
   show (BasicBlock code test)
@@ -266,3 +268,6 @@ instance (Show a, Show b) => PP (BasicBlock a b) where
 --    show (LabGraph gr l)
 --        = vcat $ map (\v -> text ("L" ++ v ++ ":")
 --                            $+$ (nest 3 (pp $ l v))
+
+showPos :: SourcePos -> String
+showPos pos = printf "line %i, col %i" (sourceLine pos) (sourceColumn pos)

@@ -56,7 +56,8 @@ Executable dcc
     mtl >= 1.1,
     containers >= 0.3,
     filepath,
-    array >= 0.3
+    array >= 0.3,
+    regex-compat
 --  extensions:
 --    MultiParamTypeClasses
   
