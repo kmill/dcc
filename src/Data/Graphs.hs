@@ -43,7 +43,7 @@ hasEdgeTo :: Ord e => Graph v e -> Vertex -> e -> Vertex -> Bool
 hasEdgeTo (Graph m _) v e v'
   = fromMaybe False $ do
       v'' <- Map.lookup e (snd $ fromJust $ Map.lookup v m)
-      return $ v == v''
+      return $ v' == v''
 
 withStartVertex :: Vertex -> [(e, Vertex)] -> [(Vertex,e,Vertex)]
 withStartVertex v es = map (\(l,end) -> (v,l,end)) es
