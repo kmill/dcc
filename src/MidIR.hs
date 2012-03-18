@@ -417,7 +417,7 @@ normalizeBlocks_rule_join_true g v
          gReplace [v,w] [(w,newblock)] newouts
 
 normalizeBlocks :: MidIRGraph -> MidIRGraph
-normalizeBlocks g = rewriteGraph g rules
+normalizeBlocks g = rewriteGraph (cullGraph g) rules
     where rules = normalizeBlocks_rule_join_true
 
 instance Show MidIRRepr where
