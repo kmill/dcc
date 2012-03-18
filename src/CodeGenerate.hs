@@ -92,7 +92,7 @@ data CodeState = CodeState { currentLabel :: CodeLabel
                            , currentWhileIndex :: Int 
                            , currentOrIndex :: Int 
                            , currentAndIndex :: Int 
-                           , stringLiterals :: [String]
+                           , stringLiterals :: [(Int, String)]
                            , currentStringOffset :: Int}
                            
 
@@ -177,9 +177,11 @@ methodToCode (HMethodDecl env _ _ tok args st)
                                        , statementCode 
                                        , methodExit
                                        , stringBlock "" ]
-             methodLabel = CodeLabel { lblName = (tokenString tok), lblParent = Just $ currentLabel codeState }
-             methodEntry = CompoundBlock [ labelBlock methodLabel, stringBlock "# Perform method entry stuff"]
-             methodExit = CompoundBlock [ stringBlock "# Perform method exit stuff"]
+             methodLabel = CodeLabel { lblName = (tokenString tok), lblParent = Nothing }
+             methodEntry = CompoundBlock [ maybeGlobal, labelBlock methodLabel, stringBlock "# Perform method entry stuff"]
+             maybeGlobal = if (tokenString tok) == "main" then stringBlock ".globl main" else stringBlock ""
+             methodExit = CompoundBlock [ stringBlock "# Perform method exit stuff"
+                                        , stringBlock "ret"]
              subState = codeState { currentLabel = methodLabel }
              (statementCode, statementState) = runState (statementToCode st) subState
              newState = statementState { currentLabel = currentLabel codeState }
@@ -333,9 +335,9 @@ statementToCode (HExprSt env expr)
     = do codeState <- get 
          let codeBlock = CompoundBlock [ evalExprCode
                                     , discardResultCode ]
-             evalExprCode = stringBlock "# Eval an expr here"
+             (evalExprCode, exprState) = runState (exprToCode expr) codeState
              discardResultCode = stringBlock "popq %rax"   
-             newState = codeState
+             newState = exprState
          put newState 
          return codeBlock 
 
@@ -390,7 +392,46 @@ methodCallToCode (HNormalMethod env _ tok args)
          return codeBlock 
 
 methodCallToCode (HCalloutMethod env _ tok args)  
-    = return $ stringBlock "# TODO: Implement Call-outs" 
+    = do codeState <- get 
+         let codeBlock = CompoundBlock [ preCallCode
+                                       , callCode
+                                       , postCallCode ]
+             preCallCode = CompoundBlock [ CompoundBlock evalArgsCode
+                                         , popRegistersCode 
+                                         , numArgsCode ]
+             (evalArgsCode, newState) = runState (stateMap calloutArgToCode (reverse args)) codeState
+             popRegistersCode = popArgsRegisters (length args) 
+             numArgsCode = stringBlock $ "mov $" ++ (show $ (length args)-1) ++ ", %rax"
+             callCode = stringBlock $ "call " ++ (tokenString tok)
+             postCallCode = stringBlock $ "pushq %rax" 
+         put newState 
+         return codeBlock 
+    where popArgsRegisters :: Int -> CodeBlock 
+          popArgsRegisters n = case n of 
+                                 0 -> stringBlock "" 
+                                 1 -> stringBlock "popq %rdi" 
+                                 2 -> CompoundBlock [ popArgsRegisters 1 
+                                                    , stringBlock "popq %rsi"] 
+                                 3 -> CompoundBlock [ popArgsRegisters 2 
+                                                    , stringBlock "popq %rdx"]
+                                 4 -> CompoundBlock [ popArgsRegisters 3
+                                                    , stringBlock "popq %rcx"]
+                                 5 -> CompoundBlock [ popArgsRegisters 4
+                                                    , stringBlock "popq %r8"]
+                                 _ -> CompoundBlock [ popArgsRegisters 5
+                                                    , stringBlock "popq %r9"]
+
+calloutArgToCode :: HCalloutArg LocInfo -> State CodeState CodeBlock 
+calloutArgToCode (HCArgExpr env expr) = exprToCode expr 
+calloutArgToCode (HCArgString env tok) 
+    = do codeState <- get 
+         let stringIndex = currentStringOffset codeState
+             stringLabel = CodeLabel { lblName = "STRING_" ++ (show stringIndex), lblParent = Nothing }
+             codeBlock = stringBlock $ "pushq $" ++ (show stringLabel)
+             oldStringLiterals = stringLiterals codeState
+             newState = codeState { currentStringOffset = stringIndex + 1, stringLiterals = oldStringLiterals ++ [(stringIndex, (tokenString tok))] }
+         put newState 
+         return codeBlock 
 
 ---
 --- Literals
@@ -717,10 +758,19 @@ programToCode program = do
       fullGlobalOffset = finalGlobalOffset env
   -- Generate code for all of the methods
   methodCode <- stateMap methodToCode methods
-  --let methodCode = CompoundBlock (map (methodToCode codeState) methods)
+  codeState <- get
   -- Generate a data area for the global variables in the program text
   let globalDecls = ConstantBlock ["GLOBALS:", "# Allocate " ++ (show $ fullGlobalOffset) ++ " bytes of global memory here" ]
-  return (CompoundBlock [CompoundBlock methodCode, globalDecls])
+      stringDecls = CompoundBlock [ stringBlock "STRINGS: "
+                                  , CompoundBlock $ map declareString (stringLiterals codeState) ]
+  return $ CompoundBlock [ stringDecls
+                         , globalDecls
+                         , stringBlock ".text"
+                         , CompoundBlock methodCode]
+
+declareString :: (Int, String) -> CodeBlock 
+declareString (index, str) = CompoundBlock [ stringBlock $ "STRING_" ++ (show index) ++ ": "
+                                        , stringBlock $ ".string \"" ++ str ++ "\"" ]
 
 finalGlobalOffset :: SymbolEnv LocInfo -> Int64 
 finalGlobalOffset env =  case endLocations of 
