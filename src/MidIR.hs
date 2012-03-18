@@ -18,15 +18,39 @@ import Data.Char
 import Data.List
 import Data.Graphs
 
-data MidIRField = MidIRField SourcePos String (Maybe Int64)
-data MidIRMethod = MidIRMethod SourcePos Bool String [String] MidIRGraph
+---
+--- MidIR normalization rules
+---
 
-type MidIRGraph = Graph MidBasicBlock Bool
+normalizeBlocks :: MidIRGraph -> MidIRGraph
+normalizeBlocks g = rewriteGraph (cullGraph g) rules
+    where rules = normalizeBlocks_rule_join_true
+          -- add more with `mplus`.
+    
+-- | Check to see if the block leading to this block unconditionally
+-- goes to this block.
+normalizeBlocks_rule_join_true :: RewriteRule MidBasicBlock Bool
+normalizeBlocks_rule_join_true g v
+    = do let preVerts = preVertices g v
+         guard $ 1 == length preVerts
+         let [w] = preVerts
+         guard $ v /= w -- make sure it's not a self-loop!
+         case blockTest (g !!! w) of
+           IRTestTrue -> guard $ hasEdgeTo g w True v
+           IRTestFalse -> guard $ hasEdgeTo g w False v
+           _ -> mzero
+         let newblock = BasicBlock
+                        { blockCode = blockCode (g !!! w) ++ blockCode (g !!! v)
+                        , blockTest = blockTest (g !!! v)
+                        , blockTestPos = blockTestPos (g !!! v) }
+         let newouts = withStartVertex w (adjEdges g v)
+         gReplace [v,w] [(w,newblock)] newouts
 
-data MidIRRepr = MidIRRepr
-    { midIRFields :: [MidIRField]
-    , midIRMethods :: [MidIRMethod] }
+---
+--- Go from HAST to MidIRRepr
+---
 
+-- | This is the main entry point to the conversion.
 generateMidIR :: HDProgram a -> MidIRRepr
 generateMidIR prgm = programToMidIR prgm
 
@@ -60,19 +84,19 @@ addEdge :: Int -> Bool -> Int -> State MidIRState ()
 addEdge start b end = do s <- get
                          put $ s { currEdges = (start,b,end) : (currEdges s) }
 
-newBlock :: [MidIRInst] -> IRTest MidOper -> State MidIRState Int
-newBlock code test = do id <- genBlockID
-                        newBlockWithId id code test
+newBlock :: [MidIRInst] -> IRTest MidOper -> SourcePos -> State MidIRState Int
+newBlock code test pos = do id <- genBlockID
+                            newBlockWithId id code test pos
 
 genBlockID :: State MidIRState Int
 genBlockID = do s <- get
                 put $ s { genBlockId = 1 + genBlockId s }
                 return $ genBlockId s
 
-newBlockWithId :: Int -> [MidIRInst] -> IRTest MidOper -> State MidIRState Int
-newBlockWithId id code test
+newBlockWithId :: Int -> [MidIRInst] -> IRTest MidOper -> SourcePos -> State MidIRState Int
+newBlockWithId id code test pos
   = do s <- get
-       let block = BasicBlock code test
+       let block = BasicBlock code test pos
        put $ s { currBasicBlocks = (id,block):(currBasicBlocks s) }
        return id
 
@@ -98,12 +122,12 @@ programToMidIR (HDProgram _ _ fields methods)
             midIRmethods = map (methodToMidIR initenv) methods
 
 methodToMidIR :: IREnv -> HMethodDecl a -> MidIRMethod
-methodToMidIR env (HMethodDecl _ _ typ tok args st)
+methodToMidIR env (HMethodDecl _ pos typ tok args st)
     = MidIRMethod (tokenPos tok) returnsSomething name margs (normalizeBlocks ir)
       where name = tokenString tok
             (margs, ir) = evalState methodToMidIR' initState
             methodToMidIR' = do (sargs', env') <- newLocalEnvEntries sargs env
-                                endBlock <- newBlock [] (IRReturn methReturn)
+                                endBlock <- newBlock [] (IRReturn methReturn) pos
                                 startBlock <- statementToMidIR env' endBlock no no st
                                 state <- get
                                 return (sargs', createGraph
@@ -145,7 +169,7 @@ statementToMidIR env s c b (HIfSt _ pos expr cons malt)
                    Just alt -> statementToMidIR env s c b alt
                    Nothing -> return s
          tvar <- genTmpVar
-         block <- newBlock [] (IRTest (OperVar tvar))
+         block <- newBlock [] (IRTest (OperVar tvar)) pos
          addEdge block True cons'
          addEdge block False alt'
          e <- expressionToMidIR env block tvar expr
@@ -165,13 +189,13 @@ statementToMidIR env s c b (HForSt _ pos tok exprlow exprhigh st)
          --    goto L
          -- E:
          initBlock <- newBlock [ValAssign (tokenPos tok) s' (OperVar low)]
-                      IRTestTrue
+                      IRTestTrue pos
          checkBlock <- newBlock []
-                       (IRTestBinOp CmpLTE (OperVar s') (OperVar high))
+                       (IRTestBinOp CmpLTE (OperVar s') (OperVar high)) pos
          addEdge initBlock True checkBlock
          addEdge checkBlock False s
          incrBlock <- newBlock [BinAssign pos s' OpAdd (OperVar s') (OperConst 1)]
-                      IRTestTrue
+                      IRTestTrue pos
          addEdge incrBlock True checkBlock
          stblock <- statementToMidIR env' incrBlock incrBlock s st
          addEdge checkBlock True stblock
@@ -183,7 +207,7 @@ statementToMidIR env s c b (HForSt _ pos tok exprlow exprhigh st)
 statementToMidIR env s c b (HWhileSt _ pos expr st)
     = do t <- genTmpVar
          checkBlock <- newBlock []
-                       (IRTest (OperVar t))
+                       (IRTest (OperVar t)) pos
          evalExpr <- expressionToMidIR env checkBlock t expr
          stblock <- statementToMidIR env evalExpr evalExpr s st
          addEdge checkBlock True stblock
@@ -191,14 +215,14 @@ statementToMidIR env s c b (HWhileSt _ pos expr st)
          return evalExpr
 -- | Return
 statementToMidIR env s c b (HReturnSt _ pos Nothing)
-    = newBlock [] (IRReturn Nothing)
+    = newBlock [] (IRReturn Nothing) pos
 statementToMidIR env s c b (HReturnSt _ pos (Just expr))
     = do t <- genTmpVar
-         ret <- newBlock [] (IRReturn $ Just (OperVar t))
+         ret <- newBlock [] (IRReturn $ Just (OperVar t)) pos
          exprBlock <- expressionToMidIR env ret t expr
          return exprBlock
 -- | Break
-statementToMidIR env s c b (HBreakSt _ pos)         
+statementToMidIR env s c b (HBreakSt _ pos)
     = return b
 -- | Continue
 statementToMidIR env s c b (HContinueSt _ pos)
@@ -227,18 +251,21 @@ statementToMidIR env s c b (HAssignSt senv pos loc op expr)
                                          , BinAssign pos td OpAdd
                                            (OperVar var') (OperVar ti)
                                          , IndAssign pos td (OperVar ts)]
-                                IRTestTrue
+                                IRTestTrue pos
                   addEdge storeBlock True s
                   evalexpr <- expressionToMidIR env storeBlock ts expr
                   failBounds <- newBlock []
                                 (IRTestFail ("Array index out of bounds at "
                                              ++ show pos))
+                                pos
                   checkBounds2 <- newBlock []
                                   (IRTestBinOp CmpGTE (OperVar ti) (OperConst 0))
+                                  pos
                   addEdge checkBounds2 False failBounds
                   addEdge checkBounds2 True evalexpr
                   checkBounds <- newBlock []
                                  (IRTestBinOp CmpLT (OperVar ti) (OperConst len))
+                                 pos
                   addEdge checkBounds False failBounds
                   addEdge checkBounds True checkBounds2
                   evaliexpr <- expressionToMidIR env checkBounds ti iexpr
@@ -271,11 +298,12 @@ expressionToMidIR env s out (HBinaryOp _ pos expr1 optok expr2)
         _ -> error "Unknown operator type in expressionToMidIR"
       where orExpr = do trueBlock <- newBlock [ValAssign pos out
                                                (OperConst $ boolToInt True)]
-                                     IRTestTrue
+                                     IRTestTrue pos
                         addEdge trueBlock True s
                         t <- genTmpVar
                         shortCircuit <- newBlock []
                                         (IRTest (OperVar t))
+                                        pos
                         expr1Block <- expressionToMidIR env shortCircuit t expr1
                         expr2Block <- expressionToMidIR env s out expr2
                         addEdge shortCircuit True trueBlock
@@ -283,11 +311,11 @@ expressionToMidIR env s out (HBinaryOp _ pos expr1 optok expr2)
                         return expr1Block
             andExpr = do falseBlock <- newBlock [ValAssign pos out
                                                  (OperConst $ boolToInt False)]
-                                       IRTestTrue
+                                       IRTestTrue pos
                          addEdge falseBlock True s
                          t <- genTmpVar
                          shortCircuit <- newBlock []
-                                         (IRTest (OperVar t))
+                                         (IRTest (OperVar t)) pos
                          expr1Block <- expressionToMidIR env shortCircuit t expr1
                          expr2Block <- expressionToMidIR env s out expr2
                          addEdge shortCircuit False falseBlock
@@ -298,7 +326,7 @@ expressionToMidIR env s out (HBinaryOp _ pos expr1 optok expr2)
                                opBlock <- newBlock
                                           [BinAssign pos out op
                                                      (OperVar t1) (OperVar t2)]
-                                          IRTestTrue
+                                          IRTestTrue pos
                                addEdge opBlock True s
                                expr2Block <- expressionToMidIR env opBlock t2 expr2
                                expr1Block <- expressionToMidIR env expr2Block t1 expr1
@@ -307,27 +335,28 @@ expressionToMidIR env s out (HUnaryOp _ pos optok expr)
     = case tokenString optok of
         "!" -> normalExpr OpNot
         "-" -> normalExpr OpNeg
+        _ -> error "Unknown unary operator :-("
     where normalExpr op = do opBlock <- newBlock [UnAssign pos out op (OperVar out)]
-                                        IRTestTrue
+                                        IRTestTrue pos
                              addEdge opBlock True s
                              expressionToMidIR env opBlock out expr
       
 expressionToMidIR env s out (HExprBoolLiteral _ pos bool)
     = do block <- newBlock
                   [ValAssign pos out (OperConst $ boolToInt bool)]
-                  IRTestTrue
+                  IRTestTrue pos
          addEdge block True s
          return block
 expressionToMidIR env s out (HExprIntLiteral _ pos i)
     = do block <- newBlock
                   [ValAssign pos out (OperConst i)]
-                  IRTestTrue
+                  IRTestTrue pos
          addEdge block True s
          return block
 expressionToMidIR env s out (HExprCharLiteral _ pos c)
     = do block <- newBlock
                   [ValAssign pos out (OperConst $ fromIntegral $ ord c)]
-                  IRTestTrue
+                  IRTestTrue pos
          addEdge block True s
          return block
 expressionToMidIR env s out (HExprStringLiteral _ pos _)
@@ -337,7 +366,7 @@ expressionToMidIR env s out (HLoadLoc senv pos loc)
         HPlainLocation _ pos tok ->
             let var' = fromJust $ lookup (tokenString tok) env
             in do assblock <- newBlock [ValAssign pos out (OperVar var')]
-                              IRTestTrue
+                              IRTestTrue pos
                   addEdge assblock True s
                   return assblock
         HArrayLocation _ pos tok iexpr ->
@@ -354,17 +383,20 @@ expressionToMidIR env s out (HLoadLoc senv pos loc)
                                          , BinAssign pos ts OpAdd
                                            (OperVar ts) (OperVar ti)
                                          , UnAssign pos out OpDeref (OperVar ts)]
-                               IRTestTrue
+                               IRTestTrue pos
                   addEdge loadBlock True s
                   failBounds <- newBlock []
                                 (IRTestFail ("Array index out of bounds at "
                                              ++ show pos))
+                                pos
                   checkBounds2 <- newBlock []
                                   (IRTestBinOp CmpGTE (OperVar ti) (OperConst 0))
+                                  pos
                   addEdge checkBounds2 False failBounds
                   addEdge checkBounds2 True loadBlock
                   checkBounds <- newBlock []
                                  (IRTestBinOp CmpLT (OperVar ti) (OperConst len))
+                                 pos
                   addEdge checkBounds False failBounds
                   addEdge checkBounds True checkBounds2
                   evaliexpr <- expressionToMidIR env checkBounds ti iexpr
@@ -375,7 +407,7 @@ expressionToMidIR env s out (HExprMethod _ _ call)
             do tmps <- replicateM (length exprs) genTmpVar
                callFunction <- newBlock [MidCall pos (Just out) (tokenString tok)
                                          (map OperVar tmps)]
-                               IRTestTrue
+                               IRTestTrue pos
                addEdge callFunction True s
                evalArgs <- foldl (>>=) (return callFunction)
                            [(\s' -> expressionToMidIR env s' t e)
@@ -385,7 +417,7 @@ expressionToMidIR env s out (HExprMethod _ _ call)
             do tmps <- mapM arg' args
                callFunction <- newBlock [MidCallout pos (Just out) (tokenString tok)
                                          (map arg'' tmps)]
-                               IRTestTrue
+                               IRTestTrue pos
                addEdge callFunction True s
                evalArgs <- foldl (>>=) (return callFunction)
                            [evalArg t a | (t,a) <- zip tmps args]
@@ -397,28 +429,11 @@ expressionToMidIR env s out (HExprMethod _ _ call)
                   evalArg (Right t) (HCArgExpr _ expr) s' = expressionToMidIR env s' t expr
                   arg'' (Left s) = Left s
                   arg'' (Right t) = Right $ OperVar t
+                  
 
--- | Check to see if the block leading to this block unconditionally
--- goes to this block.
-normalizeBlocks_rule_join_true :: RewriteRule MidBasicBlock Bool
-normalizeBlocks_rule_join_true g v
-    = do let preVerts = preVertices g v
-         guard $ 1 == length preVerts
-         let [w] = preVerts
-         guard $ v /= w -- make sure it's not a self-loop!
-         case blockTest (g !!! w) of
-           IRTestTrue -> guard $ hasEdgeTo g w True v
-           IRTestFalse -> guard $ hasEdgeTo g w False v
-           _ -> mzero
-         let newblock = BasicBlock
-                        { blockCode = blockCode (g !!! w) ++ blockCode (g !!! v)
-                        , blockTest = blockTest (g !!! v) }
-         let newouts = withStartVertex w (adjEdges g v)
-         gReplace [v,w] [(w,newblock)] newouts
-
-normalizeBlocks :: MidIRGraph -> MidIRGraph
-normalizeBlocks g = rewriteGraph (cullGraph g) rules
-    where rules = normalizeBlocks_rule_join_true
+---
+--- Show MidIRRepr!
+---
 
 instance Show MidIRRepr where
   show = render . pp
@@ -452,6 +467,7 @@ instance PP MidIRMethod where
                         
 
 midIRToGraphViz m = "digraph name {\n"
+                    ++ (showFields (midIRFields m))
                     ++ (concatMap showMethod (midIRMethods m))
                     ++ "}"
   where showMethod (MidIRMethod pos retp name args g)
@@ -460,3 +476,8 @@ midIRToGraphViz m = "digraph name {\n"
               ++ name ++ " -> " ++ name ++ "_" ++ show (startVertex g) ++ ";\n")
             where mlabel = (if retp then "ret " else "void ")
                            ++ name ++ " (" ++ intercalate ", " args ++ ")"
+        showField (MidIRField pos name msize)
+            = "{" ++ name ++ "|" ++ fromMaybe "val" (msize >>= return . show) ++ "}"
+        showFields fields = "_fields_ [shape=record,label=\"fields|{"
+                            ++ intercalate "|" (map showField fields)
+                            ++ "}\"];\n"

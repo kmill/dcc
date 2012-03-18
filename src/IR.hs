@@ -1,12 +1,17 @@
+{-# LANGUAGE FlexibleContexts, FlexibleInstances,
+    MultiParamTypeClasses, FunctionalDependencies, TypeSynonymInstances #-}
+
 module IR where
 
 import Text.ParserCombinators.Parsec
 import Text.Printf
 import Text.PrettyPrint.HughesPJ
---import Data.Graphs
+import Data.Graphs
 import AST
 import Data.List
 import Data.Int
+import Data.Maybe
+import Data.Either
 
 boolToInt :: Bool -> Int64
 boolToInt True = 1
@@ -14,7 +19,8 @@ boolToInt False = 0
 
 data BasicBlock a b = BasicBlock
     { blockCode :: [a]
-    , blockTest :: IRTest b }
+    , blockTest :: IRTest b
+    , blockTestPos :: SourcePos }
 
 type LowBasicBlock = BasicBlock LowIRInst LowOper
 type MidBasicBlock = BasicBlock MidIRInst MidOper
@@ -90,6 +96,18 @@ data CmpBinOp = CmpLT
 data CmpUnOp =  CmpZero
               | CmpNZero
 
+---
+--- LowIR
+---
+
+data LowIRRepr = LowIRRepr
+    { lowIRFields :: [LowIRField]
+    , lowIRStrings :: [(String, SourcePos, String)]
+    , lowIRMethods :: [LowIRMethod] }
+data LowIRField = LowIRField SourcePos String Int64
+data LowIRMethod = LowIRMethod SourcePos Bool String Int LowIRGraph
+type LowIRGraph = Graph LowBasicBlock Bool
+
 data LowOper = OperReg RegName
              | LowOperConst Int64
 
@@ -97,6 +115,7 @@ data MemAddr = MemAddr { memBaseReg :: RegName
                        , memDisplace :: Int
                        , memOffsetReg :: Maybe RegName
                        , memScalar :: Int } -- ^ [base + displace + offset * scalar]
+             | MemAddrPtr String
 
 data LowIRInst
     = RegBin SourcePos RegName BinOp LowOper LowOper -- ^ "r := r + r"
@@ -113,6 +132,17 @@ data LowIRInst
     | LoadMem SourcePos RegName MemAddr
     | LowCall SourcePos String Int -- ^ int is number of args
     | LowCallout SourcePos String Int
+
+---
+--- MidIR
+---
+
+data MidIRRepr = MidIRRepr
+    { midIRFields :: [MidIRField]
+    , midIRMethods :: [MidIRMethod] }
+data MidIRField = MidIRField SourcePos String (Maybe Int64)
+data MidIRMethod = MidIRMethod SourcePos Bool String [String] MidIRGraph
+type MidIRGraph = Graph MidBasicBlock Bool
 
 data MidOper = OperVar String
              | OperConst Int64
@@ -132,6 +162,33 @@ data MidIRInst
     | MidCall SourcePos (Maybe String) String [MidOper]
     | MidCallout SourcePos (Maybe String) String [Either String MidOper]
 
+class DeadChecker a b c | a -> c where
+    -- | For a given statement, returns a tuple of (unused, used)
+    -- variables.  The order is 1) forget about unused, and 2) leard
+    -- about used, so if a variable occurs in both unused and used, it
+    -- remains used.
+    checkExtents :: a -> ([c], [c])
+
+fromMidOper :: MidOper -> [String]
+fromMidOper (OperVar s) = [s]
+fromMidOper _ = []
+
+instance DeadChecker MidIRInst MidOper String where    
+    checkExtents (BinAssign _ dest op oper1 oper2)
+        = ([dest], fromMidOper oper1 ++ fromMidOper oper2)
+    checkExtents (UnAssign _ dest op oper)
+        = ([dest], fromMidOper oper)
+    checkExtents (ValAssign _ dest oper)
+        = ([dest], fromMidOper oper)
+    checkExtents (CondAssign _ dest _ cmp1 cmp2 src)
+        = ([dest], concatMap fromMidOper [cmp1, cmp2, src])
+    checkExtents (IndAssign _ dest oper)
+        = ([dest], fromMidOper oper)
+    checkExtents (MidCall _ mdest _ opers) 
+        = (maybeToList mdest, concatMap fromMidOper opers)
+    checkExtents (MidCallout _ mdest _ eopers)
+        = ( maybeToList mdest
+          , concatMap (either (const []) fromMidOper) eopers)
 
 instance Show CmpBinOp where
     show CmpLT = "<"
@@ -161,6 +218,7 @@ instance Show MemAddr where
     show (MemAddr base disp (Just offset) scalar)
         = printf "[%s + %s + %s * %s]"
           (show base) (show disp) (show offset) (show scalar)
+    show (MemAddrPtr s) = "$" ++ s
 
 instance Show X86Reg where
     show RAX = "%rax"
@@ -260,9 +318,10 @@ instance (Show a, Show b) => Show (BasicBlock a b) where
 --      = "{" ++ intercalate ", " (map show code) ++ "} (" ++ show test ++ ")"
 
 instance (Show a, Show b) => PP (BasicBlock a b) where
-  pp (BasicBlock code test)
+  pp (BasicBlock code test pos)
       = (vcat $ map (text . show) code)
         $+$ (text $ "(" ++ show test ++ ")")
+        <+> (text $ showPos pos)
 
 --instance (Show a, Show b) => PP (LabGraph (BasicBlock a b) Bool) where
 --    show (LabGraph gr l)

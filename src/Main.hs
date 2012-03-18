@@ -18,6 +18,7 @@ import Text.Printf
 import Unify
 import CodeGenerate
 import MidIR
+import LowIR
  
 -- | The main entry point to @dcc@.  See 'CLI' for command line
 -- arguments.
@@ -33,6 +34,7 @@ main = do args <- getArgs
             TargetParse -> doParseFile opts ifname input
             TargetInter -> doCheckFile opts ifname input
             TargetMidIR -> doMidIRFile opts ifname input
+            TargetLowIR -> doLowIRFile opts ifname input
             TargetDefault -> doCheckFile opts ifname input
             TargetCodeGen -> doGenerateCode opts ifname input
             _ -> error "No such target"
@@ -129,6 +131,37 @@ doMidIRFile opts ifname input
                                            midir = generateMidIR hast
                                        in do
                                          putStrLn $ midIRToGraphViz midir
+                            Left (udata, errors) ->
+                                do putStrLn "Semantic errors:"
+                                   putStrLn ""
+                                   sequence_ [putStrLn (showSemError (lines input) udata e)
+                                              | e <- errors]
+                                   exitWith $ ExitFailure 4
+              errors -> do printScannerResult errors
+                           exitWith $ ExitFailure 1
+    where getErrors = filter isTokenError
+          isTokenError (TokenError {}) = True
+          isTokenError _ = False
+
+doLowIRFile :: CompilerOpts -> String -> String -> IO ()
+doLowIRFile opts ifname input 
+    = case runScanner opts ifname input of
+        Left err -> do reportErr (lines input) err
+                       exitWith $ ExitFailure 1
+        Right v ->
+            case getErrors v of
+              [] -> case runDParser opts ifname v of
+                      Left err ->
+                          do reportErr (lines input) err
+                             exitWith $ ExitFailure 2
+                      Right r ->
+                          case doSemanticCheck r of
+                            Right _ -> let hast = makeHybridAST r
+                                           midir = generateMidIR hast
+                                           lowir = toLowIR midir
+                                       in do
+                                         --putStrLn $ show lowir
+                                         putStrLn $ lowIRtoGraphViz lowir 
                             Left (udata, errors) ->
                                 do putStrLn "Semantic errors:"
                                    putStrLn ""

@@ -11,6 +11,7 @@ import qualified Data.Set as Set
 import Data.Maybe
 import Text.Regex
 import Debug.Trace
+import qualified Data.Traversable as Trav
 
 type Vertex = Int
 
@@ -75,14 +76,19 @@ replaceVertices g vs newvs newedges
           edges' = (filter (\(s,_,_) -> s `notElem` vs) (edges g)) ++ newedges
       in createGraph newvertices edges' (startVertex g)
 
-testReplVerts :: IO ()
-testReplVerts
-    = let g = createGraph [(1,1), (2,2), (3,3), (4,4)]
-              [(1,True,2), (2,True,3), (3,True,4), (2,False,3)]
-              1
-      in do putStrLn $ graphToGraphViz g "" ""
-            let g' = replaceVertices g [2,3] [(2,10)] [(2,True,4)]
-            putStrLn $ graphToGraphViz g' "" ""
+---
+--- Maps
+---
+
+mapG :: Ord e => (v -> w) -> Graph v e -> Graph w e
+mapG f (Graph m st) = Graph (Map.map (\(v, es) -> (f v, es)) m) st
+
+mapGM :: (Monad m, Ord e) => (v -> m w) -> Graph v e -> m (Graph w e)
+mapGM f (Graph m st) =
+    do m' <- flip Trav.mapM m (\(v, es) ->
+                               do v' <- f v
+                                  return (v', es))
+       return $ Graph m' st
 
 ---
 --- Graph algorithms!
@@ -180,99 +186,15 @@ graphToGraphVizSubgraph g namePrefix graphPrefix
       ++ graphToGraphViz' g namePrefix
       ++ "}\n"
 
--- type Vertex = Int
--- type Table a = Array Vertex a
--- type Graph e = Table [(e, Vertex)]
--- type Bounds  = (Vertex, Vertex)
--- type Edge e = (Vertex, e, Vertex)
+---
+--- Test
+---
 
--- type Labeling a = Vertex -> a
--- data LabGraph n e = LabGraph (Graph e) (Labeling n)
- 
--- vertices (LabGraph gr _) = indices gr
- 
--- labels (LabGraph gr l) = map l (indices gr)
-
-
--- unfoldG :: (Ord s) => (s -> (n, [(e, s)])) -> s -> (Vertex, LabGraph n e)
--- unfoldG f r = (r', res)
---     where ([r'], res) = unfoldGMany f [r]
-
--- unfoldGMany :: (Ord s) => (s -> (n, [(e, s)])) -> [s] -> ([Vertex], LabGraph n e)
--- unfoldGMany f roots = runST ( unfoldGManyST f roots )
-
--- foldG :: (Eq r) => r -> (Vertex -> [(e, r)] -> r) -> Graph e -> Vertex -> r
--- foldG i f g v = foldGAll i f g ! v
-
--- foldGAll :: (Eq r) => r -> (Vertex -> [(e, r)] -> r) -> Graph e -> Table r
--- foldGAll bot f gr = finalTbl
---     where finalTbl = fixedPoint updateTbl initialTbl
---           initialTbl = listArray bnds (replicate (rangeSize bnds) bot)
- 
---           fixedPoint f x = fp x
---               where fp z = if z == z' then z else fp z'
---                         where z' = f z
---           updateTbl tbl = listArray bnds $ map recompute $ indices gr
---               where recompute v = f v [(b, tbl!k) | (b, k) <- gr!v]
---           bnds = bounds gr
-
--- -- | Build a graph from a list of edges.
--- buildG :: Bounds -> [Edge e] -> Graph e
--- buildG bounds0 edges0 = accumArray (flip (:)) [] bounds0 [(v, (l,w)) | (v,l,w) <- edges0]
- 
--- -- | The graph obtained by reversing all edges.
--- transposeG  :: Graph e -> Graph e
--- transposeG g = buildG (bounds g) (reverseE g)
- 
--- reverseE    :: Graph e -> [Edge e]
--- reverseE g   = [ (w, l, v) | (v, l, w) <- edges g ]
-
-
--- showGraphViz (LabGraph gr lab)
---     = "digraph name {\n"
---       ++ "rankdir=LR;\n"
---       ++ (concatMap showNode $ indices gr)
---       ++ (concatMap showEdge $ edges gr)
---       ++ "}\n"
---     where showEdge (from, t, to) = show from ++ " -> " ++ show to ++
--- 				   " [label = \"" ++ show t ++ "\"];\n"
---           showNode v = show v ++ " [label = " ++ (show $ lab v) ++ "];\n"
-          
--- instance (Show a, Show b) => Show (LabGraph a b) where
---     show = showGraphViz
-          
--- edges :: Graph e -> [Edge e]
--- edges g = [ (v, l, w) | v <- indices g, (l, w) <- g!v ]
-
--- unfoldGManyST :: (Ord a) => (a -> (c, [(b, a)]))
---              -> [a] -> ST s ([Vertex], LabGraph c b)
--- unfoldGManyST gen seeds =
---      do mtab <- newSTRef (Map.empty)
---         allNodes <- newSTRef []
---         vertexRef <- newSTRef firstId
---         let allocVertex = 
---                 do vertex <- readSTRef vertexRef
---                    writeSTRef vertexRef (vertex + 1)
---                    return vertex
---         let cyc src =
---              do probe <- memTabFind mtab src
---                 case probe of
---                    Just result -> return result
---                    Nothing -> do
---                      v <- allocVertex
---                      memTabBind src v mtab 
---                      let (lab, deps) = gen src
---                      ws <- mapM (cyc . snd) deps
---                      let res = (v, lab, [(fst d, w) | d <- deps | w <- ws])
---                      modifySTRef allNodes (res:)
---                      return v
---         mapM_ cyc seeds
---         list <- readSTRef allNodes
---         seedsResult <- (return . map fromJust) =<< mapM (memTabFind mtab) seeds
---         lastId <- readSTRef vertexRef
---         let cycamore = array (firstId, lastId-1) [(i, k) | (i, a, k) <- list]
---         let labels = array (firstId, lastId-1) [(i, a) | (i, a, k) <- list]
---         return (seedsResult, LabGraph cycamore (labels !))
---    where firstId = 0::Vertex
---          memTabFind mt key = return . Map.lookup key =<< readSTRef mt
---          memTabBind key val mt = modifySTRef mt (Map.insert key val)
+testReplVerts :: IO ()
+testReplVerts
+    = let g = createGraph [(1,1), (2,2), (3,3), (4,4)]
+              [(1,True,2), (2,True,3), (3,True,4), (2,False,3)]
+              1
+      in do putStrLn $ graphToGraphViz g "" ""
+            let g' = replaceVertices g [2,3] [(2,10)] [(2,True,4)]
+            putStrLn $ graphToGraphViz g' "" ""
