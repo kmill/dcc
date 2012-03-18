@@ -163,14 +163,14 @@ instance Show MemAddr where
           (show base) (show disp) (show offset) (show scalar)
 
 instance Show X86Reg where
-    show RAX = "%ax"
-    show RBX = "%bx"
-    show RCX = "%cx"
-    show RDX = "%dx"
-    show RSP = "%sp"
-    show RBP = "%bp"
-    show RSI = "%si"
-    show RDI = "%di"
+    show RAX = "%rax"
+    show RBX = "%rbx"
+    show RCX = "%rcx"
+    show RDX = "%rdx"
+    show RSP = "%rsp"
+    show RBP = "%rbp"
+    show RSI = "%rsi"
+    show RDI = "%rdi"
     show R8 = "%r8"
     show R9 = "%r9"
     show R10 = "%r10"

@@ -400,7 +400,7 @@ expressionToMidIR env s out (HExprMethod _ _ call)
 
 -- | Check to see if the block leading to this block unconditionally
 -- goes to this block.
-normalizeBlocks_rule_join_true:: RewriteRule MidBasicBlock Bool
+normalizeBlocks_rule_join_true :: RewriteRule MidBasicBlock Bool
 normalizeBlocks_rule_join_true g v
     = do let preVerts = preVertices g v
          guard $ 1 == length preVerts
