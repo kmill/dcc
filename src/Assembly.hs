@@ -81,7 +81,7 @@ testCode ((BasicBlock code test pos), edgeMap) =
 
 basicBlockCode :: LowIRGraph -> Vertex -> [String]
 basicBlockCode (Graph graphMap _) vertex = instrsCode ++ (testCode vPair)
-    where instrsCode = concat $ map instrCode code
+    where instrsCode = concatMap instrCode code
           (Just vPair) = Map.lookup vertex graphMap
           (BasicBlock code _ _, _) = vPair
 
