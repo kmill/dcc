@@ -163,6 +163,7 @@ doLowIRFile opts ifname input
                                        in do
                                          --putStrLn $ show lowir
                                          putStrLn $ lowIRtoGraphViz lowir 
+                                         putStrLn . unlines $ lowIRReprCode lowir
                             Left (udata, errors) ->
                                 do putStrLn "Semantic errors:"
                                    putStrLn ""

@@ -1,6 +1,7 @@
 module Assembly where
 
 import IR
+import Control.Applicative
 
 binOpInstr :: BinOp -> String
 binOpInstr OpAdd = "addq"
@@ -84,12 +85,28 @@ basicBlockCode (BasicBlock code test testPos) = instrsCode ++ (testCode test)
 
 methodCode :: LowIRMethod -> [String]
 methodCode (LowIRMethod pos retP name numArgs localsSize irGraph) =
-    [ "# TODO: Implement method calls" ]
+    [ "# TODO: Implement method calls" 
+    , name ++ ":"]
 
+fieldsCode :: LowIRField -> [String]
+fieldsCode (LowIRField _ name size) = [ "#Make a field for " ++ name
+                                      , name ++ ":"
+                                      , "\t.long " ++ (show size)]
+
+stringCode (name, _, str) = [ name ++ ":"
+                              , "\t.ascii " ++ (show str)]
 --
 -- Full translation
 --
 
 lowIRReprCode :: LowIRRepr -> [String]
 lowIRReprCode (LowIRRepr fields strings methods) =
-    [ "# TODO: Write full translation code" ]
+  [ "# TODO: Write full translation code"]
+  ++ [".section .data"]
+  ++ concatMap fieldsCode fields
+--  ++ ["STRINGS:"]
+  ++ concatMap stringCode strings
+  ++ [".glbl main"]
+  ++ concatMap methodCode methods
+  ++ [ "#End of Repr" ]
+  
