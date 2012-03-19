@@ -93,7 +93,7 @@ methodCode :: LowIRMethod -> [String]
 methodCode (LowIRMethod pos retP name numArgs localsSize irGraph) =
   [ name ++ ":"
   , "#TODO: Implement arguments" ]
-  ++ concatMap (basicBlockCode irGraph) [ v | (v,bcc) <- labels irGraph]
+  ++ concatMap (basicBlockCode irGraph) [ vertices irGraph]
   ++ ["ret"]
 
 fieldsCode :: LowIRField -> [String]
