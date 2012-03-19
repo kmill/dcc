@@ -71,19 +71,90 @@ instrCode s = ["#Not Implemented: " ++ (show s)]
 -- Code for block-ending tests
 -- 
 
-testCode :: (LowBasicBlock, Map.Map Bool Vertex) -> [String]
-testCode ((BasicBlock code test pos), edgeMap) =
-    [ "# TODO: Implement basic block tests" ]
+testCode :: (LowBasicBlock, Map.Map Bool Vertex) -> LowIRGraph -> [String]
+testCode ((BasicBlock code test pos), edgeMap) irgraph =
+    let mfVertex = (Map.lookup False edgeMap)
+        mtVertex = (Map.lookup True edgeMap)
+        trueJmp = case mtVertex of
+          Nothing -> ""
+          Just tVertex -> "jmp " ++ (blockLabel $ irgraph !!! tVertex)
+        falseJmp = case mfVertex of
+          Nothing -> ""
+          Just fVertex -> "jne " ++ (blockLabel $ irgraph !!! fVertex)
+        resultCode = testInstrCode test
+    in [ "# TODO: Implement basic block tests"]
+       ++ resultCode
+       ++ ["popq " ++ (show RAX)
+          , "cmp " ++ (show RAX) ++ ", " ++ (show . boolToInt $ True)
+          , falseJmp
+          , trueJmp]
+
+
+testInstrCode :: (Show b) => IRTest b -> [String]
+
+testInstrCode IRTestTrue = 
+  [ "#IRTestTrue"
+  , "pushq " ++ (show . boolToInt $ True)]
+
+testInstrCode IRTestFalse = 
+  [ "#IRTestFalse"
+  , "pushq " ++ (show . boolToInt $ False)]
+
+testInstrCode (IRTestBinOp cmp b1 b2) = 
+  let cmpC = binInstr "cmpq " b1 b2
+  in
+   [ "#IRTestBinOp"
+   , cmpC
+   , binInstr (cmovInstr cmp) (LowOperConst 1) RAX
+   , "pushq " ++ (show RAX) ]
+   
+        
+testInstrCode (IRTestNot b) = 
+  testInstrCode (IRTest b)
+  ++ [ "#IRTestNot"
+     , "popq " ++ (show RAX)
+     , "subc " ++ (show $ LowOperConst 1) ++ ", " ++ (show RAX)
+     , "pushq " ++ (show RAX)]
+  
+testInstrCode (IRReturn mVar) = 
+  let retVars = case mVar of
+        Just b -> "pushq " ++ (show b)
+        Nothing -> ""
+  in
+   [ "#IRReturn"
+   , retVars
+   , "ret"
+   , "pushq " ++ (show . boolToInt $ True)]
+
+testInstrCode (IRTestFail mVar) =
+  let comment = case mVar of
+        Just b -> "#Failed on " ++ (show b)
+        Nothing -> "#Failed on Nothing"
+  in
+   [ "#IRTestFail"
+   , comment
+   , "pushq " ++ (show . boolToInt $ False)]
+
+testInstrCode (IRTest b) = ["pushq " ++ (show b)]
+
+
+--
+-- Code to generate a Block Label from a LowBasicBlock
+--
+
+blockLabel :: LowBasicBlock -> String
+blockLabel _ = "#Generate a Block Label"
 
 --
 -- Code for whole basic blocks
 --
 
 basicBlockCode :: LowIRGraph -> Vertex -> [String]
-basicBlockCode (Graph graphMap _) vertex = instrsCode ++ (testCode vPair)
+basicBlockCode irGraph@(Graph graphMap _) vertex = [bLabel] ++ instrsCode ++ (testCode vPair irGraph)
     where instrsCode = concatMap instrCode code
           (Just vPair) = Map.lookup vertex graphMap
-          (BasicBlock code _ _, _) = vPair
+          (bb@(BasicBlock code _ _), _) = vPair
+          bLabel = blockLabel bb
 
 --
 -- Translate method
@@ -93,7 +164,7 @@ methodCode :: LowIRMethod -> [String]
 methodCode (LowIRMethod pos retP name numArgs localsSize irGraph) =
   [ name ++ ":"
   , "#TODO: Implement arguments" ]
-  ++ concatMap (basicBlockCode irGraph) [ vertices irGraph]
+  ++ concatMap (basicBlockCode irGraph) (vertices irGraph)
   ++ ["ret"]
 
 fieldsCode :: LowIRField -> [String]
