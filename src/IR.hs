@@ -98,8 +98,8 @@ data CmpBinOp = CmpLT
               | CmpGTE
               | CmpEQ
               | CmpNEQ
-              | CmpAnd
-              | CmpOr
+--              | CmpAnd
+--              | CmpOr
 
 data CmpUnOp =  CmpZero
               | CmpNZero
