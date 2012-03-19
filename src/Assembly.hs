@@ -2,8 +2,8 @@ module Assembly where
 
 import IR
 import qualified Data.Map as Map
-import Control.Applicative
 import Data.Graphs
+import Text.ParserCombinators.Parsec.Pos
 
 binOpInstr :: BinOp -> String
 binOpInstr OpAdd = "addq"
@@ -13,13 +13,19 @@ binOpInstr OpDiv = "divq"
 binOpInstr OpMod = "modq"
 binOpInstr _ = ""
 
+cmpBinOpString :: CmpBinOp -> String
+cmpBinOpString CmpLT = "l"
+cmpBinOpString CmpGT = "g"
+cmpBinOpString CmpLTE = "le"
+cmpBinOpString CmpGTE = "ge"
+cmpBinOpString CmpEQ = "e"
+cmpBinOpString CmpNEQ = "ne"
+
 cmovInstr :: CmpBinOp -> String
-cmovInstr CmpLT = "cmovlq"
-cmovInstr CmpGT = "cmovgq"
-cmovInstr CmpLTE = "cmovleq"
-cmovInstr CmpGTE = "cmovgeq"
-cmovInstr CmpEQ = "cmoveq"
-cmovInstr CmpNEQ = "cmovneq"
+cmovInstr cop = "cmov" ++ (cmpBinOpString cop) ++ "q"
+
+jmpInstr :: CmpBinOp -> String
+jmpInstr cop = "j" ++ (cmbBinOpString cop)
 
 binInstr :: (Show a, Show b) => String -> a -> b -> String
 binInstr cmd oper1 oper2 = cmd ++ " " ++ (show oper1) ++ ", " ++ (show oper2)
@@ -66,49 +72,83 @@ instrCode (LowCall pos label _) = [ "call " ++ label ]
 
 instrCode (LowCallout pos label _) = [ "call " ++ label ]
 
-instrCode s = ["#Not Implemented: " ++ (show s)]
+instrCode s = ["# Blargh! :-( Shouldn't have symbolic registers here: " ++ (show s)]
+
 -- 
 -- Code for block-ending tests
 -- 
 
-testCode :: (LowBasicBlock, Map.Map Bool Vertex) -> [String]
-testCode ((BasicBlock code test pos), edgeMap) =
-    [ "# TODO: Implement basic block tests" ]
+testCode :: LowIRGraph -> Vertex -> [String]
+testCode (Graph graphMap _) vertex = 
+    let (Just vPair) = Map.lookup vertex graphMap
+        (BasicBlock _ test pos, edgeMap) = vPair
+        (Just trueEdge) = Map.lookup True edgeMap
+        (Just falseEdge) = Map.lookup False edgeMap
+        trueLabel = vertexLabel trueEdge
+        falseLabel = vertexLabel falseEdge
+    in case test of
+        IRTestTrue -> [ "jmp " ++ trueLabel ]
+        IRTestFalse -> [ "jmp " ++ falseLabel ]
+        IRTestBinOp cop oper1 oper2 ->
+            [ binInstr "cmpq" oper1 oper2
+            , (jmpInstr cop) ++ " " ++ trueLabel
+            , "jmp " ++ falseLabel ]
+        IRTest oper ->
+            [ binInstr "cmpq" (LowOperConst 0) oper1
+            , "jnz " ++ trueLabel
+            , "jmp " ++ falseLabel ]
+        IRTestNot oper ->
+            [ binInstr "cmpq" (LowOperConst 0) oper1
+            , "jz " ++ trueLabel
+            , "jmp " ++ falseLabel ]
+        IRReturn (Just oper) -> [ binInstr "movq" oper RAX ]
+        IRReturn (Nothing) -> []
+        IRTestFail _ -> [ "# What is this?" ]
 
 --
 -- Code for whole basic blocks
 --
 
+vertexLabel :: Vertex -> Label
+vertexLabel = "block_" ++ (show vertex) ++ "_start:"
+
 basicBlockCode :: LowIRGraph -> Vertex -> [String]
-basicBlockCode (Graph graphMap _) vertex = instrsCode ++ (testCode vPair)
+basicBlockCode graph@(Graph graphMap _) vertex = 
+    [ vertexLabel vertex ] ++ instrsCode ++ (testCode graph vertex)
     where instrsCode = concatMap instrCode code
           (Just vPair) = Map.lookup vertex graphMap
-          (BasicBlock code _ _, _) = vPair
+          (BasicBlock code _ pos, _) = vPair
 
 --
 -- Translate method
 --
 
+calleeSaved :: [X86Reg]
+calleeSaved = [ RBP, RBX, R12, R13, R14, R15 ]
+
 methodCode :: LowIRMethod -> [String]
 methodCode (LowIRMethod pos retP name numArgs localsSize irGraph) =
-  [ name ++ ":"
-  , "#TODO: Implement arguments" ]
-  ++ concatMap (basicBlockCode irGraph) [ vertices irGraph]
-  ++ ["ret"]
+    [ name ++ ":"
+    , "enter $(8 * " ++ (show localsSize) ++ "), $0" ] ++
+    map (unInstr "pushq") calleeSaved ++
+    concatMap (basicBlockCode irGraph) (vertices irGraph) ++
+    map (unInstr "popq") (reverse calleeSaved) ++
+    [ "leave"
+    , "ret"]
 
 fieldsCode :: LowIRField -> [String]
 fieldsCode (LowIRField _ name size) = [ name ++ ":"
                                       , "\t.long " ++ (show size)]
-
+stringCode :: (String, SourcePos, String) -> [String]
 stringCode (name, _, str) = [ name ++ ":"
-                              , "\t.ascii " ++ (show str)]
+                            , "\t.ascii " ++ (show str)]
 --
 -- Full translation
 --
 
 lowIRReprCode :: LowIRRepr -> [String]
 lowIRReprCode (LowIRRepr fields strings methods) = [".section .data"]
-  ++ concatMap fieldsCode fields
-  ++ concatMap stringCode strings
-  ++ [".glbl main"]
-  ++ concatMap methodCode methods  
+    ++ concatMap fieldsCode fields
+    ++ concatMap stringCode strings
+    ++ [".glbl main"]
+    ++ concatMap methodCode methods  
