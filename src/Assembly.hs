@@ -1,6 +1,8 @@
 module Assembly where
 
 import IR
+import qualified Data.Map as Map
+import Data.Graphs
 
 binOpInstr :: BinOp -> String
 binOpInstr OpAdd = "addq"
@@ -67,16 +69,19 @@ instrCode (LowCallout pos label _) = [ "call " ++ label ]
 -- Code for block-ending tests
 -- 
 
-testCode :: IRTest LowOper -> [String]
-testCode _ = [ "# TODO: Implement basic block tests" ]
+testCode :: (LowBasicBlock, Map.Map Bool Vertex) -> [String]
+testCode ((BasicBlock code test pos), edgeMap) =
+    [ "# TODO: Implement basic block tests" ]
 
 --
 -- Code for whole basic blocks
 --
 
-basicBlockCode :: LowBasicBlock -> [String]
-basicBlockCode (BasicBlock code test testPos) = instrsCode ++ (testCode test)
+basicBlockCode :: LowIRGraph -> Vertex -> [String]
+basicBlockCode (Graph graphMap _) vertex = instrsCode ++ (testCode vPair)
     where instrsCode = concat $ map instrCode code
+          (Just vPair) = Map.lookup vertex graphMap
+          (BasicBlock code _ _, _) = vPair
 
 --
 -- Translate method
