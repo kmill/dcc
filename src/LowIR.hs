@@ -7,7 +7,7 @@ import Control.Applicative
 import Control.Monad
 import Control.Monad.State
 import Data.Graphs
-import AST (PP(..), SourcePos)
+import AST (PP(..), SourcePos, showPos)
 import qualified Data.Map as Map
 import Text.PrettyPrint.HughesPJ
 import Data.List

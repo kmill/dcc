@@ -25,6 +25,7 @@ data BasicBlock a b = BasicBlock
 
 type LowBasicBlock = BasicBlock LowIRInst LowOper
 type MidBasicBlock = BasicBlock MidIRInst MidOper
+type IRGraph a = Graph a Bool
 
 -- | This is the order of arguments in registers for the ABI.
 -- 'Nothing' represents that the argument comes from the stack.
@@ -120,7 +121,7 @@ data LowIRMethod = LowIRMethod
     , lowIRMethodNumArgs :: Int 
     , lowIRMethodLocalsSize :: Int64
     , lowIRMethodIRGraph :: LowIRGraph }
-type LowIRGraph = Graph LowBasicBlock Bool
+type LowIRGraph = IRGraph LowBasicBlock
 
 data LowOper = OperReg RegName
              | LowOperConst Int64
@@ -158,7 +159,7 @@ data MidIRRepr = MidIRRepr
     , midIRMethods :: [MidIRMethod] }
 data MidIRField = MidIRField SourcePos String (Maybe Int64)
 data MidIRMethod = MidIRMethod SourcePos Bool String [String] MidIRGraph
-type MidIRGraph = Graph MidBasicBlock Bool
+type MidIRGraph = IRGraph MidBasicBlock
 
 data MidOper = OperVar String
              | OperConst Int64
@@ -178,6 +179,11 @@ data MidIRInst
     | IndAssign SourcePos String MidOper
     | MidCall SourcePos (Maybe String) String [MidOper]
     | MidCallout SourcePos (Maybe String) String [Either String MidOper]
+      
+      
+---
+--- DeadChecker
+---
 
 class DeadChecker a b c | a -> c where
     -- | For a given statement, returns a tuple of (unused, used)
@@ -208,7 +214,13 @@ instance DeadChecker MidIRInst MidOper String where
           , concatMap (either (const []) fromMidOper) eopers)
           
 
---normalizeBlocks :: MidIRGraph -> MidIRGraph
+---
+--- BasicBlock normalization
+---
+
+-- | Runs a couple of rules on the ir graph to 'normalize' the graph
+-- (for instance, to make basic blocks as big as possible).
+normalizeBlocks :: IRGraph (BasicBlock a b) -> IRGraph (BasicBlock a b)
 normalizeBlocks g = rewriteGraph (cullGraph g) rules
     where rules = normalizeBlocks_rule_join_true
                   ||| normalizeBlocks_rule_join_conditional
@@ -216,7 +228,7 @@ normalizeBlocks g = rewriteGraph (cullGraph g) rules
     
 -- | Check to see if the block leading to this block unconditionally
 -- goes to this block.
---normalizeBlocks_rule_join_true :: RewriteRule MidBasicBlock Bool
+normalizeBlocks_rule_join_true :: RewriteRule (BasicBlock a b) Bool
 normalizeBlocks_rule_join_true g v
     = do let preVerts = preVertices g v
          guard $ 1 == length preVerts
@@ -233,6 +245,7 @@ normalizeBlocks_rule_join_true g v
          let newouts = withStartVertex w (adjEdges g v)
          gReplace [v,w] [(w,newblock)] newouts
 
+normalizeBlocks_rule_join_conditional :: RewriteRule (BasicBlock a b) Bool
 normalizeBlocks_rule_join_conditional g v 
     = do let preVerts = preVertices g v 
          guard $ 1 == length preVerts 
@@ -247,6 +260,10 @@ normalizeBlocks_rule_join_conditional g v
          let newouts = withStartVertex w (adjEdges g v)
          gReplace [v,w] [(w,newblock)] newouts
              
+
+---
+--- Show!
+---
 
 instance Show CmpBinOp where
     show CmpLT = "<"
@@ -385,11 +402,3 @@ instance (Show a, Show b) => PP (BasicBlock a b) where
       = (vcat $ map (text . show) code)
         $+$ (text $ "(" ++ show test ++ ")")
         <+> (text $ showPos pos)
-
---instance (Show a, Show b) => PP (LabGraph (BasicBlock a b) Bool) where
---    show (LabGraph gr l)
---        = vcat $ map (\v -> text ("L" ++ v ++ ":")
---                            $+$ (nest 3 (pp $ l v))
-
-showPos :: SourcePos -> String
-showPos pos = printf "line %i, col %i" (sourceLine pos) (sourceColumn pos)
