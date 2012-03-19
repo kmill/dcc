@@ -221,7 +221,7 @@ statementToMidIR env s c b (HAssignSt senv pos loc op expr)
                   storeBlock <- newBlock [ BinAssign pos ti OpMul
                                             (OperVar ti) (OperConst 8)
                                          , BinAssign pos td OpAdd
-                                           (OperVar var') (OperVar ti)
+                                           (OperLabel var') (OperVar ti)
                                          , IndAssign pos td (OperVar ts)]
                                 IRTestTrue pos
                   addEdge storeBlock True s
@@ -381,6 +381,7 @@ expressionToMidIR env s out (HExprMethod _ _ call)
                                          (map OperVar tmps)]
                                IRTestTrue pos
                addEdge callFunction True s
+               -- Evaluate args in right-to-left order
                evalArgs <- foldl (>>=) (return callFunction)
                            [(\s' -> expressionToMidIR env s' t e)
                             | (t,e) <- zip tmps exprs]
@@ -391,16 +392,31 @@ expressionToMidIR env s out (HExprMethod _ _ call)
                                          (map arg'' tmps)]
                                IRTestTrue pos
                addEdge callFunction True s
+               -- Evaluate args in right-to-left odrer
                evalArgs <- foldl (>>=) (return callFunction)
                            [evalArg t a | (t,a) <- zip tmps args]
                return evalArgs
-            where arg' (HCArgString _ s) = return $ Left (tokenString s)
-                  arg' (HCArgExpr _ expr) = do t <- genTmpVar
-                                               return $ Right t
-                  evalArg t (HCArgString _ str) s' = return s'
-                  evalArg (Right t) (HCArgExpr _ expr) s' = expressionToMidIR env s' t expr
-                  arg'' (Left s) = Left s
-                  arg'' (Right t) = Right $ OperVar t
+            where
+              -- Takes a callout arg and returns either the string
+              -- literal or a temporary variable in which to put the
+              -- evaluated argument.
+              arg' :: HCalloutArg a -> State MidIRState (Either String String)
+              arg' (HCArgString _ s) = return $ Left (tokenString s)
+              arg' (HCArgExpr _ expr) = do t <- genTmpVar
+                                           return $ Right t
+                  
+              evalArg :: Either String String -> HCalloutArg a -> Vertex
+                      -> State MidIRState Vertex
+              -- If it's a string we skip evaluating the argument
+              evalArg t (HCArgString _ str) s' = return s'
+              -- But if it's an expression, we evaluate it into the
+              -- temporary variable.
+              evalArg (Right t) (HCArgExpr _ expr) s' = expressionToMidIR env s' t expr
+              
+              -- Sets up the Either properly for the MidCallout.
+              arg'' :: Either String String -> Either String MidOper
+              arg'' (Left s) = Left s
+              arg'' (Right t) = Right $ OperVar t
                   
 
 ---

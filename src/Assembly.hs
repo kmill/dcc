@@ -5,6 +5,8 @@ import qualified Data.Map as Map
 import Data.Graphs
 import Text.ParserCombinators.Parsec.Pos
 
+type Label = String
+
 binOpInstr :: BinOp -> String
 binOpInstr OpAdd = "addq"
 binOpInstr OpSub = "subq"
