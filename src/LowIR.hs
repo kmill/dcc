@@ -7,7 +7,7 @@ import Control.Applicative
 import Control.Monad
 import Control.Monad.State
 import Data.Graphs
-import AST (PP(..), SourcePos)
+import AST (PP(..), SourcePos, showPos)
 import qualified Data.Map as Map
 import Text.PrettyPrint.HughesPJ
 import Data.List
@@ -78,7 +78,8 @@ methodToLowIR glob (MidIRMethod pos retp name args mir)
          lir <- mapGM (basicBlockToLowIR glob) mir
          makeargs <- makeArgs
          lir' <- extendWithArgs lir
-         return $ LowIRMethod pos retp name (length args) (normalizeBlocks lir')
+         return $ LowIRMethod pos retp name
+                    (length args) (fromIntegral 0) (normalizeBlocks lir')
     where extendWithArgs ir
               = let st' = freshVertex ir
                 in do argcode <- makeArgs    
@@ -115,6 +116,7 @@ operToLoadCode :: Globals -> SourcePos -> MidOper
                -> State LowIRState ([LowIRInst], LowOper)
 operToLoadCode g pos (OperVar s) = varToLoadCode g pos s
 operToLoadCode g pos (OperConst v) = return $ ([], LowOperConst v)
+operToLoadCode g pos (OperLabel s) = return $ ([], LowOperLabel s)
 
 destToStoreCode :: Globals -> SourcePos -> String
                 -> State LowIRState ([LowIRInst], RegName)
@@ -180,7 +182,15 @@ statementToLowIR glob inst =
       UnAssign pos dest op oper ->
           do (code1, reg1) <- operToLoadCode glob pos oper
              (coded, regd) <- destToStoreCode glob pos dest
-             return $ code1 ++ [RegUn pos regd op reg1] ++ coded
+             case op of
+               OpDeref ->
+                   let addr = case reg1 of
+                                OperReg r -> MemAddr r 0 Nothing 0
+                                LowOperConst i ->
+                                    error "shouldn't addr a literal location! :-("
+                                LowOperLabel s -> MemAddrPtr s
+                   in return $ code1 ++ [LoadMem pos regd addr] ++ coded
+               _ -> return $ code1 ++ [RegUn pos regd op reg1] ++ coded
       ValAssign pos dest oper ->
           do (code1, reg1) <- operToLoadCode glob pos oper
              (coded, regd) <- destToStoreCode glob pos dest
@@ -263,10 +273,10 @@ instance PP LowIRRepr where
             methods = vcat [pp m | m <- lowIRMethods m]
 
 instance PP LowIRMethod where
-    pp (LowIRMethod pos retp name nargs ir)
+    pp (LowIRMethod pos retp name nargs locspace ir)
         = text ("{" ++ show pos ++ "}")
            $+$ (if retp then text "ret" else text "void") <+> text name
-           <+> text (show nargs)
+           <+> text (show nargs) <+> brackets (text (show locspace))
            $+$ (text $ "start = " ++ show (startVertex ir))
            $+$ (nest 3 (vcat [showVertex v | v <- labels ir]))
         where showVertex (i,bb) = text (show i)
@@ -281,12 +291,13 @@ lowIRtoGraphViz m = "digraph name {\n"
                     ++ (showStrings (lowIRStrings m))
                     ++ (concatMap showMethod (lowIRMethods m))
                     ++ "}"
-  where showMethod (LowIRMethod pos retp name nargs g)
+  where showMethod (LowIRMethod pos retp name nargs locspace g)
             = graphToGraphVizSubgraph g (name ++ "_")
               (name ++ " [shape=doubleoctagon,label="++show mlabel++"];\n"
               ++ name ++ " -> " ++ name ++ "_" ++ show (startVertex g) ++ ";\n")
             where mlabel = (if retp then "ret " else "void ")
                            ++ name ++ " " ++ show nargs
+                           ++ " [" ++ show locspace ++ "]"
         showField (LowIRField pos name size)
             = "{" ++ name ++ "|" ++ show size ++ " bytes}"
         showFields fields = "_fields_ [shape=record,label=\"fields|{"

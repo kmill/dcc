@@ -25,6 +25,7 @@ data BasicBlock a b = BasicBlock
 
 type LowBasicBlock = BasicBlock LowIRInst LowOper
 type MidBasicBlock = BasicBlock MidIRInst MidOper
+type IRGraph a = Graph a Bool
 
 -- | This is the order of arguments in registers for the ABI.
 -- 'Nothing' represents that the argument comes from the stack.
@@ -60,9 +61,11 @@ data X86Reg = RAX -- temp reg, return value
             | R13 -- callee-saved
             | R14 -- callee-saved
             | R15 -- callee-saved
+              deriving Eq
               
 data RegName = X86Reg X86Reg
              | SymbolicReg Int
+               deriving Eq
 
 instance Show RegName where
     show (X86Reg r) = show r
@@ -77,7 +80,7 @@ data BinOp = OpAdd
 data UnOp = OpNeg
           | OpNot
           | OpDeref
-          | OpAddr
+--          | OpAddr
             
 instance Show BinOp where
     show OpAdd = "+"
@@ -90,7 +93,7 @@ instance Show UnOp where
     show OpNeg = "-"
     show OpNot = "!"
     show OpDeref = "*"
-    show OpAddr = "&"
+--    show OpAddr = "&"
             
 data CmpBinOp = CmpLT
               | CmpGT
@@ -98,8 +101,8 @@ data CmpBinOp = CmpLT
               | CmpGTE
               | CmpEQ
               | CmpNEQ
-              | CmpAnd
-              | CmpOr
+--              | CmpAnd
+--              | CmpOr
 
 data CmpUnOp =  CmpZero
               | CmpNZero
@@ -113,8 +116,14 @@ data LowIRRepr = LowIRRepr
     , lowIRStrings :: [(String, SourcePos, String)]
     , lowIRMethods :: [LowIRMethod] }
 data LowIRField = LowIRField SourcePos String Int64
-data LowIRMethod = LowIRMethod SourcePos Bool String Int LowIRGraph
-type LowIRGraph = Graph LowBasicBlock Bool
+data LowIRMethod = LowIRMethod
+    { lowIRMethodPos :: SourcePos 
+    , lowIRMethodRetP :: Bool 
+    , lowIRMethodName :: String 
+    , lowIRMethodNumArgs :: Int 
+    , lowIRMethodLocalsSize :: Int64
+    , lowIRMethodIRGraph :: LowIRGraph }
+type LowIRGraph = IRGraph LowBasicBlock
 
 data LowOper = OperReg RegName
              | LowOperConst Int64
@@ -152,10 +161,11 @@ data MidIRRepr = MidIRRepr
     , midIRMethods :: [MidIRMethod] }
 data MidIRField = MidIRField SourcePos String (Maybe Int64)
 data MidIRMethod = MidIRMethod SourcePos Bool String [String] MidIRGraph
-type MidIRGraph = Graph MidBasicBlock Bool
+type MidIRGraph = IRGraph MidBasicBlock
 
 data MidOper = OperVar String
              | OperConst Int64
+             | OperLabel String
 
 data MidIRInst
     = BinAssign SourcePos String BinOp MidOper MidOper
@@ -171,37 +181,82 @@ data MidIRInst
     | IndAssign SourcePos String MidOper
     | MidCall SourcePos (Maybe String) String [MidOper]
     | MidCallout SourcePos (Maybe String) String [Either String MidOper]
+      
+      
+---
+--- DeadChecker
+---
 
-class DeadChecker a b c | a -> c where
-    -- | For a given statement, returns a tuple of (unused, used)
-    -- variables.  The order is 1) forget about unused, and 2) leard
+class DeadChecker a b c | a -> b c, b -> a where
+    -- | Takes an operand and gives a list of things it references.
+    fromOper :: b -> [c]
+    
+    -- | For a given statement, returns a tuple of (to-unused, used)
+    -- variables.  The order is 1) forget about unused, and 2) learn
     -- about used, so if a variable occurs in both unused and used, it
     -- remains used.
     checkExtents :: a -> ([c], [c])
+    
+    -- | For a given test, returns a list of used variables.
+    checkTestExtents :: IRTest b -> [c]
+    checkTestExtents (IRTestBinOp _ op1 op2) = fromOper op1 ++ fromOper op2
+    checkTestExtents (IRTest op) = fromOper op
+    checkTestExtents (IRTestNot op) = fromOper op
+    checkTestExtents (IRReturn (Just op)) = fromOper op
+    checkTestExtents _ = []
 
-fromMidOper :: MidOper -> [String]
-fromMidOper (OperVar s) = [s]
-fromMidOper _ = []
-
-instance DeadChecker MidIRInst MidOper String where    
+instance DeadChecker MidIRInst MidOper String where
+    fromOper (OperVar s) = [s]
+    fromOper _ = []
+    
     checkExtents (BinAssign _ dest op oper1 oper2)
-        = ([dest], fromMidOper oper1 ++ fromMidOper oper2)
+        = ([dest], fromOper oper1 ++ fromOper oper2)
     checkExtents (UnAssign _ dest op oper)
-        = ([dest], fromMidOper oper)
+        = ([dest], fromOper oper)
     checkExtents (ValAssign _ dest oper)
-        = ([dest], fromMidOper oper)
+        = ([dest], fromOper oper)
     checkExtents (CondAssign _ dest _ cmp1 cmp2 src)
-        = ([dest], concatMap fromMidOper [cmp1, cmp2, src])
+        = ([dest], concatMap fromOper [cmp1, cmp2, src])
     checkExtents (IndAssign _ dest oper)
-        = ([dest], fromMidOper oper)
+        = ([dest], fromOper oper)
     checkExtents (MidCall _ mdest _ opers) 
-        = (maybeToList mdest, concatMap fromMidOper opers)
+        = (maybeToList mdest, concatMap fromOper opers)
     checkExtents (MidCallout _ mdest _ eopers)
         = ( maybeToList mdest
-          , concatMap (either (const []) fromMidOper) eopers)
-          
+          , concatMap (either (const []) fromOper) eopers)
 
---normalizeBlocks :: MidIRGraph -> MidIRGraph
+instance DeadChecker LowIRInst LowOper RegName where
+    fromOper (OperReg r) = [r]
+    fromOper _ = []
+    
+    checkExtents (RegBin _ dest op oper1 oper2)
+        = ([dest], fromOper oper1 ++ fromOper oper2)
+    checkExtents (RegUn _ dest op oper)
+        = ([dest], fromOper oper)
+    checkExtents (RegVal _ dest oper)
+        = ([dest], fromOper oper)
+    checkExtents (RegCond _ dest _ cmp1 cmp2 src)
+        = ([dest], concatMap fromOper [cmp1, cmp2, src])
+    checkExtents (RegPush _ oper)
+        = ([], fromOper oper)
+    checkExtents (StoreMem _ addr oper)
+        = ([], fromOper oper)
+    checkExtents (LoadMem _ dest addr)
+        = ([dest], [])
+    checkExtents (LowCall _ _ numargs)
+        = ([X86Reg RAX], map X86Reg regs)
+          where regs = catMaybes (take numargs argOrder)
+    checkExtents (LowCallout _ _ numargs)
+        = ([X86Reg RAX], map X86Reg regs)
+          where regs = catMaybes (take numargs argOrder)
+
+---
+--- BasicBlock normalization
+---
+
+-- | Runs a couple of rules on the ir graph to 'normalize' the graph
+-- (for instance, to make basic blocks as big as possible).
+normalizeBlocks :: IRGraph (BasicBlock a b) -> IRGraph (BasicBlock a b)
 normalizeBlocks g = rewriteGraph (cullGraph g) rules
     where rules = normalizeBlocks_rule_join_true
                   ||| normalizeBlocks_rule_join_conditional
@@ -209,7 +264,7 @@ normalizeBlocks g = rewriteGraph (cullGraph g) rules
     
 -- | Check to see if the block leading to this block unconditionally
 -- goes to this block.
---normalizeBlocks_rule_join_true :: RewriteRule MidBasicBlock Bool
+normalizeBlocks_rule_join_true :: RewriteRule (BasicBlock a b) Bool
 normalizeBlocks_rule_join_true g v
     = do let preVerts = preVertices g v
          guard $ 1 == length preVerts
@@ -226,6 +281,7 @@ normalizeBlocks_rule_join_true g v
          let newouts = withStartVertex w (adjEdges g v)
          gReplace [v,w] [(w,newblock)] newouts
 
+normalizeBlocks_rule_join_conditional :: RewriteRule (BasicBlock a b) Bool
 normalizeBlocks_rule_join_conditional g v 
     = do let preVerts = preVertices g v 
          guard $ 1 == length preVerts 
@@ -241,6 +297,10 @@ normalizeBlocks_rule_join_conditional g v
          gReplace [v,w] [(w,newblock)] newouts
              
 
+---
+--- Show!
+---
+
 instance Show CmpBinOp where
     show CmpLT = "<"
     show CmpGT = ">"
@@ -248,8 +308,8 @@ instance Show CmpBinOp where
     show CmpGTE = ">="
     show CmpEQ = "=="
     show CmpNEQ = "!="
-    show CmpAnd = "&&"
-    show CmpOr = "||"
+--    show CmpAnd = "&&"
+--    show CmpOr = "||"
 instance Show CmpUnOp where
     show CmpZero = "0=="
     show CmpNZero = "0!="
@@ -322,6 +382,7 @@ instance Show LowIRInst where
 instance Show MidOper where
     show (OperVar v) = v
     show (OperConst i) = "$" ++ show i
+    show (OperLabel s) = "$" ++ s
           
 instance Show MidIRInst where
     show (BinAssign pos r op oper1 oper2)
@@ -377,11 +438,3 @@ instance (Show a, Show b) => PP (BasicBlock a b) where
       = (vcat $ map (text . show) code)
         $+$ (text $ "(" ++ show test ++ ")")
         <+> (text $ showPos pos)
-
---instance (Show a, Show b) => PP (LabGraph (BasicBlock a b) Bool) where
---    show (LabGraph gr l)
---        = vcat $ map (\v -> text ("L" ++ v ++ ":")
---                            $+$ (nest 3 (pp $ l v))
-
-showPos :: SourcePos -> String
-showPos pos = printf "line %i, col %i" (sourceLine pos) (sourceColumn pos)
