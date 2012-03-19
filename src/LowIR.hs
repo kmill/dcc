@@ -207,7 +207,10 @@ statementToLowIR glob inst =
              return $ (concatMap handleArg coderegs')
                         ++ [ LowCall pos name (length opers) ]
                         ++ (case mret of
-                               Just rret -> [RegVal pos regd (OperReg (X86Reg RAX))]
+                               Just rret -> [ RegBin pos (X86Reg RSP) OpAdd 
+                                                         (LowOperConst $ fromIntegral $ 8 * (max 0 $ (length opers) - 6) ) 
+                                                         (OperReg (X86Reg RSP) )
+                                            , RegVal pos regd (OperReg (X86Reg RAX))]
                                             ++ coded
                                Nothing -> [])
           where handleArg (Nothing, (code, sreg))
@@ -224,7 +227,10 @@ statementToLowIR glob inst =
              return $ (concatMap handleArg coderegs')
                          ++ [ LowCallout pos name (length opers) ]
                          ++ (case mret of
-                               Just rret -> [RegVal pos regd (OperReg (X86Reg RAX))]
+                               Just rret -> [ RegBin pos (X86Reg RSP) OpAdd 
+                                                         (LowOperConst $ fromIntegral $ 8 * (max 0 $ (length opers) - 6) ) 
+                                                         (OperReg (X86Reg RSP) )
+                                            , RegVal pos regd (OperReg (X86Reg RAX))]
                                             ++ coded
                                Nothing -> [])
           where handleArg (Nothing, (code, sreg))
