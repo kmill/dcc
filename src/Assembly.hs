@@ -2,8 +2,8 @@ module Assembly where
 
 import IR
 import qualified Data.Map as Map
-import Control.Applicative
 import Data.Graphs
+import Text.ParserCombinators.Parsec.Pos
 
 binOpInstr :: BinOp -> String
 binOpInstr OpAdd = "addq"
@@ -89,26 +89,32 @@ basicBlockCode (Graph graphMap _) vertex = instrsCode ++ (testCode vPair)
 -- Translate method
 --
 
+calleeSaved :: [X86Reg]
+calleeSaved = [ RBP, RBX, R12, R13, R14, R15 ]
+
 methodCode :: LowIRMethod -> [String]
 methodCode (LowIRMethod pos retP name numArgs localsSize irGraph) =
-  [ name ++ ":"
-  , "#TODO: Implement arguments" ]
-  ++ concatMap (basicBlockCode irGraph) [ vertices irGraph]
-  ++ ["ret"]
+    [ name ++ ":"
+    , "enter $(8 * " ++ (show localsSize) ++ "), $0" ] ++
+    map (unInstr "pushq") calleeSaved ++
+    concatMap (basicBlockCode irGraph) (vertices irGraph) ++
+    map (unInstr "popq") (reverse calleeSaved) ++
+    [ "leave"
+    , "ret"]
 
 fieldsCode :: LowIRField -> [String]
 fieldsCode (LowIRField _ name size) = [ name ++ ":"
                                       , "\t.long " ++ (show size)]
-
+stringCode :: (String, SourcePos, String) -> [String]
 stringCode (name, _, str) = [ name ++ ":"
-                              , "\t.ascii " ++ (show str)]
+                            , "\t.ascii " ++ (show str)]
 --
 -- Full translation
 --
 
 lowIRReprCode :: LowIRRepr -> [String]
 lowIRReprCode (LowIRRepr fields strings methods) = [".section .data"]
-  ++ concatMap fieldsCode fields
-  ++ concatMap stringCode strings
-  ++ [".glbl main"]
-  ++ concatMap methodCode methods  
+    ++ concatMap fieldsCode fields
+    ++ concatMap stringCode strings
+    ++ [".glbl main"]
+    ++ concatMap methodCode methods  
