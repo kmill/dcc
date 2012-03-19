@@ -24,7 +24,6 @@ insertSymbMapping reg currentState = case lookupSymbMapping reg currentState of
                                                                               , nextStackOffset = offset + 8 } 
                                                   in (addr, newState) 
 
-
 -- | The Symbolic Registers are the greatest evil the world has ever known. We must destroy them 
 -- | Go hero, take forth this sacred weapon and fulfill your destiny. 
 destroySymbRegs :: LowIRRepr -> LowIRRepr 
@@ -80,31 +79,58 @@ statementDestroySymbRegs :: LowIRInst -> State DestroySymbRegState [LowIRInst]
 statementDestroySymbRegs inst =
     case inst of 
       RegBin pos dest op oper1 oper2 -> 
-          do symbolState <- get
-             (loadOper1, oper1') <- operDestroySymbRegs pos oper1 (X86Reg R10)
+          do (loadOper1, oper1') <- operDestroySymbRegs pos oper1 (X86Reg R10)
              (loadOper2, oper2') <- operDestroySymbRegs pos oper2 (X86Reg R11) 
              storeVal <- destRegDestroySymbRegs pos dest (X86Reg RAX)
              let newCode = loadOper1 ++
                            loadOper2 ++ 
                            [(RegBin pos (X86Reg RAX) op oper1' oper2')] ++
                            storeVal
-             return $ newCode 
+             return newCode 
       RegUn pos dest op oper -> 
-          do error "Not done :-{" 
+          do (loadOper, oper') <- operDestroySymbRegs pos oper (X86Reg R10) 
+             storeVal <- destRegDestroySymbRegs pos dest (X86Reg R11) 
+             let newCode = loadOper ++ 
+                           [RegUn pos (X86Reg R11) op oper'] ++ 
+                           storeVal 
+             return newCode 
       RegVal pos dest oper -> 
-          do error "Not done :-{"
+          do (loadOper, oper') <- operDestroySymbRegs pos oper (X86Reg R10)
+             storeVal <- destRegDestroySymbRegs pos dest (X86Reg R11) 
+             let newCode = loadOper ++ 
+                           [RegVal pos (X86Reg R11) oper'] ++ 
+                           storeVal 
+             return newCode 
       RegCond pos dest cmp cmp1 cmp2 src -> 
-          do error "Not done :-{" 
+          do (loadCmp1, cmp1') <- operDestroySymbRegs pos cmp1 (X86Reg R10) 
+             (loadCmp2, cmp2') <- operDestroySymbRegs pos cmp2 (X86Reg R11) 
+             (loadCmpSrc, src') <- operDestroySymbRegs pos src (X86Reg RAX) 
+             storeVal <- destRegDestroySymbRegs pos dest (X86Reg RBX) 
+             let newCode = loadCmp1 ++
+                           loadCmp2 ++ 
+                           loadCmpSrc ++ 
+                           [RegCond pos (X86Reg RBX) cmp cmp1' cmp2' src'] ++ 
+                           storeVal
+             return newCode 
       RegPush pos oper -> 
-          do error "Not done :-{"
+          do (loadOper, oper') <- operDestroySymbRegs pos oper (X86Reg R10) 
+             let newCode = loadOper ++ 
+                           [RegPush pos oper'] 
+             return newCode 
       StoreMem pos addr oper -> 
-          do error "Not done :-{"
+          do (loadOper, oper') <- operDestroySymbRegs pos oper (X86Reg R10) 
+             let newCode = loadOper ++ 
+                           [StoreMem pos addr oper']
+             return newCode
       LoadMem pos dest addr -> 
-          do error "Not done :-{" 
+          do storeVal <- destRegDestroySymbRegs pos dest (X86Reg R10) 
+             let newCode = [LoadMem pos (X86Reg R10) addr] ++
+                           storeVal
+             return newCode 
       LowCall pos name numArgs ->
-          do error "Not done :-{"
+          do return $ [LowCall pos name numArgs]
       LowCallout pos name numArgs -> 
-          do error "Not done :-{" 
+          do return $ [LowCall pos name numArgs]
 
 
 
