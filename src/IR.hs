@@ -12,6 +12,7 @@ import Data.List
 import Data.Int
 import Data.Maybe
 import Data.Either
+import qualified Data.Map as Map
 import Control.Monad
 
 boolToInt :: Bool -> Int64
@@ -61,11 +62,11 @@ data X86Reg = RAX -- temp reg, return value
             | R13 -- callee-saved
             | R14 -- callee-saved
             | R15 -- callee-saved
-              deriving Eq
+              deriving (Eq, Ord)
               
 data RegName = X86Reg X86Reg
              | SymbolicReg Int
-               deriving Eq
+               deriving (Eq, Ord)
 
 instance Show RegName where
     show (X86Reg r) = show r
@@ -187,23 +188,52 @@ data MidIRInst
 --- DeadChecker
 ---
 
-class DeadChecker a b c | a -> b c, b -> a where
+class Eq c => DeadChecker a b c | a -> b c, b -> a where
     -- | Takes an operand and gives a list of things it references.
     fromOper :: b -> [c]
     
-    -- | For a given statement, returns a tuple of (to-unused, used)
-    -- variables.  The order is 1) forget about unused, and 2) learn
-    -- about used, so if a variable occurs in both unused and used, it
-    -- remains used.
+    -- | For a given statement, returns a tuple of (to-be-unused,
+    -- used) variables.  The order is 1) forget about unused, and 2)
+    -- learn about used, so if a variable occurs in both unused and
+    -- used, it remains used.  The multiplicity of "used" should be
+    -- the number of times it is used.
     checkExtents :: a -> ([c], [c])
     
-    -- | For a given test, returns a list of used variables.
-    checkTestExtents :: IRTest b -> [c]
-    checkTestExtents (IRTestBinOp _ op1 op2) = fromOper op1 ++ fromOper op2
-    checkTestExtents (IRTest op) = fromOper op
-    checkTestExtents (IRTestNot op) = fromOper op
-    checkTestExtents (IRReturn (Just op)) = fromOper op
-    checkTestExtents _ = []
+-- | For a given test, returns a list of used variables.
+checkTestExtents :: DeadChecker a b c => IRTest b -> [c]
+checkTestExtents (IRTestBinOp _ op1 op2) = fromOper op1 ++ fromOper op2
+checkTestExtents (IRTest op) = fromOper op
+checkTestExtents (IRTestNot op) = fromOper op
+checkTestExtents (IRReturn (Just op)) = fromOper op
+checkTestExtents _ = []
+
+checkBlockExtents :: DeadChecker a b c =>
+                     BasicBlock a b -> ([c], [c])
+checkBlockExtents (BasicBlock insts test testpos)
+    = check' (reverse insts) [] (nub $ checkTestExtents test)
+    where check' [] dead alive = (dead, alive)
+          check' (inst:insts) dead alive
+              = let (ddead, dalive) = checkExtents inst
+                    dead' = nub (dead ++ ddead)
+                    alive' = alive \\ ddead
+                    dead'' = dead' \\ dalive
+                    alive'' = nub (alive' ++ dalive)
+                in check' insts dead'' alive''
+
+determineExtents :: DeadChecker a b c =>
+                    Graph (BasicBlock a b) Bool
+                 -> Map.Map Vertex ([c], [c])
+determineExtents ir = iterG f init ir
+    where init = Map.fromList [(v, checkBlockExtents (ir !!! v)) | v <- vertices ir]
+          f g v r = let (dead, alive) = fromJust $ Map.lookup v r
+                        nextalive = concatMap (snd . fromJust . (flip Map.lookup r))
+                                    (adjVertices g v)
+                        nextalive' = (nub nextalive) -- \\ dead
+                        alive' = nub (alive ++ nextalive')
+                        r' = Map.insert v (dead, alive') r
+                    in if alive == alive'
+                       then Nothing
+                       else Just (preVertices g v, r')
 
 instance DeadChecker MidIRInst MidOper String where
     fromOper (OperVar s) = [s]
@@ -240,15 +270,19 @@ instance DeadChecker LowIRInst LowOper RegName where
     checkExtents (RegPush _ oper)
         = ([], fromOper oper)
     checkExtents (StoreMem _ addr oper)
-        = ([], fromOper oper)
+        = ([], fromAddr addr ++ fromOper oper)
     checkExtents (LoadMem _ dest addr)
-        = ([dest], [])
+        = ([dest], fromAddr addr)
     checkExtents (LowCall _ _ numargs)
         = ([X86Reg RAX], map X86Reg regs)
           where regs = catMaybes (take numargs argOrder)
     checkExtents (LowCallout _ _ numargs)
         = ([X86Reg RAX], map X86Reg regs)
           where regs = catMaybes (take numargs argOrder)
+
+fromAddr :: MemAddr -> [RegName]
+fromAddr (MemAddr br _ mdr _) = [br] ++ maybeToList mdr
+fromAddr _ = []
 
 ---
 --- BasicBlock normalization

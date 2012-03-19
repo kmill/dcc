@@ -93,12 +93,34 @@ graphWithNewStart g newst vert edges
 mapG :: Ord e => (v -> w) -> Graph v e -> Graph w e
 mapG f (Graph m st) = Graph (Map.map (\(v, es) -> (f v, es)) m) st
 
+mapGWithKey :: Ord e => (Vertex -> v -> w) -> Graph v e -> Graph w e
+mapGWithKey f (Graph m st) = Graph (Map.mapWithKey (\k (v, es) -> (f k v, es)) m) st
+
 mapGM :: (Monad m, Ord e) => (v -> m w) -> Graph v e -> m (Graph w e)
 mapGM f (Graph m st) =
     do m' <- flip Trav.mapM m (\(v, es) ->
                                do v' <- f v
                                   return (v', es))
        return $ Graph m' st
+
+---
+--- Graph iteration stuff
+---
+
+iterG :: Ord e => (Graph v e -> Vertex -> r -> Maybe ([Vertex], r)) -> r -> Graph v e -> r
+iterG f i g = iterG' i [] [startVertex g]
+    where iterG' r visited tovisit
+              = case tovisit of
+                  [] -> r
+                  v:vs ->
+                      case f g v r of
+                        Nothing ->
+                            iterG' r (v:visited)
+                               ((filter (`notElem` (visited++tovisit))
+                                            (adjVertices g v))
+                                ++ vs)
+                        Just (nextvs, r') ->
+                            iterG' r' (v:visited) (nextvs ++ vs)
 
 ---
 --- Graph algorithms!
