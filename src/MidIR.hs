@@ -163,7 +163,7 @@ statementToMidIR env s c b (HForSt _ pos tok exprlow exprhigh st)
          initBlock <- newBlock [ValAssign (tokenPos tok) s' (OperVar low)]
                       IRTestTrue pos
          checkBlock <- newBlock []
-                       (IRTestBinOp CmpLTE (OperVar s') (OperVar high)) pos
+                       (IRTestBinOp CmpLT (OperVar s') (OperVar high)) pos
          addEdge initBlock True checkBlock
          addEdge checkBlock False s
          incrBlock <- newBlock [BinAssign pos s' OpAdd (OperVar s') (OperConst 1)]
