@@ -182,7 +182,15 @@ statementToLowIR glob inst =
       UnAssign pos dest op oper ->
           do (code1, reg1) <- operToLoadCode glob pos oper
              (coded, regd) <- destToStoreCode glob pos dest
-             return $ code1 ++ [RegUn pos regd op reg1] ++ coded
+             case op of
+               OpDeref ->
+                   let addr = case reg1 of
+                                OperReg r -> MemAddr r 0 Nothing 0
+                                LowOperConst i ->
+                                    error "shouldn't addr a literal location! :-("
+                                LowOperLabel s -> MemAddrPtr s
+                   in return $ code1 ++ [LoadMem pos regd addr] ++ coded
+               _ -> return $ code1 ++ [RegUn pos regd op reg1] ++ coded
       ValAssign pos dest oper ->
           do (code1, reg1) <- operToLoadCode glob pos oper
              (coded, regd) <- destToStoreCode glob pos dest
