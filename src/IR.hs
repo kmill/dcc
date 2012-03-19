@@ -61,11 +61,11 @@ data X86Reg = RAX -- temp reg, return value
             | R13 -- callee-saved
             | R14 -- callee-saved
             | R15 -- callee-saved
-              deriving Eq
+              deriving (Eq, Ord)
               
 data RegName = X86Reg X86Reg
              | SymbolicReg Int
-               deriving Eq
+               deriving (Eq, Ord)
 
 instance Show RegName where
     show (X86Reg r) = show r
