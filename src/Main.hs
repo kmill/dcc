@@ -161,7 +161,8 @@ doLowIRFile opts ifname input
                           case doSemanticCheck r of
                             Right _ -> let hast = makeHybridAST r
                                            midir = generateMidIR hast
-                                           lowir = toLowIR midir
+                                           lowirSymb = toLowIR midir
+                                           lowir = destroySymbRegs lowirSymb
                                        in do
                                          --putStrLn $ show lowir
                                          putStrLn $ lowIRtoGraphViz lowir 
@@ -193,7 +194,8 @@ doGenerateCode opts ifname input
                           case doSemanticCheck r of
                             Right x -> let hast = makeHybridAST r
                                            midir = generateMidIR hast
-                                           lowir = toLowIR midir
+                                           lowirSymb = toLowIR midir
+                                           lowir = destroySymbRegs lowirSymb
                                            code = runGenerateCode (makeHybridAST r) ifname 
                                            outFile = case outputFile opts of
                                              Just fn -> fn

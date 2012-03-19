@@ -11,6 +11,7 @@ import AST (PP(..), SourcePos, showPos)
 import qualified Data.Map as Map
 import Text.PrettyPrint.HughesPJ
 import Data.List
+import Debug.Trace
 
 ---
 --- Convert to LowIR
@@ -38,19 +39,6 @@ genReg :: State LowIRState RegName
 genReg = do s <- get
             put $ s { nextSymbRegId = 1 + nextSymbRegId s }
             return $ SymbolicReg $ nextSymbRegId s
-
-loadStringLit :: SourcePos -> String
-              -> State LowIRState ([LowIRInst], LowOper)
-loadStringLit pos str
-    = do s <- get
-         let sname = "string_"
-                     ++ (stringLabelPrefix s)
-                     ++ "_" ++ (show $ nextStringId s)
-         put $ s { nextStringId = nextStringId s + 1
-                 , stringMap = (sname, pos, str):(stringMap s) }
-         r <- genReg
-         return $ ( [RegVal pos r (LowOperLabel sname)]
-                  , OperReg r )
                            
 -- | Main entry point to convert mid-IR to low-IR.
 toLowIR :: MidIRRepr -> LowIRRepr
@@ -79,7 +67,7 @@ methodToLowIR glob (MidIRMethod pos retp name args mir)
          makeargs <- makeArgs
          lir' <- extendWithArgs lir
          return $ LowIRMethod pos retp name
-                    (length args) (fromIntegral 0) (normalizeBlocks lir')
+                    (length args) (fromIntegral 0) (simplifyLIR lir')
     where extendWithArgs ir
               = let st' = freshVertex ir
                 in do argcode <- makeArgs    
@@ -248,6 +236,191 @@ statementToLowIR glob inst =
                 handleArg ((Just dreg), (code, src))
                     = code ++ [RegVal pos (X86Reg dreg) src]
 
+loadStringLit :: SourcePos -> String
+              -> State LowIRState ([LowIRInst], LowOper)
+loadStringLit pos str
+    = do s <- get
+         let sname = "string_"
+                     ++ (stringLabelPrefix s)
+                     ++ "_" ++ (show $ nextStringId s)
+         put $ s { nextStringId = nextStringId s + 1
+                 , stringMap = (sname, pos, str):(stringMap s) }
+         r <- genReg
+         return $ ( [RegVal pos r (LowOperLabel sname)]
+                  , OperReg r )
+
+
+---
+--- Simplify LIR
+---
+
+simplifyLIR :: LowIRGraph -> LowIRGraph
+simplifyLIR lir = normalizeBlocks lir -- $ mergeRegs $ normalizeBlocks lir
+
+mergeRegs :: LowIRGraph -> LowIRGraph
+mergeRegs lir
+    = let aliveRegs = Map.map snd (determineExtents lir)
+      in error $
+         graphToGraphViz (mapGWithKey (\k bb -> (Map.lookup k (determineExtents lir), fixBB (fromJust $ Map.lookup k aliveRegs) bb)) lir) "" ""
+--       lir
+    where fixBB alive bb
+              = let alive' = (X86Reg RSP):(X86Reg RBP):alive
+                    (trees, test) = evalLowInstrs alive' Map.empty []
+                                    (blockCode bb) (blockTest bb)
+                in (trees, test)
+--            error $ show alive ++ "\n" ++ show bb
+          
+
+getFreshSReg :: [RegName] -> RegName
+getFreshSReg regs = head $ filter (`notElem` regs) (map SymbolicReg [0..])
+
+data LowIRTree = RegStoreNode SourcePos RegName LowIRTree
+               | RegBinOpNode SourcePos BinOp LowIRTree LowIRTree
+               | RegUnOpNode SourcePos UnOp LowIRTree
+               | RegCondNode SourcePos CmpBinOp LowIRTree LowIRTree LowIRTree
+               | RegPushNode SourcePos LowIRTree
+               | StoreMemNode SourcePos LowIRTree LowIRTree
+               | LoadMemNode SourcePos LowIRTree
+               | LowCallNode SourcePos String Int [LowIRTree]
+               | LowCalloutNode SourcePos String Int [LowIRTree]
+               | LowOperNode LowOper
+
+instance Show LowIRTree where
+  show t = render $ pp t
+
+instance PP LowIRTree where
+  pp (RegStoreNode _ r oper) = text (show r ++ " :=") 
+                               $+$ (nest 3 $ pp oper)
+  pp (RegBinOpNode _ op oper1 oper2)
+      = text (show op)
+         $+$ (nest 3 $ pp oper1)
+         $+$ (nest 3 $ pp oper2)
+  pp (RegUnOpNode _ op oper1)
+      = text (show op)
+         $+$ (nest 3 $ pp oper1)
+  pp (RegCondNode _ cmp cmp1 cmp2 oper)
+      = text (show "cmove")
+         $+$ (nest 3 $ text $ show cmp)
+         $+$ (nest 6 $ pp cmp1)
+         $+$ (nest 6 $ pp cmp2)
+         $+$ (nest 3 $ pp oper)
+  pp (RegPushNode _ oper)
+      = text (show "push")
+        $+$ (nest 3 $ pp oper)
+  pp (StoreMemNode _ addr oper)
+      = text (show "memstore")
+         $+$ (nest 3 $ pp addr)
+         $+$ (nest 3 $ pp oper)
+  pp (LoadMemNode _ addr)
+      = text (show "memload")
+        $+$ (nest 3 $ pp addr)
+  pp (LowCallNode _ name nargs immargs)
+      = text ("call " ++ show name ++ " " ++ show nargs)
+        $+$ (nest 3 $ vcat (map pp immargs))
+  pp (LowCalloutNode _ name nargs immargs)
+        = text ("callout " ++ show name ++ " " ++ show nargs)
+        $+$ (nest 3 $ vcat (map pp immargs))
+  pp (LowOperNode o) = text $ show o
+
+timesUsed :: Int -> RegName -> [LowIRInst] -> IRTest LowOper -> Int
+timesUsed cnt r [] test = cnt + (length $ filter (==r) (checkTestExtents test))
+timesUsed cnt r (inst:insts) test
+    = let (d, a) = checkExtents inst
+          cnt' = cnt + (length $ filter (==r) a)
+      in if r `elem` d
+         then cnt'
+         else timesUsed cnt' r insts test
+
+regLookup :: LowOper -> Map.Map RegName LowIRTree -> LowIRTree
+regLookup (OperReg r) regmap
+    = case Map.lookup r regmap of
+        Nothing -> LowOperNode (OperReg r)
+        Just x -> x
+regLookup x regmap = LowOperNode x
+
+evalLowInstrs :: [RegName] -> Map.Map RegName LowIRTree
+              -> [LowIRTree] -> [LowIRInst] -> IRTest LowOper
+              -> ([LowIRTree], IRTest LowIRTree)
+evalLowInstrs alive regMap evaled [] test
+    = (evaled, case test of
+                 IRTestTrue -> IRTestTrue
+                 IRTestFalse -> IRTestFalse
+                 IRTestBinOp op oper1 oper2 ->
+                     IRTestBinOp op (regLookup oper1 regMap) (regLookup oper2 regMap)
+                 IRTest oper -> IRTest (regLookup oper regMap)
+                 IRTestNot oper -> IRTestNot (regLookup oper regMap)
+                 IRReturn Nothing -> IRReturn Nothing
+                 IRReturn (Just oper) -> IRReturn $ Just (regLookup oper regMap)
+                 IRTestFail x -> IRTestFail x)
+evalLowInstrs alive regMap evaled (instr:instrs) test
+    = case instr of
+        RegBin pos rd op oper1 oper2 ->
+            continueWithStore pos rd $
+            RegBinOpNode pos op (regLookup oper1 regMap) (regLookup oper2 regMap)
+        RegUn pos rd op oper ->
+            continueWithStore pos rd $
+            RegUnOpNode pos op (regLookup oper regMap)
+        RegVal pos rd oper ->
+            continueWithStore pos rd (regLookup oper regMap)
+        RegCond pos rd cmp cmp1 cmp2 oper ->
+            continueWithStore pos rd $
+            RegCondNode pos cmp
+                 (regLookup cmp1 regMap) (regLookup cmp2 regMap)
+                 (regLookup oper regMap)
+        RegPush pos oper ->
+            continue $ RegPushNode pos (regLookup oper regMap)
+        StoreMem pos mem oper ->
+            continue $ StoreMemNode pos (evalMem pos mem) (regLookup oper regMap)
+        LoadMem pos rd mem ->
+            continueWithStore pos rd $ LoadMemNode pos (evalMem pos mem)
+        LowCall pos name nargs ->
+            continueWithStoreForce pos (X86Reg RAX)  $
+            LowCallNode pos name nargs [regLookup (OperReg (X86Reg r)) regMap
+                                        | r <- (catMaybes (take nargs argOrder))]
+        LowCallout pos name nargs ->
+            continueWithStoreForce pos (X86Reg RAX)  $
+            LowCalloutNode pos name nargs [regLookup (OperReg (X86Reg r)) regMap
+                                           | r <- (catMaybes (take nargs argOrder))]
+      where continueWithStore pos rd tree
+                = let times = timesUsed 0 rd instrs test
+                  in case times of
+                       0 -> if rd `elem` alive
+                            then continueWithStoreForce pos rd tree
+                            else -- optimize out!
+                                evalLowInstrs alive regMap evaled instrs test
+                       1 -> if rd `elem` alive
+                            then continueWithStoreForce pos rd tree
+                            else evalLowInstrs alive (Map.insert rd tree regMap)
+                                     evaled instrs test
+                       _ -> continueWithStoreForce pos rd tree
+            continueWithStoreForce pos rd tree
+                = evalLowInstrs alive (Map.delete rd regMap)
+                  (evaled++[RegStoreNode pos rd tree])
+                  instrs test
+            continue tree = evalLowInstrs alive regMap
+                            (evaled ++ [tree])
+                            instrs test
+            -- let's turn the mem addresses into trees, too!
+            evalMem pos (MemAddrPtr s) = LowOperNode $ LowOperLabel s
+            evalMem pos (MemAddr br 0 Nothing _)
+                = (regLookup (OperReg br) regMap)
+            evalMem pos (MemAddr br d Nothing _)
+                = RegBinOpNode pos OpAdd (regLookup (OperReg br) regMap)
+                  (LowOperNode $ LowOperConst $ fromIntegral d)
+            evalMem pos (MemAddr br d (Just or) s)
+                = RegBinOpNode pos OpAdd (regLookup (OperReg br) regMap) $
+                  RegBinOpNode pos OpAdd (LowOperNode $ LowOperConst $ fromIntegral d) $
+                  RegBinOpNode pos OpMul (LowOperNode $ LowOperConst $ fromIntegral s) $
+                 (regLookup (OperReg or) regMap)
+
+--evalLowIRForest :: SourcePos -> LowIRTree -> IRTest LowIRTree -> BasicBlock
+--evalLowIRTree :: [RegName] -> LowIRTree -> [[LowIRInst]]
+--evalLowIRTree used node
+--    = case node of
+--        RegStoreNode pos rd arg ->
+--            [
+
+
 ---
 --- Show LowIRRepr!
 ---
@@ -282,8 +455,10 @@ instance PP LowIRMethod where
         where showVertex (i,bb) = text (show i)
                                    <+> (nest 3 (pp bb))
                                    $+$ (nest 5 (vcat (map showEdge outedges)))
+                                  $+$ (nest 3 (text $ show $ Map.lookup i rmap))
                   where outedges = adjEdges ir i
                         showEdge (b,y) = text (show b ++ " -> " ++ show y)
+              rmap = determineExtents ir
                         
 
 lowIRtoGraphViz m = "digraph name {\n"
