@@ -120,11 +120,6 @@ basicBlockCode irGraph@(Graph graphMap _) vertex = [bLabel] ++ instrsCode ++ (te
           (bb@(BasicBlock code _ _), _) = vPair
           bLabel = vertexLabel vertex
 
-
-
-
-
-
 --
 -- Translate method
 --
