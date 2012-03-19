@@ -42,7 +42,8 @@ instrCode :: LowIRInst -> [String]
 instrCode (RegBin pos (X86Reg reg) (OpBinCmp cop) oper1 oper2) =
     [ binInstr "movq" (LowOperConst 0) reg
     , binInstr "cmpq" oper1 oper2
-    , binInstr (cmovInstr cop) (LowOperConst 1) reg ]
+    , binInstr "movq " (LowOperConst 1) R10
+    , binInstr (cmovInstr cop) R10 reg ]
       
 instrCode (RegBin pos (X86Reg reg) op oper1 oper2) =
     [ binInstr "movq" oper2 reg
@@ -82,8 +83,12 @@ testCode :: LowIRGraph -> Vertex -> [String]
 testCode (Graph graphMap _) vertex = 
     let (Just vPair) = Map.lookup vertex graphMap
         (BasicBlock _ test pos, edgeMap) = vPair
-        (Just trueEdge) = Map.lookup True edgeMap
-        (Just falseEdge) = Map.lookup False edgeMap
+        trueEdge = case Map.lookup True edgeMap of
+          Just x -> x
+          Nothing -> 0
+        falseEdge = case Map.lookup False edgeMap of
+          Just x -> x
+          Nothing -> 0
         trueLabel = vertexLabel trueEdge
         falseLabel = vertexLabel falseEdge
     in case test of
