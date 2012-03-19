@@ -355,16 +355,23 @@ instance Show LowOper where
 
 instance Show MemAddr where
     show (MemAddr base 0 Nothing _)
-        = printf "(%s)" (show base)
+        = printf "%s" (show base)
+--        = printf "[%s]" (show base)
     show (MemAddr base disp Nothing _)
         = printf "%s(%s)" (show disp) (show base)
+--        = printf "[%s + %s]" (show base) (show disp)
     show (MemAddr base 0 (Just offset) scalar)
-        = printf "[%s + %s * %s]"
+        = printf "(%s, %s, %s)"
           (show base) (show offset) (show scalar)
+--        = printf "[%s + %s * %s]"
+--          (show base) (show offset) (show scalar)
     show (MemAddr base disp (Just offset) scalar)
-        = printf "[%s + %s + %s * %s]"
-          (show base) (show disp) (show offset) (show scalar)
-    show (MemAddrPtr s) = "[$" ++ s ++ "]"
+        = printf "%s(%s, %s, %s)"
+          (show disp) (show base) (show offset) (show scalar)
+--        = printf "[%s + %s + %s * %s]"
+--          (show base) (show disp) (show offset) (show scalar)
+    show (MemAddrPtr s) = "$" ++ s
+--    show (MemAddrPtr s) = "[$" ++ s ++ "]"
 
 instance Show X86Reg where
     show RAX = "%rax"

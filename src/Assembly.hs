@@ -41,8 +41,9 @@ instrCode :: LowIRInst -> [String]
 
 instrCode (RegBin pos (X86Reg reg) (OpBinCmp cop) oper1 oper2) =
     [ binInstr "movq" (LowOperConst 0) reg
-    , binInstr "cmpq" oper1 oper2
-    , binInstr "movq " (LowOperConst 1) R10
+    , binInstr "movq" oper2 R10
+    , binInstr "cmpq" oper1 R10
+    , binInstr "movq" (LowOperConst 1) R10
     , binInstr (cmovInstr cop) R10 reg ]
       
 instrCode (RegBin pos (X86Reg reg) op oper1 oper2) =
@@ -60,7 +61,8 @@ instrCode (RegVal pos (X86Reg reg) oper) =
     [ binInstr "movq" oper reg ]
 
 instrCode (RegCond pos (X86Reg reg) cop oper1 oper2 src) =
-    [ binInstr "cmpq" oper1 oper2
+    [ binInstr "movq" oper2 reg
+    , binInstr "cmpq" oper1 reg
     , binInstr (cmovInstr cop) src reg ]
 
 instrCode (RegPush pos oper) = [ unInstr "pushq" oper ]
@@ -95,7 +97,8 @@ testCode (Graph graphMap _) vertex =
       IRTestTrue -> [ "jmp " ++ trueLabel ]
       IRTestFalse -> [ "jmp " ++ falseLabel ]
       IRTestBinOp cop oper1 oper2 ->
-        [ binInstr "cmpq" oper1 oper2
+        [ binInstr "movq" oper2 R10
+        , binInstr "cmpq" oper1 R10
         , (jmpInstr cop) ++ " " ++ trueLabel
         , "jmp " ++ falseLabel ]
       IRTest oper ->
@@ -158,4 +161,4 @@ lowIRReprCode (LowIRRepr fields strings methods) = [".section .data"]
     ++ concatMap fieldsCode fields
     ++ concatMap stringCode strings
     ++ [".globl main"]
-    ++ concatMap methodCode methods
+    ++ methodCode (head methods)
