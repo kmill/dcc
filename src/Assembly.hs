@@ -24,6 +24,10 @@ binInstr cmd oper1 oper2 = cmd ++ " " ++ (show oper1) ++ ", " ++ (show oper2)
 unInstr :: (Show a) => String -> a -> String
 unInstr cmd oper = cmd ++ " " ++ (show oper)
 
+--
+-- Code for instructions inside basic blocks
+-- 
+
 instrCode :: LowIRInst -> [String]
 
 instrCode (RegBin pos (X86Reg reg) (OpBinCmp cop) oper1 oper2) =
@@ -42,6 +46,9 @@ instrCode (RegUn pos (X86Reg reg) op oper) =
         OpNot -> [ unInstr "notq" reg ]
         _ -> error "shouldn't have derefs or addrs this low :-("
 
+instrCode (RegVal pos (X86Reg reg) oper) =
+    [ binInstr "movq" oper reg ]
+
 instrCode (RegCond pos (X86Reg reg) cop oper1 oper2 src) =
     [ binInstr "cmpq" oper1 oper2
     , binInstr (cmovInstr cop) src reg ]
@@ -55,3 +62,34 @@ instrCode (LoadMem pos reg addr) = [ binInstr "movq" addr reg ]
 instrCode (LowCall pos label _) = [ "call " ++ label ]
 
 instrCode (LowCallout pos label _) = [ "call " ++ label ]
+
+-- 
+-- Code for block-ending tests
+-- 
+
+testCode :: IRTest LowOper -> [String]
+testCode _ = [ "# TODO: Implement basic block tests" ]
+
+--
+-- Code for whole basic blocks
+--
+
+basicBlockCode :: LowBasicBlock -> [String]
+basicBlockCode (BasicBlock code test testPos) = instrsCode ++ (testCode test)
+    where instrsCode = concat $ map instrCode code
+
+--
+-- Translate method
+--
+
+methodCode :: LowIRMethod -> [String]
+methodCode (LowIRMethod pos retP name numArgs localsSize irGraph) =
+    [ "# TODO: Implement method calls" ]
+
+--
+-- Full translation
+--
+
+lowIRReprCode :: LowIRRepr -> [String]
+lowIRReprCode (LowIRRepr fields strings methods) =
+    [ "# TODO: Write full translation code" ]
