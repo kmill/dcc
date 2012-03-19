@@ -113,7 +113,13 @@ data LowIRRepr = LowIRRepr
     , lowIRStrings :: [(String, SourcePos, String)]
     , lowIRMethods :: [LowIRMethod] }
 data LowIRField = LowIRField SourcePos String Int64
-data LowIRMethod = LowIRMethod SourcePos Bool String Int LowIRGraph
+data LowIRMethod = LowIRMethod
+    { lowIRMethodPos :: SourcePos 
+    , lowIRMethodRetP :: Bool 
+    , lowIRMethodName :: String 
+    , lowIRMethodNumArgs :: Int 
+    , lowIRMethodLocalsSize :: Int64
+    , lowIRMethodIRGraph :: LowIRGraph }
 type LowIRGraph = Graph LowBasicBlock Bool
 
 data LowOper = OperReg RegName

@@ -78,7 +78,8 @@ methodToLowIR glob (MidIRMethod pos retp name args mir)
          lir <- mapGM (basicBlockToLowIR glob) mir
          makeargs <- makeArgs
          lir' <- extendWithArgs lir
-         return $ LowIRMethod pos retp name (length args) (normalizeBlocks lir')
+         return $ LowIRMethod pos retp name
+                    (length args) (fromIntegral 0) (normalizeBlocks lir')
     where extendWithArgs ir
               = let st' = freshVertex ir
                 in do argcode <- makeArgs    
@@ -257,10 +258,10 @@ instance PP LowIRRepr where
             methods = vcat [pp m | m <- lowIRMethods m]
 
 instance PP LowIRMethod where
-    pp (LowIRMethod pos retp name nargs ir)
+    pp (LowIRMethod pos retp name nargs locspace ir)
         = text ("{" ++ show pos ++ "}")
            $+$ (if retp then text "ret" else text "void") <+> text name
-           <+> text (show nargs)
+           <+> text (show nargs) <+> brackets (text (show locspace))
            $+$ (text $ "start = " ++ show (startVertex ir))
            $+$ (nest 3 (vcat [showVertex v | v <- labels ir]))
         where showVertex (i,bb) = text (show i)
@@ -275,12 +276,13 @@ lowIRtoGraphViz m = "digraph name {\n"
                     ++ (showStrings (lowIRStrings m))
                     ++ (concatMap showMethod (lowIRMethods m))
                     ++ "}"
-  where showMethod (LowIRMethod pos retp name nargs g)
+  where showMethod (LowIRMethod pos retp name nargs locspace g)
             = graphToGraphVizSubgraph g (name ++ "_")
               (name ++ " [shape=doubleoctagon,label="++show mlabel++"];\n"
               ++ name ++ " -> " ++ name ++ "_" ++ show (startVertex g) ++ ";\n")
             where mlabel = (if retp then "ret " else "void ")
                            ++ name ++ " " ++ show nargs
+                           ++ " [" ++ show locspace ++ "]"
         showField (LowIRField pos name size)
             = "{" ++ name ++ "|" ++ show size ++ " bytes}"
         showFields fields = "_fields_ [shape=record,label=\"fields|{"
