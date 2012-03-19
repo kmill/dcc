@@ -99,6 +99,30 @@ destRegDestroySymbRegs pos reg@(SymbolicReg _) tmpReg
          return storeCodes
 destRegDestroySymbRegs pos _ tmpReg = return []
 
+-- | Function that removes symbolic registers from memAddrs 
+memAddrDestroySymbRegs :: SourcePos -> MemAddr -> RegName -> State DestroySymbRegState ([LowIRInst], MemAddr)
+memAddrDestroySymbRegs pos memAddr@(MemAddr _ _ _ _) tmpReg
+    = do memAddrFixedBase <- fixBaseOffset memAddr
+         (newCode, offsetReg) <- fixOffsetReg pos memAddrFixedBase tmpReg
+         let newMemAddr = memAddrFixedBase { memOffsetReg = offsetReg }
+         return (newCode, newMemAddr)
+memAddrDestroySymbRegs pos memAddr@(MemAddrPtr s) tmpReg = return ([], memAddr)
+
+fixBaseOffset :: MemAddr -> State DestroySymbRegState MemAddr
+fixBaseOffset memAddr@(MemAddr { memBaseReg=reg@(SymbolicReg _) }) 
+    = do newMemAddr <- getStackLoc reg 
+         let mergedAddr = memAddr { memBaseReg = memBaseReg newMemAddr, memDisplace = newDisplace }
+             newDisplace = (memDisplace memAddr) + (memDisplace newMemAddr) 
+         return mergedAddr 
+fixBaseOffset memAddr = return memAddr
+
+fixOffsetReg :: SourcePos -> MemAddr -> RegName -> State DestroySymbRegState ([LowIRInst], Maybe RegName) 
+fixOffsetReg pos memAddr@(MemAddr { memOffsetReg = Just reg@(SymbolicReg _) }) tmpReg
+    = do offsetMemAddr <- getStackLoc reg 
+         let newCode = [LoadMem pos tmpReg offsetMemAddr]
+         return (newCode, Just tmpReg)
+fixOffsetReg pos memAddr _ = return ([], memOffsetReg memAddr)
+
 statementDestroySymbRegs :: LowIRInst -> State DestroySymbRegState [LowIRInst] 
 statementDestroySymbRegs inst =
     case inst of 
@@ -143,12 +167,16 @@ statementDestroySymbRegs inst =
              return newCode 
       StoreMem pos addr oper -> 
           do (loadOper, oper') <- operDestroySymbRegs pos oper (X86Reg R10) 
+             (loadMem, addr') <- memAddrDestroySymbRegs pos addr (X86Reg R11) 
              let newCode = loadOper ++ 
-                           [StoreMem pos addr oper']
+                           loadMem ++ 
+                           [StoreMem pos addr' oper']
              return newCode
       LoadMem pos dest addr -> 
           do storeVal <- destRegDestroySymbRegs pos dest (X86Reg R10) 
-             let newCode = [LoadMem pos (X86Reg R10) addr] ++
+             (loadMem, addr') <- memAddrDestroySymbRegs pos addr (X86Reg R11)
+             let newCode = loadMem ++
+                           [LoadMem pos (X86Reg R10) addr'] ++
                            storeVal
              return newCode 
       LowCall pos name numArgs ->
