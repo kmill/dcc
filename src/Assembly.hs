@@ -117,8 +117,9 @@ testCode (Graph graphMap _) vertex =
         , "jmp " ++ falseLabel ]
       IRReturn (Just oper) -> [ binInstr "movq" oper RAX ]
       IRReturn (Nothing) -> []
-      IRTestFail (Just oper) -> [ "#IRTestFail on " ++ (show oper), "jmp " ++ falseLabel]
-      IRTestFail Nothing -> ["#IRTestFail on Nothing", "jmp " ++ falseLabel]
+      IRTestFail _ ->
+        [ binInstr "movq" (LowOperConst 1) RDI
+        , "call exit" ]
 
 --
 -- Code for whole basic blocks
