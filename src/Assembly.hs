@@ -47,13 +47,14 @@ instrCode (RegBin pos (X86Reg reg) (OpBinCmp cop) oper1 oper2) =
     , binInstr (cmovInstr cop) R10 reg ]
       
 instrCode (RegBin pos (X86Reg reg) op oper1 oper2) =
-    [ binInstr "movq" oper2 reg]
+    [ binInstr "movq" oper2 reg ]
     ++ opS
     where opS = case op of
-                     OpMul -> [ "pushq " ++ (show RAX) 
+                     OpMul -> [ unInstr "pushq" RAX 
                               , binInstr "movq" oper1 RAX
-                              , "mulq " ++ (show reg)
-                              , binInstr "movq" RAX reg]
+                              , unInstr "mulq" oper2
+                              , binInstr "movq" RAX reg
+                              , unInstr "popq" RAX ]
                      _ -> [binInstr (binOpInstr op) oper1 reg]
 
 instrCode (RegUn pos (X86Reg reg) op oper) = 
