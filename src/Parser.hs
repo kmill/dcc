@@ -239,7 +239,7 @@ makeUnaryOp :: DParser Token -> DParser Expr -> DParser Expr
 makeUnaryOp op next = doUnary <|> next
     where doUnary = UnaryOp <$> getPosition
                     <*> (op <?> "unary operator")
-                    <*> next
+                    <*> (makeUnaryOp op next)
 
 -- | This is the parser for decaf expressions.  The general strategy
 -- for parsing is that operators become parser generators (which are
