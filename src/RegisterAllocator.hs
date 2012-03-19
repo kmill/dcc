@@ -47,7 +47,31 @@ basicBlockDestroySymbRegs (BasicBlock code test testpos)
          return $ BasicBlock (join code' ++ testcode) test' testpos 
          
 testDestroySymbRegs :: SourcePos -> IRTest LowOper -> State DestroySymbRegState ([LowIRInst], IRTest LowOper)
-testDestroySymbRegs pos test = error "Not done :-{" 
+testDestroySymbRegs pos test 
+    = case test of 
+        IRTestBinOp binOp oper1 oper2 -> 
+            do (loadOper1, oper1') <- operDestroySymbRegs pos oper1 (X86Reg R10) 
+               (loadOper2, oper2') <- operDestroySymbRegs pos oper2 (X86Reg R11) 
+               let newCode = loadOper1 ++ 
+                             loadOper2
+                   newTest = IRTestBinOp binOp oper1' oper2' 
+               return (newCode, newTest)
+        IRTest oper ->
+            do (loadOper, oper') <- operDestroySymbRegs pos oper (X86Reg R10) 
+               let newCode = loadOper
+                   newTest = IRTest oper'
+               return (newCode, newTest)
+        IRTestNot oper -> 
+            do (loadOper, oper') <- operDestroySymbRegs pos oper (X86Reg R10) 
+               let newCode = loadOper 
+                   newTest = IRTestNot oper' 
+               return (newCode, newTest) 
+        IRReturn (Just oper) -> 
+            do (loadOper, oper') <- operDestroySymbRegs pos oper (X86Reg R10) 
+               let newCode = loadOper
+                   newTest = IRReturn $ Just oper' 
+               return (newCode, newTest)
+        _ -> return ([], test) 
 
 getStackLoc :: RegName -> State DestroySymbRegState MemAddr 
 getStackLoc reg@(SymbolicReg _) = do symbolState <- get 
