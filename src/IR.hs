@@ -77,7 +77,7 @@ data BinOp = OpAdd
 data UnOp = OpNeg
           | OpNot
           | OpDeref
-          | OpAddr
+--          | OpAddr
             
 instance Show BinOp where
     show OpAdd = "+"
@@ -90,7 +90,7 @@ instance Show UnOp where
     show OpNeg = "-"
     show OpNot = "!"
     show OpDeref = "*"
-    show OpAddr = "&"
+--    show OpAddr = "&"
             
 data CmpBinOp = CmpLT
               | CmpGT
