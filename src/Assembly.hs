@@ -79,7 +79,7 @@ testCode _ = [ "# TODO: Implement basic block tests" ]
 
 basicBlockCode :: LowBasicBlock -> [String]
 basicBlockCode (BasicBlock code test testPos) = instrsCode ++ (testCode test)
-    where instrsCode = concat $ map instrCode code
+    where instrsCode = concatMap instrCode code
 
 --
 -- Translate method
@@ -90,6 +90,7 @@ methodCode (LowIRMethod pos retP name numArgs localsSize irGraph) =
   [ name ++ ":"
   , "#TODO: Implement arguments" ]
   ++ concatMap basicBlockCode [ bcc | (v,bcc) <- labels irGraph]
+  ++ ["ret"]
 
 fieldsCode :: LowIRField -> [String]
 fieldsCode (LowIRField _ name size) = [ name ++ ":"
