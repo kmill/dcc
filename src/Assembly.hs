@@ -5,6 +5,8 @@ import qualified Data.Map as Map
 import Data.Graphs
 import Text.ParserCombinators.Parsec.Pos
 
+type Label = String
+
 binOpInstr :: BinOp -> String
 binOpInstr OpAdd = "addq"
 binOpInstr OpSub = "subq"
@@ -25,7 +27,7 @@ cmovInstr :: CmpBinOp -> String
 cmovInstr cop = "cmov" ++ (cmpBinOpString cop) ++ "q"
 
 jmpInstr :: CmpBinOp -> String
-jmpInstr cop = "j" ++ (cmbBinOpString cop)
+jmpInstr cop = "j" ++ (cmpBinOpString cop)
 
 binInstr :: (Show a, Show b) => String -> a -> b -> String
 binInstr cmd oper1 oper2 = cmd ++ " " ++ (show oper1) ++ ", " ++ (show oper2)
@@ -94,11 +96,11 @@ testCode (Graph graphMap _) vertex =
             , (jmpInstr cop) ++ " " ++ trueLabel
             , "jmp " ++ falseLabel ]
         IRTest oper ->
-            [ binInstr "cmpq" (LowOperConst 0) oper1
+            [ binInstr "cmpq" (LowOperConst 0) oper
             , "jnz " ++ trueLabel
             , "jmp " ++ falseLabel ]
         IRTestNot oper ->
-            [ binInstr "cmpq" (LowOperConst 0) oper1
+            [ binInstr "cmpq" (LowOperConst 0) oper
             , "jz " ++ trueLabel
             , "jmp " ++ falseLabel ]
         IRReturn (Just oper) -> [ binInstr "movq" oper RAX ]
@@ -110,7 +112,7 @@ testCode (Graph graphMap _) vertex =
 --
 
 vertexLabel :: Vertex -> Label
-vertexLabel = "block_" ++ (show vertex) ++ "_start:"
+vertexLabel vertex = "block_" ++ (show vertex) ++ "_start:"
 
 basicBlockCode :: LowIRGraph -> Vertex -> [String]
 basicBlockCode graph@(Graph graphMap _) vertex = 
