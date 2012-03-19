@@ -111,10 +111,10 @@ testCode (Graph graphMap _) vertex =
 --
 
 vertexLabel :: Vertex -> String
-vertexLabel vertex = "block_" ++ (show vertex) ++ "_start:"
+vertexLabel vertex = "block_" ++ (show vertex) ++ "_start"
 
 basicBlockCode :: LowIRGraph -> Vertex -> [String]
-basicBlockCode irGraph@(Graph graphMap _) vertex = [bLabel] ++ instrsCode ++ (testCode irGraph vertex)
+basicBlockCode irGraph@(Graph graphMap _) vertex = [bLabel ++ ":"] ++ instrsCode ++ (testCode irGraph vertex)
     where instrsCode = concatMap instrCode code
           (Just vPair) = Map.lookup vertex graphMap
           (bb@(BasicBlock code _ _), _) = vPair
@@ -152,5 +152,5 @@ lowIRReprCode :: LowIRRepr -> [String]
 lowIRReprCode (LowIRRepr fields strings methods) = [".section .data"]
     ++ concatMap fieldsCode fields
     ++ concatMap stringCode strings
-    ++ [".glbl main"]
-    ++ concatMap methodCode methods  
+    ++ [".globl main"]
+    ++ concatMap methodCode methods

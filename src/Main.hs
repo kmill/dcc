@@ -201,7 +201,7 @@ doGenerateCode opts ifname input
                                        in do 
                                          if  debugMode opts  
                                            then putStrLn $ (unlines $ lowIRReprCode lowir) ++ "\nOLD CODE: \n" ++ (show code) else return ()
-                                         writeFile outFile  (show code)
+                                         writeFile outFile  (unlines $ lowIRReprCode lowir)
                             Left (udata, errors) ->
                                 do putStrLn "Semantic errors:"
                                    putStrLn ""
