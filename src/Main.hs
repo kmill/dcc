@@ -4,6 +4,7 @@ module Main where
 
 import System.Environment
 import System.Exit
+import System.FilePath
 import CLI
 import Data.Maybe (fromMaybe)
 import Control.Monad
@@ -130,7 +131,7 @@ doMidIRFile opts ifname input
                           case doSemanticCheck r of
                             Right _ -> let hast = makeHybridAST r
                                            midir = generateMidIR hast
-                                       in do
+                                       in do 
                                          putStrLn $ midIRToGraphViz midir
                             Left (udata, errors) ->
                                 do putStrLn "Semantic errors:"
@@ -193,12 +194,13 @@ doGenerateCode opts ifname input
                                            midir = generateMidIR hast
                                            lowir = toLowIR midir
                                            code = runGenerateCode (makeHybridAST r) ifname 
-                                       in do
-                                         --putStrLn $ show lowir
-                                         --putStrLn $ lowIRtoGraphViz lowir 
-                                         putStrLn . unlines $ lowIRReprCode lowir
-                                         putStrLn "OLD CODE: "
-                                         putStrLn (show code) 
+                                           outFile = case outputFile opts of
+                                             Just fn -> fn
+                                             Nothing -> replaceExtension ifname ".s"
+                                       in do 
+                                         if  debugMode opts  
+                                           then putStrLn $ (unlines $ lowIRReprCode lowir) ++ "\nOLD CODE: \n" ++ (show code) else return ()
+                                         writeFile outFile  (show code)
                             Left (udata, errors) ->
                                 do putStrLn "Semantic errors:"
                                    putStrLn ""
