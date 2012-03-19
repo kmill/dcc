@@ -2,6 +2,7 @@ module Assembly where
 
 import IR
 import Control.Applicative
+import Data.Graphs
 
 binOpInstr :: BinOp -> String
 binOpInstr OpAdd = "addq"
@@ -64,6 +65,7 @@ instrCode (LowCall pos label _) = [ "call " ++ label ]
 
 instrCode (LowCallout pos label _) = [ "call " ++ label ]
 
+instrCode s = ["#Not Implemented: " ++ (show s)]
 -- 
 -- Code for block-ending tests
 -- 
@@ -85,12 +87,12 @@ basicBlockCode (BasicBlock code test testPos) = instrsCode ++ (testCode test)
 
 methodCode :: LowIRMethod -> [String]
 methodCode (LowIRMethod pos retP name numArgs localsSize irGraph) =
-    [ "# TODO: Implement method calls" 
-    , name ++ ":"]
+  [ name ++ ":"
+  , "#TODO: Implement arguments" ]
+  ++ concatMap basicBlockCode [ bcc | (v,bcc) <- labels irGraph]
 
 fieldsCode :: LowIRField -> [String]
-fieldsCode (LowIRField _ name size) = [ "#Make a field for " ++ name
-                                      , name ++ ":"
+fieldsCode (LowIRField _ name size) = [ name ++ ":"
                                       , "\t.long " ++ (show size)]
 
 stringCode (name, _, str) = [ name ++ ":"
@@ -100,13 +102,8 @@ stringCode (name, _, str) = [ name ++ ":"
 --
 
 lowIRReprCode :: LowIRRepr -> [String]
-lowIRReprCode (LowIRRepr fields strings methods) =
-  [ "# TODO: Write full translation code"]
-  ++ [".section .data"]
+lowIRReprCode (LowIRRepr fields strings methods) = [".section .data"]
   ++ concatMap fieldsCode fields
---  ++ ["STRINGS:"]
   ++ concatMap stringCode strings
   ++ [".glbl main"]
-  ++ concatMap methodCode methods
-  ++ [ "#End of Repr" ]
-  
+  ++ concatMap methodCode methods  
