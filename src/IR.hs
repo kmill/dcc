@@ -162,6 +162,7 @@ type MidIRGraph = Graph MidBasicBlock Bool
 
 data MidOper = OperVar String
              | OperConst Int64
+             | OperLabel String
 
 data MidIRInst
     = BinAssign SourcePos String BinOp MidOper MidOper
@@ -328,6 +329,7 @@ instance Show LowIRInst where
 instance Show MidOper where
     show (OperVar v) = v
     show (OperConst i) = "$" ++ show i
+    show (OperLabel s) = "$" ++ s
           
 instance Show MidIRInst where
     show (BinAssign pos r op oper1 oper2)

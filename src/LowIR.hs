@@ -116,6 +116,7 @@ operToLoadCode :: Globals -> SourcePos -> MidOper
                -> State LowIRState ([LowIRInst], LowOper)
 operToLoadCode g pos (OperVar s) = varToLoadCode g pos s
 operToLoadCode g pos (OperConst v) = return $ ([], LowOperConst v)
+operToLoadCode g pos (OperLabel s) = return $ ([], LowOperLabel s)
 
 destToStoreCode :: Globals -> SourcePos -> String
                 -> State LowIRState ([LowIRInst], RegName)
