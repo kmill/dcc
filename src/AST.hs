@@ -3,6 +3,7 @@
 
 module AST ( PP(..)
            , SourcePos
+           , showPos
            , DProgram(..) 
            , FieldDecl(..)
            , FieldVar(..)
@@ -31,6 +32,11 @@ import Data.Int
 -- | The 'PP' class is for pretty printing objects into 'Doc's.
 class PP a where
     pp :: a -> Doc
+
+-- | This prints out 'SourcePos' in a more column-friendly manner.
+showPos :: SourcePos -> String
+showPos pos = "line " ++ (show $ sourceLine pos)
+              ++ ", col " ++ (show $ sourceColumn pos)
 
 ---
 --- AST data

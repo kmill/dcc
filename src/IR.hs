@@ -179,6 +179,11 @@ data MidIRInst
     | IndAssign SourcePos String MidOper
     | MidCall SourcePos (Maybe String) String [MidOper]
     | MidCallout SourcePos (Maybe String) String [Either String MidOper]
+      
+      
+---
+--- DeadChecker
+---
 
 class DeadChecker a b c | a -> c where
     -- | For a given statement, returns a tuple of (unused, used)
@@ -209,6 +214,12 @@ instance DeadChecker MidIRInst MidOper String where
           , concatMap (either (const []) fromMidOper) eopers)
           
 
+---
+--- BasicBlock normalization
+---
+
+-- | Runs a couple of rules on the ir graph to 'normalize' the graph
+-- (for instance, to make basic blocks as big as possible).
 normalizeBlocks :: IRGraph (BasicBlock a b) -> IRGraph (BasicBlock a b)
 normalizeBlocks g = rewriteGraph (cullGraph g) rules
     where rules = normalizeBlocks_rule_join_true
@@ -249,6 +260,10 @@ normalizeBlocks_rule_join_conditional g v
          let newouts = withStartVertex w (adjEdges g v)
          gReplace [v,w] [(w,newblock)] newouts
              
+
+---
+--- Show!
+---
 
 instance Show CmpBinOp where
     show CmpLT = "<"
@@ -387,11 +402,3 @@ instance (Show a, Show b) => PP (BasicBlock a b) where
       = (vcat $ map (text . show) code)
         $+$ (text $ "(" ++ show test ++ ")")
         <+> (text $ showPos pos)
-
---instance (Show a, Show b) => PP (LabGraph (BasicBlock a b) Bool) where
---    show (LabGraph gr l)
---        = vcat $ map (\v -> text ("L" ++ v ++ ":")
---                            $+$ (nest 3 (pp $ l v))
-
-showPos :: SourcePos -> String
-showPos pos = printf "line %i, col %i" (sourceLine pos) (sourceColumn pos)
