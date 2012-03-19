@@ -113,7 +113,13 @@ data LowIRRepr = LowIRRepr
     , lowIRStrings :: [(String, SourcePos, String)]
     , lowIRMethods :: [LowIRMethod] }
 data LowIRField = LowIRField SourcePos String Int64
-data LowIRMethod = LowIRMethod SourcePos Bool String Int LowIRGraph
+data LowIRMethod = LowIRMethod
+    { lowIRMethodPos :: SourcePos 
+    , lowIRMethodRetP :: Bool 
+    , lowIRMethodName :: String 
+    , lowIRMethodNumArgs :: Int 
+    , lowIRMethodLocalsSize :: Int64
+    , lowIRMethodIRGraph :: LowIRGraph }
 type LowIRGraph = Graph LowBasicBlock Bool
 
 data LowOper = OperReg RegName
@@ -156,6 +162,7 @@ type MidIRGraph = Graph MidBasicBlock Bool
 
 data MidOper = OperVar String
              | OperConst Int64
+             | OperLabel String
 
 data MidIRInst
     = BinAssign SourcePos String BinOp MidOper MidOper
@@ -204,6 +211,7 @@ instance DeadChecker MidIRInst MidOper String where
 --normalizeBlocks :: MidIRGraph -> MidIRGraph
 normalizeBlocks g = rewriteGraph (cullGraph g) rules
     where rules = normalizeBlocks_rule_join_true
+                  ||| normalizeBlocks_rule_join_conditional
           -- add more with `mplus`.
     
 -- | Check to see if the block leading to this block unconditionally
@@ -224,6 +232,21 @@ normalizeBlocks_rule_join_true g v
                         , blockTestPos = blockTestPos (g !!! v) }
          let newouts = withStartVertex w (adjEdges g v)
          gReplace [v,w] [(w,newblock)] newouts
+
+normalizeBlocks_rule_join_conditional g v 
+    = do let preVerts = preVertices g v 
+         guard $ 1 == length preVerts 
+         let [w] = preVerts 
+         guard $ v /= w 
+         guard $ hasEdgeTo g w True v 
+         guard $ hasEdgeTo g w False v 
+         let newblock = BasicBlock
+                        { blockCode = blockCode (g !!! w) ++ blockCode (g !!! v)
+                        , blockTest = blockTest (g !!! v)
+                        , blockTestPos = blockTestPos (g !!! v) }
+         let newouts = withStartVertex w (adjEdges g v)
+         gReplace [v,w] [(w,newblock)] newouts
+             
 
 instance Show CmpBinOp where
     show CmpLT = "<"
@@ -306,6 +329,7 @@ instance Show LowIRInst where
 instance Show MidOper where
     show (OperVar v) = v
     show (OperConst i) = "$" ++ show i
+    show (OperLabel s) = "$" ++ s
           
 instance Show MidIRInst where
     show (BinAssign pos r op oper1 oper2)

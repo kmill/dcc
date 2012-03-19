@@ -349,7 +349,7 @@ expressionToMidIR env s out (HLoadLoc senv pos loc)
                 (Term _ (SArray _ len)) = fromJust $ envLookup var senv
             in do ts <- genTmpVar
                   ti <- genTmpVar
-                  loadBlock <- newBlock [ UnAssign pos ts OpAddr (OperVar var')
+                  loadBlock <- newBlock [ ValAssign pos ts (OperLabel var')
                                         , BinAssign pos ti OpMul
                                             (OperVar ti) (OperConst 8)
                                          , BinAssign pos ts OpAdd

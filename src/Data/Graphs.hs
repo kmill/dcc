@@ -132,6 +132,9 @@ instance MonadPlus (GraphPattern v e) where
                     Just a -> ma
                     Nothing -> mb
 
+(|||) :: RewriteRule v e -> RewriteRule v e -> RewriteRule v e
+(r1 ||| r2) g v = (r1 g v) `mplus` (r2 g v)
+
 type RewriteRule v e = Graph v e -> Vertex -> GraphPattern v e ([Vertex], [(Vertex,v)], [(Vertex,e,Vertex)])
 
 gReplace :: [Vertex] -- | ^ vertices to replace

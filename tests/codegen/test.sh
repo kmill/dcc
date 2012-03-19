@@ -1,8 +1,7 @@
 #!/bin/sh
 
 runcompiler() {
-  java -jar `dirname $0`/../../dist/Compiler.jar \
-    -target codegen -opt all -o $2 $1
+    ../../dcc -target codegen -opt all -o $2 $1
 }
 
 fail=0
