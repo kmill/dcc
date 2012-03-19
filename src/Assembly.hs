@@ -1,3 +1,5 @@
+module Assembly where
+
 import IR
 
 binOpInstr :: BinOp -> String
@@ -24,10 +26,10 @@ unInstr cmd oper = cmd ++ " " ++ (show oper)
 
 instrCode :: LowIRInst -> [String]
 
-instrCode (RegBin pos (X86Reg reg) (CmpBinOp cop) oper1 oper2) =
+instrCode (RegBin pos (X86Reg reg) (OpBinCmp cop) oper1 oper2) =
     [ binInstr "movq" (LowOperConst 0) reg
     , binInstr "cmpq" oper1 oper2
-    , binInstr (cmovInstr cop) (LowOperConst 1) (OperReg reg) ]
+    , binInstr (cmovInstr cop) (LowOperConst 1) reg ]
       
 instrCode (RegBin pos (X86Reg reg) op oper1 oper2) =
     [ binInstr "movq" oper2 reg

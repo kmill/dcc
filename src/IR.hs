@@ -255,8 +255,8 @@ instance Show CmpBinOp where
     show CmpGTE = ">="
     show CmpEQ = "=="
     show CmpNEQ = "!="
-    show CmpAnd = "&&"
-    show CmpOr = "||"
+--    show CmpAnd = "&&"
+--    show CmpOr = "||"
 instance Show CmpUnOp where
     show CmpZero = "0=="
     show CmpNZero = "0!="

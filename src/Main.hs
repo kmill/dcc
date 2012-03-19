@@ -19,6 +19,7 @@ import Unify
 import CodeGenerate
 import MidIR
 import LowIR
+import Assembly
  
 -- | The main entry point to @dcc@.  See 'CLI' for command line
 -- arguments.
