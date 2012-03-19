@@ -161,4 +161,4 @@ lowIRReprCode (LowIRRepr fields strings methods) = [".section .data"]
     ++ concatMap fieldsCode fields
     ++ concatMap stringCode strings
     ++ [".globl main"]
-    ++ methodCode (head methods)
+    ++ methodCode (head $ filter (\x -> ("main" == lowIRMethodName x)) methods)
