@@ -12,6 +12,7 @@ import Data.List
 import Data.Int
 import Data.Maybe
 import Data.Either
+import Control.Monad
 
 boolToInt :: Bool -> Int64
 boolToInt True = 1
@@ -25,8 +26,15 @@ data BasicBlock a b = BasicBlock
 type LowBasicBlock = BasicBlock LowIRInst LowOper
 type MidBasicBlock = BasicBlock MidIRInst MidOper
 
---type LowIR = LabGraph LowBasicBlock Bool
---type MidIR = LabGraph MidBasicBlock Bool
+-- | This is the order of arguments in registers for the ABI.
+-- 'Nothing' represents that the argument comes from the stack.
+argOrder :: [Maybe X86Reg]
+argOrder = (map Just [RDI, RSI, RDX, RCX, R8, R9]) ++ nothings
+    where nothings = Nothing:nothings
+
+argStackDepth :: [Int]
+argStackDepth = [no, no, no, no, no, no] ++ [16, 16+8..]
+    where no = error "argStackDepth for non-stack-arg :-("
 
 data IRTest b = IRTestTrue
               | IRTestFalse
@@ -34,7 +42,7 @@ data IRTest b = IRTestTrue
               | IRTest b
               | IRTestNot b
               | IRReturn (Maybe b)
-              | IRTestFail String
+              | IRTestFail (Maybe String)
 
 data X86Reg = RAX -- temp reg, return value
             | RBX -- callee-saved
@@ -110,6 +118,7 @@ type LowIRGraph = Graph LowBasicBlock Bool
 
 data LowOper = OperReg RegName
              | LowOperConst Int64
+             | LowOperLabel String
 
 data MemAddr = MemAddr { memBaseReg :: RegName
                        , memDisplace :: Int
@@ -128,6 +137,7 @@ data LowIRInst
       , regCondCmp1 :: LowOper 
       , regCondCmp2 :: LowOper 
       , regCondSrc :: LowOper } -- ^ "r := (if r < r) r"
+    | RegPush SourcePos LowOper
     | StoreMem SourcePos MemAddr LowOper
     | LoadMem SourcePos RegName MemAddr
     | LowCall SourcePos String Int -- ^ int is number of args
@@ -189,6 +199,31 @@ instance DeadChecker MidIRInst MidOper String where
     checkExtents (MidCallout _ mdest _ eopers)
         = ( maybeToList mdest
           , concatMap (either (const []) fromMidOper) eopers)
+          
+
+--normalizeBlocks :: MidIRGraph -> MidIRGraph
+normalizeBlocks g = rewriteGraph (cullGraph g) rules
+    where rules = normalizeBlocks_rule_join_true
+          -- add more with `mplus`.
+    
+-- | Check to see if the block leading to this block unconditionally
+-- goes to this block.
+--normalizeBlocks_rule_join_true :: RewriteRule MidBasicBlock Bool
+normalizeBlocks_rule_join_true g v
+    = do let preVerts = preVertices g v
+         guard $ 1 == length preVerts
+         let [w] = preVerts
+         guard $ v /= w -- make sure it's not a self-loop!
+         case blockTest (g !!! w) of
+           IRTestTrue -> guard $ hasEdgeTo g w True v
+           IRTestFalse -> guard $ hasEdgeTo g w False v
+           _ -> mzero
+         let newblock = BasicBlock
+                        { blockCode = blockCode (g !!! w) ++ blockCode (g !!! v)
+                        , blockTest = blockTest (g !!! v)
+                        , blockTestPos = blockTestPos (g !!! v) }
+         let newouts = withStartVertex w (adjEdges g v)
+         gReplace [v,w] [(w,newblock)] newouts
 
 instance Show CmpBinOp where
     show CmpLT = "<"
@@ -206,6 +241,7 @@ instance Show CmpUnOp where
 instance Show LowOper where
     show (OperReg r) = show r
     show (LowOperConst i) = "$" ++ show i
+    show (LowOperLabel s) = "$" ++ s
 
 instance Show MemAddr where
     show (MemAddr base 0 Nothing _)
@@ -218,7 +254,7 @@ instance Show MemAddr where
     show (MemAddr base disp (Just offset) scalar)
         = printf "[%s + %s + %s * %s]"
           (show base) (show disp) (show offset) (show scalar)
-    show (MemAddrPtr s) = "$" ++ s
+    show (MemAddrPtr s) = "[$" ++ s ++ "]"
 
 instance Show X86Reg where
     show RAX = "%rax"
@@ -252,6 +288,9 @@ instance Show LowIRInst where
         = printf "%s := (if %s %s %s) %s  {%s}"
           (show dest) (show cmp1) (show cmp) (show cmp2)
           (show src) (showPos pos)
+    show (RegPush pos oper)
+        = printf "push %s  {%s}"
+          (show oper) (showPos pos)
     show (StoreMem pos mem oper)
         = printf "%s := %s  {%s}"
           (show mem) (show oper) (showPos pos)
@@ -259,9 +298,9 @@ instance Show LowIRInst where
         = printf "%s := %s  {%s}"
           (show reg) (show mem) (showPos pos)
     show (LowCall pos name numargs)
-        = printf "call %s(%s)  {%s}" (show name) (show numargs) (showPos pos)
+        = printf "call %s %s  {%s}" name (show numargs) (showPos pos)
     show (LowCallout pos name numargs)
-        = printf "callout %s(%s)  {%s}" (show name) (show numargs) (showPos pos)
+        = printf "callout %s %s  {%s}" (show name) (show numargs) (showPos pos)
           
           
 instance Show MidOper where
@@ -311,7 +350,7 @@ instance Show b => Show (IRTest b) where
   show (IRTestNot oper) = "!" ++ (show oper)
   show (IRReturn Nothing) = "return"
   show (IRReturn (Just oper)) = "return " ++ (show oper)
-  show (IRTestFail s) = "fail " ++ show s
+  show (IRTestFail s) = "fail " ++ (maybe "" show s)
 
 instance (Show a, Show b) => Show (BasicBlock a b) where
   show bb = render $ pp bb

@@ -59,6 +59,10 @@ adjVertices (Graph m st) i = map snd $ Map.assocs $ snd $ fromJust $ Map.lookup 
 preVertices :: Ord e => Graph v e -> Vertex -> [Vertex]
 preVertices g v = [vert | vert <- vertices g, v `elem` (adjVertices g vert)]
 
+-- | Gets a Vertex number which has been unused by the graph.
+freshVertex :: Ord e => Graph v e -> Vertex
+freshVertex g = head (filter (`notElem` (vertices g)) [0..])
+
 createGraph :: Ord e => [(Vertex, v)] -> [(Vertex, e, Vertex)] -> Vertex -> Graph v e
 createGraph verts edges st
     = Graph (Map.fromList $ map attachEdges verts) st
@@ -66,7 +70,7 @@ createGraph verts edges st
                 = (i, (v
                       , Map.fromList [(l, end) | (st, l, end) <- edges, i == st]))
 
-replaceVertices :: (Show v, Show e, Ord e) => Graph v e -- | ^ initial graph
+replaceVertices :: Ord e => Graph v e -- | ^ initial graph
                 -> [Vertex] -- | ^ vertices to replace
                 -> [(Vertex, v)] -- | ^ vertices to replace them with
                 -> [(Vertex, e, Vertex)] -- | ^ edges to insert
@@ -75,6 +79,12 @@ replaceVertices g vs newvs newedges
     = let newvertices = (filter (\(i,_) -> i `notElem` vs) (labels g)) ++ newvs
           edges' = (filter (\(s,_,_) -> s `notElem` vs) (edges g)) ++ newedges
       in createGraph newvertices edges' (startVertex g)
+
+graphWithNewStart :: Ord e => Graph v e -> Vertex -> v -> [(e,Vertex)] -> Graph v e
+graphWithNewStart g newst vert edges
+    = let Graph m _
+              = replaceVertices g [] [(newst, vert)] (withStartVertex newst edges)
+      in Graph m newst
 
 ---
 --- Maps
@@ -135,7 +145,7 @@ gReplace vs newvs edges = return (vs, newvs, edges)
 -- to do this!  As of now, doesn't check to see if we reach a fixed
 -- point, for instance (which can be fixed by essentially running the
 -- algorithm a number of times).
-rewriteGraph :: (Show v, Show e, Ord e) => Graph v e -> RewriteRule v e -> Graph v e
+rewriteGraph :: Ord e => Graph v e -> RewriteRule v e -> Graph v e
 rewriteGraph g rule = rewriteGraph' g [] [startVertex g]
     where rewriteGraph' g visited toVisit
               = case toVisit of

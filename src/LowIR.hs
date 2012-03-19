@@ -3,6 +3,7 @@ module LowIR where
 import IR
 --import MidIR
 import Data.Maybe
+import Control.Applicative
 import Control.Monad
 import Control.Monad.State
 import Data.Graphs
@@ -37,6 +38,19 @@ genReg :: State LowIRState RegName
 genReg = do s <- get
             put $ s { nextSymbRegId = 1 + nextSymbRegId s }
             return $ SymbolicReg $ nextSymbRegId s
+
+loadStringLit :: SourcePos -> String
+              -> State LowIRState ([LowIRInst], LowOper)
+loadStringLit pos str
+    = do s <- get
+         let sname = "string_"
+                     ++ (stringLabelPrefix s)
+                     ++ "_" ++ (show $ nextStringId s)
+         put $ s { nextStringId = nextStringId s + 1
+                 , stringMap = (sname, pos, str):(stringMap s) }
+         r <- genReg
+         return $ ( [RegVal pos r (LowOperLabel sname)]
+                  , OperReg r )
                            
 -- | Main entry point to convert mid-IR to low-IR.
 toLowIR :: MidIRRepr -> LowIRRepr
@@ -62,17 +76,35 @@ methodToLowIR glob (MidIRMethod pos retp name args mir)
                            , regMap=Map.empty
                            , stringLabelPrefix=name })
          lir <- mapGM (basicBlockToLowIR glob) mir
-         return $ LowIRMethod pos retp name (length args) lir
+         makeargs <- makeArgs
+         lir' <- extendWithArgs lir
+         return $ LowIRMethod pos retp name (length args) (normalizeBlocks lir')
+    where extendWithArgs ir
+              = let st' = freshVertex ir
+                in do argcode <- makeArgs    
+                      let argblock = BasicBlock
+                                     { blockCode=argcode
+                                     , blockTest=IRTestTrue
+                                     , blockTestPos=pos }
+                      return $ graphWithNewStart ir st' argblock [(True, startVertex ir)]
+          makeArgs = do sregs <- mapM getReg args
+                        let withdests = zip3 argStackDepth argOrder sregs
+                        return $ concatMap loadArg withdests
+          loadArg (depth, Nothing, sreg)
+              = [LoadMem pos sreg (MemAddr (X86Reg RBP) depth Nothing 0)]
+          loadArg (_, Just src, sreg)
+              = [RegVal pos sreg (OperReg $ X86Reg src)]
 
 basicBlockToLowIR :: Globals -> MidBasicBlock -> State LowIRState LowBasicBlock
 basicBlockToLowIR glob (BasicBlock code test testpos)
     = do (testcode, test') <- testToLowIR glob testpos test
-         return $ BasicBlock testcode test' testpos
+         code' <- mapM (statementToLowIR glob) code
+         return $ BasicBlock (join code' ++ testcode) test' testpos
 
 varToLoadCode :: Globals -> SourcePos -> String
               -> State LowIRState ([LowIRInst], LowOper)
-varToLoadCode g pos s
-    = case s `elem` g of
+varToLoadCode glob pos s
+    = case s `elem` glob of
         True -> do r <- genReg
                    return $ ( [LoadMem pos r (MemAddrPtr s)]
                             , OperReg r)
@@ -83,6 +115,29 @@ operToLoadCode :: Globals -> SourcePos -> MidOper
                -> State LowIRState ([LowIRInst], LowOper)
 operToLoadCode g pos (OperVar s) = varToLoadCode g pos s
 operToLoadCode g pos (OperConst v) = return $ ([], LowOperConst v)
+
+destToStoreCode :: Globals -> SourcePos -> String
+                -> State LowIRState ([LowIRInst], RegName)
+destToStoreCode glob pos name
+    = case name `elem` glob of
+        True -> do r <- genReg
+                   return $ ( [StoreMem pos (MemAddrPtr name) (OperReg r)]
+                            , r )
+        False -> do r <- getReg name
+                    return $ ([], r)
+
+destToIndStoreCode :: Globals -> SourcePos -> String
+                -> State LowIRState ([LowIRInst], RegName)
+destToIndStoreCode glob pos name
+    = case name `elem` glob of
+        True -> do r <- genReg
+                   let addr = MemAddrPtr name
+                   return $ ( [ StoreMem pos addr (OperReg r) ]
+                            , r )
+        False -> do r <- getReg name
+                    r' <- genReg
+                    let addr = MemAddr r 0 Nothing 0
+                    return $ ([ StoreMem pos addr (OperReg r') ], r')
 
 testToLowIR :: Globals -> SourcePos -> IRTest MidOper
             -> State LowIRState ([LowIRInst], IRTest LowOper)
@@ -102,9 +157,80 @@ testToLowIR glob pos test =
              return (code, IRTestNot oper')
       IRReturn (Just oper) ->
           do (code, oper') <- operToLoadCode glob pos oper
-             return (code, IRReturn $ Just oper')
+             return ( code ++ [RegVal pos (X86Reg RAX) oper']
+                    , IRReturn $ Just $ OperReg (X86Reg RAX))
       IRReturn Nothing -> return ([], IRReturn Nothing)
-      IRTestFail s -> return ([], IRTestFail s)
+      IRTestFail s -> do (code, r) <- loadStringLit pos (fromMaybe "Error." s)
+                         return (code
+                                 ++ [ RegVal pos (X86Reg RDI) r
+                                    , LowCallout pos "printf" 1 ],
+                                 IRTestFail Nothing)
+
+statementToLowIR :: Globals -> MidIRInst
+                 -> State LowIRState [LowIRInst]
+statementToLowIR glob inst =
+    case inst of
+      BinAssign pos dest op oper1 oper2 ->
+          do (code1, reg1) <- operToLoadCode glob pos oper1
+             (code2, reg2) <- operToLoadCode glob pos oper2
+             (coded, regd) <- destToStoreCode glob pos dest
+             return $ code1 ++ code2
+                        ++ [RegBin pos regd op reg1 reg2]
+                        ++ coded
+      UnAssign pos dest op oper ->
+          do (code1, reg1) <- operToLoadCode glob pos oper
+             (coded, regd) <- destToStoreCode glob pos dest
+             return $ code1 ++ [RegUn pos regd op reg1] ++ coded
+      ValAssign pos dest oper ->
+          do (code1, reg1) <- operToLoadCode glob pos oper
+             (coded, regd) <- destToStoreCode glob pos dest
+             return $ code1 ++ [RegVal pos regd reg1] ++ coded
+      CondAssign pos dest cmp cmp1 cmp2 src ->
+          do (code1, reg1) <- operToLoadCode glob pos cmp1
+             (code2, reg2) <- operToLoadCode glob pos cmp2
+             (codes, regs) <- operToLoadCode glob pos src
+             (coded, regd) <- destToStoreCode glob pos dest
+             return $ code1 ++ code2 ++ codes
+                        ++ [RegCond pos regd cmp
+                            reg1 reg2 regs]
+                        ++ coded
+      IndAssign pos dest oper ->
+          do (code1, reg1) <- operToLoadCode glob pos oper
+             (coded, regd) <- destToIndStoreCode glob pos dest
+             return $ code1 ++ [RegVal pos regd reg1] ++ coded
+      MidCall pos mret name opers ->
+          do coderegs <- mapM (operToLoadCode glob pos) opers
+             let coderegs' = reverse $ zip argOrder coderegs
+             (coded, regd) <- case mret of
+                                Just rret -> destToStoreCode glob pos rret
+                                Nothing -> error "MidCall lowir :-("
+             return $ (concatMap handleArg coderegs')
+                        ++ [ LowCall pos name (length opers) ]
+                        ++ (case mret of
+                               Just rret -> [RegVal pos regd (OperReg (X86Reg RAX))]
+                                            ++ coded
+                               Nothing -> [])
+          where handleArg (Nothing, (code, sreg))
+                    = code ++ [RegPush pos sreg]
+                handleArg ((Just dreg), (code, src))
+                    = code ++ [RegVal pos (X86Reg dreg) src]
+      MidCallout pos mret name opers ->
+          do coderegs <- mapM (either (loadStringLit pos) (operToLoadCode glob pos))
+                         opers
+             let coderegs' = reverse $ zip argOrder coderegs
+             (coded, regd) <- case mret of
+                                Just rret -> destToStoreCode glob pos rret
+                                Nothing -> error "MidCall lowir :-("
+             return $ (concatMap handleArg coderegs')
+                         ++ [ LowCallout pos name (length opers) ]
+                         ++ (case mret of
+                               Just rret -> [RegVal pos regd (OperReg (X86Reg RAX))]
+                                            ++ coded
+                               Nothing -> [])
+          where handleArg (Nothing, (code, sreg))
+                    = code ++ [RegPush pos sreg]
+                handleArg ((Just dreg), (code, src))
+                    = code ++ [RegVal pos (X86Reg dreg) src]
 
 ---
 --- Show LowIRRepr!
@@ -160,8 +286,10 @@ lowIRtoGraphViz m = "digraph name {\n"
         showFields fields = "_fields_ [shape=record,label=\"fields|{"
                             ++ intercalate "|" (map showField fields)
                             ++ "}\"];\n"
-        showStrings strings = "_strings_ [shape=record,label=\"strings|{"
-                              ++ intercalate "|" (map showString strings)
-                              ++ "}\"];\n"
+        showStrings strings = "_strings_ [shape=record,label="
+                              ++ show ("strings|{"
+                                       ++ intercalate "|" (map showString strings)
+                                       ++ "}")
+                              ++ "];\n"
         showString (name, pos, str)
-            = "{" ++ name ++ "|" ++ show str ++ "|" ++ show pos ++ "}"
+            = "{" ++ name ++ "|" ++ showPos pos ++ "|" ++ show str ++ "}"

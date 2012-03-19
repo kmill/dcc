@@ -19,34 +19,6 @@ import Data.List
 import Data.Graphs
 
 ---
---- MidIR normalization rules
----
-
-normalizeBlocks :: MidIRGraph -> MidIRGraph
-normalizeBlocks g = rewriteGraph (cullGraph g) rules
-    where rules = normalizeBlocks_rule_join_true
-          -- add more with `mplus`.
-    
--- | Check to see if the block leading to this block unconditionally
--- goes to this block.
-normalizeBlocks_rule_join_true :: RewriteRule MidBasicBlock Bool
-normalizeBlocks_rule_join_true g v
-    = do let preVerts = preVertices g v
-         guard $ 1 == length preVerts
-         let [w] = preVerts
-         guard $ v /= w -- make sure it's not a self-loop!
-         case blockTest (g !!! w) of
-           IRTestTrue -> guard $ hasEdgeTo g w True v
-           IRTestFalse -> guard $ hasEdgeTo g w False v
-           _ -> mzero
-         let newblock = BasicBlock
-                        { blockCode = blockCode (g !!! w) ++ blockCode (g !!! v)
-                        , blockTest = blockTest (g !!! v)
-                        , blockTestPos = blockTestPos (g !!! v) }
-         let newouts = withStartVertex w (adjEdges g v)
-         gReplace [v,w] [(w,newblock)] newouts
-
----
 --- Go from HAST to MidIRRepr
 ---
 
@@ -255,8 +227,8 @@ statementToMidIR env s c b (HAssignSt senv pos loc op expr)
                   addEdge storeBlock True s
                   evalexpr <- expressionToMidIR env storeBlock ts expr
                   failBounds <- newBlock []
-                                (IRTestFail ("Array index out of bounds at "
-                                             ++ show pos))
+                                (IRTestFail $ Just ("Array index out of bounds at "
+                                                    ++ show pos))
                                 pos
                   checkBounds2 <- newBlock []
                                   (IRTestBinOp CmpGTE (OperVar ti) (OperConst 0))
@@ -386,8 +358,8 @@ expressionToMidIR env s out (HLoadLoc senv pos loc)
                                IRTestTrue pos
                   addEdge loadBlock True s
                   failBounds <- newBlock []
-                                (IRTestFail ("Array index out of bounds at "
-                                             ++ show pos))
+                                (IRTestFail $ Just ("Array index out of bounds at "
+                                                    ++ show pos))
                                 pos
                   checkBounds2 <- newBlock []
                                   (IRTestBinOp CmpGTE (OperVar ti) (OperConst 0))
