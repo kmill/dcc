@@ -5,8 +5,6 @@ import qualified Data.Map as Map
 import Data.Graphs
 import Text.ParserCombinators.Parsec.Pos
 
-type Label = String
-
 binOpInstr :: BinOp -> String
 binOpInstr OpAdd = "addq"
 binOpInstr OpSub = "subq"
@@ -89,37 +87,38 @@ testCode (Graph graphMap _) vertex =
         trueLabel = vertexLabel trueEdge
         falseLabel = vertexLabel falseEdge
     in case test of
-        IRTestTrue -> [ "jmp " ++ trueLabel ]
-        IRTestFalse -> [ "jmp " ++ falseLabel ]
-        IRTestBinOp cop oper1 oper2 ->
-            [ binInstr "cmpq" oper1 oper2
-            , (jmpInstr cop) ++ " " ++ trueLabel
-            , "jmp " ++ falseLabel ]
-        IRTest oper ->
-            [ binInstr "cmpq" (LowOperConst 0) oper
-            , "jnz " ++ trueLabel
-            , "jmp " ++ falseLabel ]
-        IRTestNot oper ->
-            [ binInstr "cmpq" (LowOperConst 0) oper
-            , "jz " ++ trueLabel
-            , "jmp " ++ falseLabel ]
-        IRReturn (Just oper) -> [ binInstr "movq" oper RAX ]
-        IRReturn (Nothing) -> []
-        IRTestFail _ -> [ "# What is this?" ]
+      IRTestTrue -> [ "jmp " ++ trueLabel ]
+      IRTestFalse -> [ "jmp " ++ falseLabel ]
+      IRTestBinOp cop oper1 oper2 ->
+        [ binInstr "cmpq" oper1 oper2
+        , (jmpInstr cop) ++ " " ++ trueLabel
+        , "jmp " ++ falseLabel ]
+      IRTest oper ->
+        [ binInstr "cmpq" (LowOperConst 0) oper
+        , "jnz " ++ trueLabel
+        , "jmp " ++ falseLabel ]
+      IRTestNot oper ->
+        [ binInstr "cmpq" (LowOperConst 0) oper
+        , "jz " ++ trueLabel
+        , "jmp " ++ falseLabel ]
+      IRReturn (Just oper) -> [ binInstr "movq" oper RAX ]
+      IRReturn (Nothing) -> []
+      IRTestFail (Just oper) -> [ "#IRTestFail on " ++ (show oper), "jmp " ++ falseLabel]
+      IRTestFail Nothing -> ["#IRTestFail on Nothing", "jmp " ++ falseLabel]
 
 --
 -- Code for whole basic blocks
 --
 
-vertexLabel :: Vertex -> Label
-vertexLabel vertex = "block_" ++ (show vertex) ++ "_start:"
+vertexLabel :: Vertex -> String
+vertexLabel vertex = "block_" ++ (show vertex) ++ "_start"
 
 basicBlockCode :: LowIRGraph -> Vertex -> [String]
-basicBlockCode graph@(Graph graphMap _) vertex = 
-    [ vertexLabel vertex ] ++ instrsCode ++ (testCode graph vertex)
+basicBlockCode irGraph@(Graph graphMap _) vertex = [bLabel ++ ":"] ++ instrsCode ++ (testCode irGraph vertex)
     where instrsCode = concatMap instrCode code
           (Just vPair) = Map.lookup vertex graphMap
-          (BasicBlock code _ pos, _) = vPair
+          (bb@(BasicBlock code _ _), _) = vPair
+          bLabel = vertexLabel vertex
 
 --
 -- Translate method
@@ -130,13 +129,14 @@ calleeSaved = [ RBP, RBX, R12, R13, R14, R15 ]
 
 methodCode :: LowIRMethod -> [String]
 methodCode (LowIRMethod pos retP name numArgs localsSize irGraph) =
-    [ name ++ ":"
-    , "enter $(8 * " ++ (show localsSize) ++ "), $0" ] ++
-    map (unInstr "pushq") calleeSaved ++
-    concatMap (basicBlockCode irGraph) (vertices irGraph) ++
-    map (unInstr "popq") (reverse calleeSaved) ++
-    [ "leave"
-    , "ret"]
+  [ name ++ ":"
+  , "enter $(8 * " ++ (show localsSize) ++ "), $0" ] ++
+  map (unInstr "pushq") calleeSaved ++
+  concatMap (basicBlockCode irGraph) (vertices irGraph) ++
+  map (unInstr "popq") (reverse calleeSaved) ++
+  [ "leave"
+  , "ret"]
+
 
 fieldsCode :: LowIRField -> [String]
 fieldsCode (LowIRField _ name size) = [ name ++ ":"
@@ -152,5 +152,5 @@ lowIRReprCode :: LowIRRepr -> [String]
 lowIRReprCode (LowIRRepr fields strings methods) = [".section .data"]
     ++ concatMap fieldsCode fields
     ++ concatMap stringCode strings
-    ++ [".glbl main"]
-    ++ concatMap methodCode methods  
+    ++ [".globl main"]
+    ++ concatMap methodCode methods
