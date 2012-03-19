@@ -36,7 +36,7 @@ main = do args <- getArgs
             TargetInter -> doCheckFile opts ifname input
             TargetMidIR -> doMidIRFile opts ifname input
             TargetLowIR -> doLowIRFile opts ifname input
-            TargetDefault -> doCheckFile opts ifname input
+            TargetDefault -> doGenerateCode opts ifname input
             TargetCodeGen -> doGenerateCode opts ifname input
             _ -> error "No such target"
 
@@ -189,8 +189,16 @@ doGenerateCode opts ifname input
                              exitWith $ ExitFailure 2
                       Right r ->
                           case doSemanticCheck r of
-                            Right x -> let code = runGenerateCode (makeHybridAST r) ifname in
-                                       putStrLn (show code) 
+                            Right x -> let hast = makeHybridAST r
+                                           midir = generateMidIR hast
+                                           lowir = toLowIR midir
+                                           code = runGenerateCode (makeHybridAST r) ifname 
+                                       in do
+                                         --putStrLn $ show lowir
+                                         --putStrLn $ lowIRtoGraphViz lowir 
+                                         putStrLn . unlines $ lowIRReprCode lowir
+                                         putStrLn "OLD CODE: "
+                                         putStrLn (show code) 
                             Left (udata, errors) ->
                                 do putStrLn "Semantic errors:"
                                    putStrLn ""

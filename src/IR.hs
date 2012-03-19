@@ -61,9 +61,11 @@ data X86Reg = RAX -- temp reg, return value
             | R13 -- callee-saved
             | R14 -- callee-saved
             | R15 -- callee-saved
+              deriving Eq
               
 data RegName = X86Reg X86Reg
              | SymbolicReg Int
+               deriving Eq
 
 instance Show RegName where
     show (X86Reg r) = show r
@@ -185,34 +187,68 @@ data MidIRInst
 --- DeadChecker
 ---
 
-class DeadChecker a b c | a -> c where
-    -- | For a given statement, returns a tuple of (unused, used)
-    -- variables.  The order is 1) forget about unused, and 2) leard
+class DeadChecker a b c | a -> b c, b -> a where
+    -- | Takes an operand and gives a list of things it references.
+    fromOper :: b -> [c]
+    
+    -- | For a given statement, returns a tuple of (to-unused, used)
+    -- variables.  The order is 1) forget about unused, and 2) learn
     -- about used, so if a variable occurs in both unused and used, it
     -- remains used.
     checkExtents :: a -> ([c], [c])
+    
+    -- | For a given test, returns a list of used variables.
+    checkTestExtents :: IRTest b -> [c]
+    checkTestExtents (IRTestBinOp _ op1 op2) = fromOper op1 ++ fromOper op2
+    checkTestExtents (IRTest op) = fromOper op
+    checkTestExtents (IRTestNot op) = fromOper op
+    checkTestExtents (IRReturn (Just op)) = fromOper op
+    checkTestExtents _ = []
 
-fromMidOper :: MidOper -> [String]
-fromMidOper (OperVar s) = [s]
-fromMidOper _ = []
-
-instance DeadChecker MidIRInst MidOper String where    
+instance DeadChecker MidIRInst MidOper String where
+    fromOper (OperVar s) = [s]
+    fromOper _ = []
+    
     checkExtents (BinAssign _ dest op oper1 oper2)
-        = ([dest], fromMidOper oper1 ++ fromMidOper oper2)
+        = ([dest], fromOper oper1 ++ fromOper oper2)
     checkExtents (UnAssign _ dest op oper)
-        = ([dest], fromMidOper oper)
+        = ([dest], fromOper oper)
     checkExtents (ValAssign _ dest oper)
-        = ([dest], fromMidOper oper)
+        = ([dest], fromOper oper)
     checkExtents (CondAssign _ dest _ cmp1 cmp2 src)
-        = ([dest], concatMap fromMidOper [cmp1, cmp2, src])
+        = ([dest], concatMap fromOper [cmp1, cmp2, src])
     checkExtents (IndAssign _ dest oper)
-        = ([dest], fromMidOper oper)
+        = ([dest], fromOper oper)
     checkExtents (MidCall _ mdest _ opers) 
-        = (maybeToList mdest, concatMap fromMidOper opers)
+        = (maybeToList mdest, concatMap fromOper opers)
     checkExtents (MidCallout _ mdest _ eopers)
         = ( maybeToList mdest
-          , concatMap (either (const []) fromMidOper) eopers)
-          
+          , concatMap (either (const []) fromOper) eopers)
+
+instance DeadChecker LowIRInst LowOper RegName where
+    fromOper (OperReg r) = [r]
+    fromOper _ = []
+    
+    checkExtents (RegBin _ dest op oper1 oper2)
+        = ([dest], fromOper oper1 ++ fromOper oper2)
+    checkExtents (RegUn _ dest op oper)
+        = ([dest], fromOper oper)
+    checkExtents (RegVal _ dest oper)
+        = ([dest], fromOper oper)
+    checkExtents (RegCond _ dest _ cmp1 cmp2 src)
+        = ([dest], concatMap fromOper [cmp1, cmp2, src])
+    checkExtents (RegPush _ oper)
+        = ([], fromOper oper)
+    checkExtents (StoreMem _ addr oper)
+        = ([], fromOper oper)
+    checkExtents (LoadMem _ dest addr)
+        = ([dest], [])
+    checkExtents (LowCall _ _ numargs)
+        = ([X86Reg RAX], map X86Reg regs)
+          where regs = catMaybes (take numargs argOrder)
+    checkExtents (LowCallout _ _ numargs)
+        = ([X86Reg RAX], map X86Reg regs)
+          where regs = catMaybes (take numargs argOrder)
 
 ---
 --- BasicBlock normalization

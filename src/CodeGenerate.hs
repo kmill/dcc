@@ -258,7 +258,7 @@ statementToCode (HForSt env _ _ expr1 expr2 st)
                                           , getTokBlock
                                           , stringBlock "popq %rbx"
                                           , stringBlock "cmp %rax, %rbx"
-                                          , stringBlock ("jge " ++ (show forEndLabel))] 
+                                          , stringBlock $ "jge " ++ (show forEndLabel)] 
              (eECode, eEState) = runState (exprToCode expr2) iEState 
              loopStCode = CompoundBlock [stringBlock "# Inner loop code here", loopCodes]
              (loopCodes, loopState) = runState (statementToCode st) eEState
@@ -267,7 +267,8 @@ statementToCode (HForSt env _ _ expr1 expr2 st)
                                           , stringBlock "popq %rax"
                                           , stringBlock "addc 1, %rax"
                                           , stringBlock "pushq %rax"
-                                          , putTokBlock]
+                                          , putTokBlock
+                                          , stringBlock $ "jmp " ++ (show forEvalLabel)]
              getTokBlock = stringBlock "#Get Value from Tok and put on stack"
              putTokBlock = stringBlock "#Put Value from Stack and put in Tok"
              newState = (updateState codeState loopState) { currentForIndex = forIndex+1 } 

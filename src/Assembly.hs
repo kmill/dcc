@@ -2,6 +2,7 @@ module Assembly where
 
 import IR
 import qualified Data.Map as Map
+import Control.Applicative
 import Data.Graphs
 
 binOpInstr :: BinOp -> String
@@ -65,6 +66,7 @@ instrCode (LowCall pos label _) = [ "call " ++ label ]
 
 instrCode (LowCallout pos label _) = [ "call " ++ label ]
 
+instrCode s = ["#Not Implemented: " ++ (show s)]
 -- 
 -- Code for block-ending tests
 -- 
@@ -89,12 +91,24 @@ basicBlockCode (Graph graphMap _) vertex = instrsCode ++ (testCode vPair)
 
 methodCode :: LowIRMethod -> [String]
 methodCode (LowIRMethod pos retP name numArgs localsSize irGraph) =
-    [ "# TODO: Implement method calls" ]
+  [ name ++ ":"
+  , "#TODO: Implement arguments" ]
+  ++ concatMap basicBlockCode [ bcc | (v,bcc) <- labels irGraph]
+  ++ ["ret"]
 
+fieldsCode :: LowIRField -> [String]
+fieldsCode (LowIRField _ name size) = [ name ++ ":"
+                                      , "\t.long " ++ (show size)]
+
+stringCode (name, _, str) = [ name ++ ":"
+                              , "\t.ascii " ++ (show str)]
 --
 -- Full translation
 --
 
 lowIRReprCode :: LowIRRepr -> [String]
-lowIRReprCode (LowIRRepr fields strings methods) =
-    [ "# TODO: Write full translation code" ]
+lowIRReprCode (LowIRRepr fields strings methods) = [".section .data"]
+  ++ concatMap fieldsCode fields
+  ++ concatMap stringCode strings
+  ++ [".glbl main"]
+  ++ concatMap methodCode methods  

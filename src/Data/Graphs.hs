@@ -163,7 +163,7 @@ rewriteGraph g rule = rewriteGraph' g [] [startVertex g]
                                                n `notElem` (visited ++ toVisit ++ [v])])
                             Just (oldvs, newvs, edges)
                                 -> rewriteGraph'
-                                   (cullGraph $ replaceVertices g oldvs newvs edges)
+                                   (replaceVertices g oldvs newvs edges) -- maybe cull?
                                    visited ((map fst newvs) ++ vs)
 
 ---
