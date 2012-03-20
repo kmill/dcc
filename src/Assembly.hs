@@ -104,8 +104,8 @@ testCode method (Graph graphMap _) vertex =
       IRTestTrue -> [ "jmp " ++ trueLabel ]
       IRTestFalse -> [ "jmp " ++ falseLabel ]
       IRTestBinOp cop oper1 oper2 ->
-        [ binInstr "movq" oper2 R14
-        , binInstr "cmpq" oper1 R14
+        [ binInstr "movq" oper1 R14
+        , binInstr "cmpq" oper2 R14
         , (jmpInstr cop) ++ " " ++ trueLabel
         , "jmp " ++ falseLabel ]
       IRTest oper ->
