@@ -43,16 +43,16 @@ instrCode (RegBin pos (X86Reg reg) (OpBinCmp cop) oper1 oper2) =
     [ binInstr "movq" oper1 reg
     , binInstr "cmpq" oper2 reg
     , binInstr "movq" (LowOperConst 0) reg
-    , binInstr "movq" (LowOperConst 1) R10
-    , binInstr (cmovInstr cop) R10 reg ]
+    , binInstr "movq" (LowOperConst 1) R14
+    , binInstr (cmovInstr cop) R14 reg ]
       
 instrCode (RegBin pos (X86Reg reg) op oper1 oper2) =
     [ binInstr "movq" oper2 reg ]
     ++ opS
     where opS = case op of
-                     OpSub -> [ binInstr "movq" oper1 R10
-                              , binInstr "subq" reg R10
-                              , binInstr "movq" R10 reg ]
+                     OpSub -> [ binInstr "movq" oper1 R14
+                              , binInstr "subq" reg R14
+                              , binInstr "movq" R14 reg ]
                      _ -> [binInstr (binOpInstr op) oper1 reg]
 
 instrCode (RegUn pos (X86Reg reg) op oper) = 
@@ -104,8 +104,8 @@ testCode method (Graph graphMap _) vertex =
       IRTestTrue -> [ "jmp " ++ trueLabel ]
       IRTestFalse -> [ "jmp " ++ falseLabel ]
       IRTestBinOp cop oper1 oper2 ->
-        [ binInstr "movq" oper2 R10
-        , binInstr "cmpq" oper1 R10
+        [ binInstr "movq" oper2 R14
+        , binInstr "cmpq" oper1 R14
         , (jmpInstr cop) ++ " " ++ trueLabel
         , "jmp " ++ falseLabel ]
       IRTest oper ->
