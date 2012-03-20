@@ -152,8 +152,16 @@ calleeSaved = [ RBP, RBX, R12, R13, R14, R15 ]
 methodCode :: LowIRMethod -> [String]
 methodCode (LowIRMethod pos retP name numArgs localsSize irGraph) =
   let exitCodes = case name of
-        "main" -> ["movq $1, %rax", "movq $0, %rbx", "int $0x80"]
-        _ -> ["leave", "ret"]
+        "main" -> [ "movq $4, %rax"
+                  , "movq $1, %rbx"
+                  , "int $0x80"
+                  , "movq $1, %rax"
+                  , "movq $0, %rbx"
+                  , "int $0x80"
+                  , "leave"
+                  , "ret" ]
+        _ -> [ "leave"
+             , "ret" ]
   in
     [ (methodLabel name) ++ ":"
     , "enter $(" ++ (show localsSize) ++ "), $0" ] ++

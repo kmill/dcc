@@ -69,14 +69,41 @@ TODO: Totally put an image of one of the graphs created by graphviz here
 \section {Register Allocation} 
 \label{sec:regalloc}
 
-The code makes use of a very simple register allocator to eliminate
-all symbolic registers from the Low IR. It's behavior is very
-simple. It 
+all symbolic registers from the Low IR. It works by maintaining state
+through the use of the State Monad to keep track of where previously
+encountered symbolic registers are located on the stack. When it
+encounters an unallocated symbolic register, it gives that register
+the next location on the stack and adds that mapping to its state. It
+subsequently updates the next location on the stack as well. 
+
+The register allocator also generates additional code to be inserted
+into the low ir to allow for the loading and storing of memory
+locations that correspond to the symbolic registers. At the moment,
+this code is very basic and very inefficient. Individual values are
+often shuffled through many more registers and memory locations than is
+necessary. Despite this inefficiency, the register allocator is useful
+because of its simplicity. The framework also exists now to produce a
+more complex and more efficient register allocator in the future. 
+
+Problems that arose while implementing the register allocator
+primarily consisted of incorrectly mapping symbolic registers to
+temporary registers during loads and stores. Additional code needed to
+be inserted to account for indirect loads and stores of symbolic
+registers. All of this code is documented and included in RegisterAllocator.hs
 
 \section {Assembly Generation}  
 \label{sec:assembly}
+The assembly generation was mainly accomplished via a bunch of methods which
+translated from the Low IR to lists of strings of instructions. These methods
+were then combined to build a bigger part of the overall representation. While
+we probably caould have designed a better mechanism to make the type system
+check more of our code's safety, most of the errors we made at this stage were
+far beyond the type system's abilities. With our design decisions, the code
+itself was very straightforward to write, but the debugging was a total pain,
+probably taking 70\% of the time. It's not clear that we could have avoided
+this. Most of the problems were due to an insufficient understanding or
+incorrect implementation of the calling convention.
 
-\section {Test Plan}
 
 
 
