@@ -146,14 +146,14 @@ calleeSaved = [ RBP, RBX, R12, R13, R14, R15 ]
 
 methodCode :: LowIRMethod -> [String]
 methodCode (LowIRMethod pos retP name numArgs localsSize irGraph) =
-  [ name ++ ":"
-  , "enter $(" ++ (show localsSize) ++ "), $0" ] ++
-  map (unInstr "pushq") calleeSaved ++
-  basicBlockCode name irGraph (startVertex irGraph) ++
-  concatMap (basicBlockCode name irGraph) (filter (/= (startVertex irGraph)) (vertices irGraph)) ++
-  map (unInstr "popq") (reverse calleeSaved) ++
-  [ "leave"
-  , "ret" ]
+    [ name ++ ":"
+    , "enter $(" ++ (show localsSize) ++ "), $0" ] ++
+    map (unInstr "pushq") calleeSaved ++
+    [ "jmp " ++ (vertexLabel name (startVertex irGraph))] ++
+    concatMap (basicBlockCode name irGraph) (vertices irGraph) ++
+    map (unInstr "popq") (reverse calleeSaved) ++
+    [ "leave"
+    , "ret" ]
 
 fieldsCode :: LowIRField -> [String]
 fieldsCode (LowIRField _ name size) = [ name ++ ":"
