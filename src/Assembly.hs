@@ -158,7 +158,7 @@ methodCode (LowIRMethod pos retP name numArgs localsSize irGraph) =
 
 fieldsCode :: LowIRField -> [String]
 fieldsCode (LowIRField _ name size) = [ name ++ ":"
-                                      , "\t.long " ++ (show size)]
+                                      , "\t.skip " ++ (show size)]
 stringCode :: (String, SourcePos, String) -> [String]
 stringCode (name, _, str) = [ name ++ ":"
                             , "\t.asciz " ++ (show $ str)]
