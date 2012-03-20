@@ -57,8 +57,10 @@ instrCode (RegBin pos (X86Reg reg) op oper1 oper2) =
 
 instrCode (RegUn pos (X86Reg reg) op oper) = 
     case op of
-        OpNeg -> [ unInstr "neqg" reg ]
-        OpNot -> [ unInstr "notq" reg ]
+        OpNeg -> [ binInstr "movq" oper reg
+                 , unInstr "neqg" reg ]
+        OpNot -> [ binInstr "movq" oper reg
+                 , unInstr "xorq $1, " reg ]
         _ -> error "shouldn't have derefs or addrs this low :-("
 
 instrCode (RegVal pos (X86Reg reg) oper) =
@@ -75,12 +77,11 @@ instrCode (StoreMem pos addr oper) = [ binInstr "movq" oper addr ]
 
 instrCode (LoadMem pos reg addr) = [ binInstr "movq" addr reg ]
 
-instrCode (LowCall pos label _) = [ "  call " ++ label ]
+instrCode (LowCall pos label _) = [ "  call " ++ (methodLabel label) ]
 
-instrCode (LowCallout pos label nargs) = [ unInstr "pushq" RAX
-                                         , binInstr "movq" (LowOperConst 0) RAX 
-                                         , "  call " ++ label
-                                         , unInstr "popq" RAX ]
+instrCode (LowCallout pos label nargs) = [ binInstr "movq" (LowOperConst 0) RAX 
+                                         , "  call " ++ label ]
+                                          --, unInstr "popq" RAX ]
 
 instrCode s = ["# Blargh! :-( Shouldn't have symbolic registers here: " ++ (show s)]
 
@@ -109,13 +110,13 @@ testCode method (Graph graphMap _) vertex =
         , (jmpInstr cop) ++ " " ++ trueLabel
         , "  jmp " ++ falseLabel ]
       IRTest oper ->
-        [ binInstr "cmpq" (LowOperConst 0) oper
-        , "  jnz " ++ trueLabel
-        , "  jmp " ++ falseLabel ]
-      IRTestNot oper ->
-        [ binInstr "cmpq" (LowOperConst 0) oper
+        [ binInstr "cmpq" (LowOperConst 1) oper
         , "  jz " ++ trueLabel
         , "  jmp " ++ falseLabel ]
+      IRTestNot oper ->
+        [ binInstr "cmpq" (LowOperConst 1) oper
+        , "  jz " ++ falseLabel
+        , "  jmp " ++ trueLabel ]
       IRReturn (Just oper) -> [ binInstr "movq" oper RAX 
                               , "  jmp post_" ++ method ]
       IRReturn (Nothing) -> [ "  jmp post_" ++ method ]
@@ -141,20 +142,27 @@ basicBlockCode method irGraph@(Graph graphMap _) vertex = [bLabel ++ ":"] ++ ins
 -- Translate method
 --
 
+methodLabel :: String -> String
+methodLabel "main" = "main"
+methodLabel name = "method_" ++ name
+
 calleeSaved :: [X86Reg]
 calleeSaved = [ RBP, RBX, R12, R13, R14, R15 ]
 
 methodCode :: LowIRMethod -> [String]
 methodCode (LowIRMethod pos retP name numArgs localsSize irGraph) =
-    [ name ++ ":"
+  let exitCodes = case name of
+        "main" -> ["movq $1, %rax", "movq $0, %rbx", "int $0x80"]
+        _ -> ["leave", "ret"]
+  in
+    [ (methodLabel name) ++ ":"
     , "enter $(" ++ (show localsSize) ++ "), $0" ] ++
     map (unInstr "pushq") calleeSaved ++
     [ "jmp " ++ (vertexLabel name (startVertex irGraph))] ++
     concatMap (basicBlockCode name irGraph) (vertices irGraph) ++
     [ "post_" ++ name ++ ":"] ++
     map (unInstr "popq") (reverse calleeSaved) ++
-    [ "leave"
-    , "ret" ]
+    exitCodes
 
 fieldsCode :: LowIRField -> [String]
 fieldsCode (LowIRField _ name size) = [ name ++ ":"
