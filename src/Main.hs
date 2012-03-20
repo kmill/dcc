@@ -162,10 +162,13 @@ doLowIRFile opts ifname input
                             Right _ -> let hast = makeHybridAST r
                                            midir = generateMidIR hast
                                            lowirSymb = toLowIR midir
-                                           lowir = lowirSymb --destroySymbRegs lowirSymb
+                                           lowir = destroySymbRegs lowirSymb
                                        in do
                                          --putStrLn $ show lowir
-                                         putStrLn $ lowIRtoGraphViz lowir 
+                                         if (debugMode opts) then
+                                           putStrLn $ lowIRtoGraphViz lowir 
+                                           else
+                                           putStrLn $ lowIRtoGraphViz lowirSymb
                             Left (udata, errors) ->
                                 do putStrLn "Semantic errors:"
                                    putStrLn ""

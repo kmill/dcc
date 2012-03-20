@@ -52,7 +52,8 @@ instrCode (RegBin pos (X86Reg reg) op oper1 oper2) =
     where opS = case op of
                      OpMul -> [ unInstr "pushq" RAX 
                               , binInstr "movq" oper1 RAX
-                              , unInstr "mulq" oper2
+                              , binInstr "movq" oper2 R10
+                              , unInstr "mulq" R10
                               , binInstr "movq" RAX reg
                               , unInstr "popq" RAX ]
                      _ -> [binInstr (binOpInstr op) oper1 reg]
@@ -90,8 +91,8 @@ instrCode s = ["# Blargh! :-( Shouldn't have symbolic registers here: " ++ (show
 -- Code for block-ending tests
 -- 
 
-testCode :: LowIRGraph -> Vertex -> [String]
-testCode (Graph graphMap _) vertex = 
+testCode :: String -> LowIRGraph -> Vertex -> [String]
+testCode method (Graph graphMap _) vertex = 
     let (Just vPair) = Map.lookup vertex graphMap
         (BasicBlock _ test pos, edgeMap) = vPair
         trueEdge = case Map.lookup True edgeMap of
@@ -100,8 +101,8 @@ testCode (Graph graphMap _) vertex =
         falseEdge = case Map.lookup False edgeMap of
           Just x -> x
           Nothing -> 0
-        trueLabel = vertexLabel trueEdge
-        falseLabel = vertexLabel falseEdge
+        trueLabel = vertexLabel method trueEdge
+        falseLabel = vertexLabel method falseEdge
     in case test of
       IRTestTrue -> [ "jmp " ++ trueLabel ]
       IRTestFalse -> [ "jmp " ++ falseLabel ]
@@ -128,15 +129,15 @@ testCode (Graph graphMap _) vertex =
 -- Code for whole basic blocks
 --
 
-vertexLabel :: Vertex -> String
-vertexLabel vertex = "block_" ++ (show vertex) ++ "_start"
+vertexLabel :: String -> Vertex -> String
+vertexLabel method vertex = "block_" ++ method ++ "_" ++ (show vertex) ++ "_start"
 
-basicBlockCode :: LowIRGraph -> Vertex -> [String]
-basicBlockCode irGraph@(Graph graphMap _) vertex = [bLabel ++ ":"] ++ instrsCode ++ (testCode irGraph vertex)
+basicBlockCode :: String -> LowIRGraph -> Vertex -> [String]
+basicBlockCode method irGraph@(Graph graphMap _) vertex = [bLabel ++ ":"] ++ instrsCode ++ (testCode method irGraph vertex)
     where instrsCode = concatMap instrCode code
           (Just vPair) = Map.lookup vertex graphMap
           (bb@(BasicBlock code _ _), _) = vPair
-          bLabel = vertexLabel vertex
+          bLabel = vertexLabel method vertex
 
 --
 -- Translate method
@@ -157,9 +158,9 @@ methodCode (LowIRMethod pos retP name numArgs localsSize irGraph) =
              , "ret" ]
   in
    [ name ++ ":"
-   , "enter $(8 * " ++ (show localsSize) ++ "), $0" ] ++
+   , "enter $(" ++ (show localsSize) ++ "), $0" ] ++
    map (unInstr "pushq") calleeSaved ++
-   concatMap (basicBlockCode irGraph) (vertices irGraph) ++
+   concatMap (basicBlockCode name irGraph) (vertices irGraph) ++
    map (unInstr "popq") (reverse calleeSaved) ++
    exitCodes
 
@@ -178,4 +179,5 @@ lowIRReprCode (LowIRRepr fields strings methods) = [".section .data"]
     ++ concatMap fieldsCode fields
     ++ concatMap stringCode strings
     ++ [".globl main"]
-    ++ methodCode (head $ filter (\x -> ("main" == lowIRMethodName x)) methods)
+    ++ concatMap methodCode methods
+--    ++ methodCode (head $ filter (\x -> ("main" == lowIRMethodName x)) methods)
