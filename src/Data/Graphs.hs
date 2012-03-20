@@ -1,35 +1,41 @@
 {-# LANGUAGE ParallelListComp #-}
 
--- | from
--- http://www.haskell.org/haskellwiki/The_Monad.Reader/Issue5/Practical_Graph_Handling
+-- | We represent graphs as a set of vertices (which is a subset of
+-- the integers), a set of labeled edges (where each label is unique),
+-- and a map from vertices to labels.  This module also has various
+-- graph algorithms.
 
 module Data.Graphs where
 
 import Control.Monad
 import qualified Data.Map as Map
-import qualified Data.Set as Set
 import Data.Maybe
 import Text.Regex
-import Debug.Trace
+--import Debug.Trace
 import qualified Data.Traversable as Trav
 
 type Vertex = Int
 
--- | A pointed directed multigraph.  That is, there is a specified
--- "start vertex" to the graph.
+-- | A pointed directed labeled multigraph.  That is, there is a
+-- specified "start vertex" to the graph, and each of the vertices
+-- have a label.
 data Ord e => Graph v e
     = Graph (Map.Map Vertex (v, Map.Map e Vertex)) Vertex
       deriving Show
-      
+
+-- | Gets the distinguished vertex from the graph.
 startVertex :: Ord e => Graph v e -> Vertex
 startVertex (Graph m st) = st
 
+-- | Gets a list of the graph's vertices.
 vertices :: Ord e => Graph v e -> [Vertex]
 vertices (Graph m st) = Map.keys m
 
+-- | Gets a list of the vertex/label pairs for the graph.
 labels :: Ord e => Graph v e -> [(Vertex,v)]
 labels (Graph m st) = Map.assocs (Map.map (\(v,e)->v) m)
 
+-- | Gets the label in a graph
 (!!!) :: Ord e => Graph v e -> Vertex -> v
 (Graph m st) !!! i = fst $ fromJust $ Map.lookup i m
 
@@ -205,7 +211,7 @@ graphToGraphViz' g namePrefix
                   ++ " -> " ++ namePrefix ++ show i
                   ++ " [label=" ++ show edge ++ "];\n"
             -- | turns \n into \l so graphviz left-aligns
-            leftAlign t = subRegex (mkRegex "\\\\n") t "\\l"
+            leftAlign t = subRegex (mkRegex "([^\\\\])\\\\n") t "\\1\\l"
 
 graphToGraphViz :: (Show v, Show e, Ord e) => Graph v e -> String -> String -> String
 graphToGraphViz g namePrefix graphPrefix
