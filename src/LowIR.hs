@@ -561,7 +561,7 @@ runRuleSubtrees rule = rule `mplus` do node <- getNode
                         return (t, code)
       noop :: IRTreeRuleMonad IRTreeEmit
       noop = do node <- getNode
-                (trace (show node) replaceWith) node
+                replaceWith node
       subtreerule = (runRuleSubtrees rule) `mplus` noop
 
 runRuleset :: [RegName] -> LowIRTree -> IRTreeRuleMonad IRTreeEmit -> [LowIRInst]
