@@ -255,7 +255,7 @@ loadStringLit pos str
 ---
 
 simplifyLIR :: LowIRGraph -> LowIRGraph
-simplifyLIR lir = normalizeBlocks lir -- $ mergeRegs $ normalizeBlocks lir
+simplifyLIR lir = normalizeBlocks $ mergeRegs $ normalizeBlocks lir
 
 mergeRegs :: LowIRGraph -> LowIRGraph
 mergeRegs lir
@@ -266,7 +266,7 @@ mergeRegs lir
                     (trees, test) = evalLowInstrs alive' Map.empty []
                                     (blockCode bb) (blockTest bb)
                     bb' = BasicBlock trees test (blockTestPos bb)
-                in trace ("**\n" ++ show alive ++ show bb') evalLowIRForest alive' (blockTestPos bb) trees test
+                in evalLowIRForest alive' (blockTestPos bb) trees test
 --            error $ show alive ++ "\n" ++ show bb
           
 
@@ -551,7 +551,8 @@ runRuleSubtrees rule = rule `mplus` do node <- getNode
                                                  withTree sub subtreerule)
                                        (subs', code) <- combineEmits emits
                                        let node' = setReplaceables node subs'
-                                       withTree node' rule
+                                       (mt, insts) <- withTree node' rule
+                                       return (mt, code ++ insts)
     where
       combineEmits :: [IRTreeEmit] -> IRTreeRuleMonad ([LowIRTree], [LowIRInst])
       combineEmits emits = do unmaybed <- mapM unmaybe emits
