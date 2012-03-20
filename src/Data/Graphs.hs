@@ -35,17 +35,22 @@ vertices (Graph m st) = Map.keys m
 labels :: Ord e => Graph v e -> [(Vertex,v)]
 labels (Graph m st) = Map.assocs (Map.map (\(v,e)->v) m)
 
--- | Gets the label in a graph
+-- | Gets the label associated with a particular vertex in the graph.
 (!!!) :: Ord e => Graph v e -> Vertex -> v
 (Graph m st) !!! i = fst $ fromJust $ Map.lookup i m
 
+-- | Gets the list of all the edges in the graph as tuples.
 edges :: Ord e => Graph v e -> [(Vertex, e, Vertex)]
 edges (Graph m st) = concatMap (\(i,(_,es)) -> [(i,l,e) | (l,e) <- Map.assocs es])
                      (Map.assocs m)
 
+-- | Checks whether there is an edge with the given label starting
+-- from a particular vertex
 hasEdge :: Ord e => Graph v e -> Vertex -> e -> Bool
 hasEdge (Graph m _) v e = e `Map.member` (snd $ fromJust $ Map.lookup v m)
 
+-- | Checks whether there is an edge with a given label starting and
+-- ending at the given vertices.
 hasEdgeTo :: Ord e => Graph v e -> Vertex -> e -> Vertex -> Bool
 hasEdgeTo (Graph m _) v e v'
   = fromMaybe False $ do
