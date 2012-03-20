@@ -148,28 +148,20 @@ calleeSaved = [ RBP, RBX, R12, R13, R14, R15 ]
 
 methodCode :: LowIRMethod -> [String]
 methodCode (LowIRMethod pos retP name numArgs localsSize irGraph) =
-  let exitCodes = case name of
-        "main" -> [ "movq $1, %rax"
-                  , "movq $0, %rbx"
-                  , "leave"
-                  , "int $0x80"
-                  , "ret" ]
-        _ -> [ "leave"
-             , "ret" ]
-  in
-   [ name ++ ":"
-   , "enter $(" ++ (show localsSize) ++ "), $0" ] ++
-   map (unInstr "pushq") calleeSaved ++
-   concatMap (basicBlockCode name irGraph) (vertices irGraph) ++
-   map (unInstr "popq") (reverse calleeSaved) ++
-   exitCodes
+  [ name ++ ":"
+  , "enter $(" ++ (show localsSize) ++ "), $0" ] ++
+  map (unInstr "pushq") calleeSaved ++
+  concatMap (basicBlockCode name irGraph) (vertices irGraph) ++
+  map (unInstr "popq") (reverse calleeSaved) ++
+  [ "leave"
+  , "ret" ]
 
 fieldsCode :: LowIRField -> [String]
 fieldsCode (LowIRField _ name size) = [ name ++ ":"
                                       , "\t.long " ++ (show size)]
 stringCode :: (String, SourcePos, String) -> [String]
 stringCode (name, _, str) = [ name ++ ":"
-                            , "\t.ascii " ++ (show str)]
+                            , "\t.asciz " ++ (show $ str)]
 --
 -- Full translation
 --
