@@ -100,21 +100,24 @@ destRegDestroySymbRegs pos reg@(SymbolicReg _) tmpReg
 destRegDestroySymbRegs pos reg tmpReg = return ([], reg)
 
 -- | Function that removes symbolic registers from memAddrs 
-memAddrDestroySymbRegs :: SourcePos -> MemAddr -> RegName -> State DestroySymbRegState ([LowIRInst], MemAddr)
-memAddrDestroySymbRegs pos memAddr@(MemAddr _ _ _ _) tmpReg
-    = do memAddrFixedBase <- fixBaseOffset memAddr
-         (newCode, offsetReg) <- fixOffsetReg pos memAddrFixedBase tmpReg
-         let newMemAddr = memAddrFixedBase { memOffsetReg = offsetReg }
+memAddrDestroySymbRegs :: SourcePos -> MemAddr -> RegName -> RegName -> State DestroySymbRegState ([LowIRInst], MemAddr)
+memAddrDestroySymbRegs pos memAddr@(MemAddr _ _ _ _) tmpReg1 tmpReg2
+    = do (loadBase, memAddrFixedBase) <- fixBaseOffset pos memAddr tmpReg1
+         (loadOffset, offsetReg) <- fixOffsetReg pos memAddrFixedBase tmpReg2
+         let newCode = loadBase ++ 
+                       loadOffset
+             newMemAddr = memAddrFixedBase { memOffsetReg = offsetReg }
          return (newCode, newMemAddr)
-memAddrDestroySymbRegs pos memAddr@(MemAddrPtr s) tmpReg = return ([], memAddr)
+memAddrDestroySymbRegs pos memAddr@(MemAddrPtr s) tmpReg1 tmpReg2 = return ([], memAddr)
 
-fixBaseOffset :: MemAddr -> State DestroySymbRegState MemAddr
-fixBaseOffset memAddr@(MemAddr { memBaseReg=reg@(SymbolicReg _) }) 
+fixBaseOffset :: SourcePos -> MemAddr -> RegName -> State DestroySymbRegState ([LowIRInst], MemAddr)
+fixBaseOffset pos memAddr@(MemAddr { memBaseReg=reg@(SymbolicReg _) }) tmpReg
     = do newMemAddr <- getStackLoc reg 
-         let mergedAddr = memAddr { memBaseReg = memBaseReg newMemAddr, memDisplace = newDisplace }
+         let newCodes = [LoadMem pos tmpReg newMemAddr]
+             mergedAddr = memAddr { memBaseReg = tmpReg, memDisplace = 0 }
              newDisplace = (memDisplace memAddr) + (memDisplace newMemAddr) 
-         return mergedAddr 
-fixBaseOffset memAddr = return memAddr
+         return (newCodes, mergedAddr) 
+fixBaseOffset pos memAddr tmpReg = return ([], memAddr)
 
 fixOffsetReg :: SourcePos -> MemAddr -> RegName -> State DestroySymbRegState ([LowIRInst], Maybe RegName) 
 fixOffsetReg pos memAddr@(MemAddr { memOffsetReg = Just reg@(SymbolicReg _) }) tmpReg
@@ -167,14 +170,14 @@ statementDestroySymbRegs inst =
              return newCode 
       StoreMem pos addr oper -> 
           do (loadOper, oper') <- operDestroySymbRegs pos oper (X86Reg R10) 
-             (loadMem, addr') <- memAddrDestroySymbRegs pos addr (X86Reg R11) 
+             (loadMem, addr') <- memAddrDestroySymbRegs pos addr (X86Reg R11) (X86Reg R12)
              let newCode = loadOper ++ 
                            loadMem ++ 
                            [StoreMem pos addr' oper']
              return newCode
       LoadMem pos dest addr -> 
           do (storeVal, dest') <- destRegDestroySymbRegs pos dest (X86Reg R10) 
-             (loadMem, addr') <- memAddrDestroySymbRegs pos addr (X86Reg R11)
+             (loadMem, addr') <- memAddrDestroySymbRegs pos addr (X86Reg R11) (X86Reg R12)
              let newCode = loadMem ++
                            [LoadMem pos dest' addr'] ++
                            storeVal
