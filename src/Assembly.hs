@@ -80,7 +80,7 @@ instrCode (LoadMem pos reg addr) = [ binInstr "movq" addr reg ]
 instrCode (LowCall pos label _) = [ "call " ++ label ]
 
 instrCode (LowCallout pos label nargs) = [ unInstr "pushq" RAX
-                                         , binInstr "movq" (nargs - 1) RAX 
+                                         , binInstr "movq" (LowOperConst $ fromIntegral (nargs - 1)) RAX 
                                          , "call " ++ label
                                          , unInstr "popq" RAX ]
 
@@ -151,6 +151,7 @@ methodCode (LowIRMethod pos retP name numArgs localsSize irGraph) =
         "main" -> [ "movq $1, %rax"
                   , "movq $0, %rbx"
                   , "leave"
+                  , "int $0x80"
                   , "ret" ]
         _ -> [ "leave"
              , "ret" ]
