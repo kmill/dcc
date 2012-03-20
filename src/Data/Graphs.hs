@@ -120,7 +120,7 @@ iterG f i g = iterG' i [] [startVertex g]
                                             (adjVertices g v))
                                 ++ vs)
                         Just (nextvs, r') ->
-                            iterG' r' (v:visited) (nextvs ++ vs)
+                            iterG' r' visited ([v] ++ nextvs ++ vs)
 
 ---
 --- Graph algorithms!

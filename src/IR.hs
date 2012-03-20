@@ -4,6 +4,7 @@
 module IR where
 
 import Text.ParserCombinators.Parsec
+import Text.ParserCombinators.Parsec.Pos (newPos)
 import Text.Printf
 import Text.PrettyPrint.HughesPJ
 import Data.Graphs
@@ -78,6 +79,7 @@ data BinOp = OpAdd
            | OpDiv
            | OpMod
            | OpBinCmp CmpBinOp
+             deriving Eq
 data UnOp = OpNeg
           | OpNot
           | OpDeref
@@ -102,8 +104,17 @@ data CmpBinOp = CmpLT
               | CmpGTE
               | CmpEQ
               | CmpNEQ
+                deriving Eq
 --              | CmpAnd
 --              | CmpOr
+
+negateCmpBinOp :: CmpBinOp -> CmpBinOp
+negateCmpBinOp CmpLT = CmpGTE
+negateCmpBinOp CmpGTE = CmpLT
+negateCmpBinOp CmpGT = CmpLTE
+negateCmpBinOp CmpLTE = CmpGT
+negateCmpBinOp CmpEQ = CmpNEQ
+negateCmpBinOp CmpNEQ = CmpEQ
 
 data CmpUnOp =  CmpZero
               | CmpNZero
@@ -135,6 +146,8 @@ data MemAddr = MemAddr { memBaseReg :: RegName
                        , memOffsetReg :: Maybe RegName
                        , memScalar :: Int } -- ^ [base + displace + offset * scalar]
              | MemAddrPtr String
+
+noPosition = newPos "<none>" (-1) (-1)
 
 data LowIRInst
     = RegBin SourcePos RegName BinOp LowOper LowOper -- ^ "r := r + r"
@@ -220,20 +233,23 @@ checkBlockExtents (BasicBlock insts test testpos)
                     alive'' = nub (alive' ++ dalive)
                 in check' insts dead'' alive''
 
-determineExtents :: DeadChecker a b c =>
+determineExtents :: (Eq c, DeadChecker a b c) =>
                     Graph (BasicBlock a b) Bool
-                 -> Map.Map Vertex ([c], [c])
+                 -> Map.Map Vertex ([c], [c], [c]) -- keep dead alive
 determineExtents ir = iterG f init ir
-    where init = Map.fromList [(v, checkBlockExtents (ir !!! v)) | v <- vertices ir]
-          f g v r = let (dead, alive) = fromJust $ Map.lookup v r
-                        nextalive = concatMap (snd . fromJust . (flip Map.lookup r))
+    where init = Map.fromList [(v, fuse [] $ checkBlockExtents (ir !!! v))
+                               | v <- vertices ir]
+          f g v r = let (keep, dead, alive) = fromJust $ Map.lookup v r
+                        nextalive = concatMap (getAlive . fromJust . (flip Map.lookup r))
                                     (adjVertices g v)
-                        nextalive' = (nub nextalive) -- \\ dead
-                        alive' = nub (alive ++ nextalive')
-                        r' = Map.insert v (dead, alive') r
-                    in if alive == alive'
+                        keep' = nub (keep ++ nextalive)
+                        alive' = nub (alive ++ (keep' \\ dead))
+                        r' = Map.insert v (keep', dead, alive') r
+                    in if alive == alive' && keep == keep'
                        then Nothing
                        else Just (preVertices g v, r')
+          fuse a (b,c) = (a,b,c)
+          getAlive (a, b, c) = c
 
 instance DeadChecker MidIRInst MidOper String where
     fromOper (OperVar s) = [s]
@@ -246,7 +262,7 @@ instance DeadChecker MidIRInst MidOper String where
     checkExtents (ValAssign _ dest oper)
         = ([dest], fromOper oper)
     checkExtents (CondAssign _ dest _ cmp1 cmp2 src)
-        = ([dest], concatMap fromOper [cmp1, cmp2, src])
+        = ([dest], [dest] ++ concatMap fromOper [cmp1, cmp2, src])
     checkExtents (IndAssign _ dest oper)
         = ([dest], fromOper oper)
     checkExtents (MidCall _ mdest _ opers) 
@@ -266,7 +282,7 @@ instance DeadChecker LowIRInst LowOper RegName where
     checkExtents (RegVal _ dest oper)
         = ([dest], fromOper oper)
     checkExtents (RegCond _ dest _ cmp1 cmp2 src)
-        = ([dest], concatMap fromOper [cmp1, cmp2, src])
+        = ([dest], [dest] ++ concatMap fromOper [cmp1, cmp2, src])
     checkExtents (RegPush _ oper)
         = ([], fromOper oper)
     checkExtents (StoreMem _ addr oper)
@@ -370,7 +386,7 @@ instance Show MemAddr where
           (show disp) (show base) (show offset) (show scalar)
 --        = printf "[%s + %s + %s * %s]"
 --          (show base) (show disp) (show offset) (show scalar)
-    show (MemAddrPtr s) = "$" ++ s
+    show (MemAddrPtr s) = "($" ++ s ++ ")"
 --    show (MemAddrPtr s) = "[$" ++ s ++ "]"
 
 instance Show X86Reg where
