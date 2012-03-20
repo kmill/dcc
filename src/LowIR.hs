@@ -256,7 +256,7 @@ loadStringLit pos str
 trace' x = trace ("***\n" ++ show x) x
 
 simplifyLIR :: LowIRGraph -> LowIRGraph
-simplifyLIR lir = normalizeBlocks lir  -- $ mergeRegs $ normalizeBlocks lir
+simplifyLIR lir = normalizeBlocks $ mergeRegs $ normalizeBlocks lir
 
 mergeRegs :: LowIRGraph -> LowIRGraph
 mergeRegs lir
