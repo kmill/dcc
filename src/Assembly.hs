@@ -57,8 +57,10 @@ instrCode (RegBin pos (X86Reg reg) op oper1 oper2) =
 
 instrCode (RegUn pos (X86Reg reg) op oper) = 
     case op of
-        OpNeg -> [ unInstr "neqg" reg ]
-        OpNot -> [ unInstr "notq" reg ]
+        OpNeg -> [ binInstr "movq" oper reg
+                 , unInstr "neqg" reg ]
+        OpNot -> [ binInstr "movq" oper reg
+                 , unInstr "xorq $1, " reg ]
         _ -> error "shouldn't have derefs or addrs this low :-("
 
 instrCode (RegVal pos (X86Reg reg) oper) =
@@ -109,13 +111,13 @@ testCode method (Graph graphMap _) vertex =
         , (jmpInstr cop) ++ " " ++ trueLabel
         , "  jmp " ++ falseLabel ]
       IRTest oper ->
-        [ binInstr "cmpq" (LowOperConst 0) oper
-        , "  jnz " ++ trueLabel
-        , "  jmp " ++ falseLabel ]
-      IRTestNot oper ->
-        [ binInstr "cmpq" (LowOperConst 0) oper
+        [ binInstr "cmpq" (LowOperConst 1) oper
         , "  jz " ++ trueLabel
         , "  jmp " ++ falseLabel ]
+      IRTestNot oper ->
+        [ binInstr "cmpq" (LowOperConst 1) oper
+        , "  jz " ++ falseLabel
+        , "  jmp " ++ trueLabel ]
       IRReturn (Just oper) -> [ binInstr "movq" oper RAX 
                               , "  jmp post_" ++ method ]
       IRReturn (Nothing) -> [ "  jmp post_" ++ method ]
