@@ -36,7 +36,7 @@ argOrder = (map Just [RDI, RSI, RDX, RCX, R8, R9]) ++ nothings
     where nothings = Nothing:nothings
 
 argStackDepth :: [Int]
-argStackDepth = [no, no, no, no, no, no] ++ [16, 16+8..]
+argStackDepth = [no, no, no, no, no, no] ++ [8, 8+8..]
     where no = error "argStackDepth for non-stack-arg :-("
 
 data IRTest b = IRTestTrue
