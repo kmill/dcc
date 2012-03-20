@@ -253,6 +253,7 @@ loadStringLit pos str
 ---
 --- Simplify LIR
 ---
+trace' x = trace ("***\n" ++ show x) x
 
 simplifyLIR :: LowIRGraph -> LowIRGraph
 simplifyLIR lir = normalizeBlocks $ mergeRegs $ normalizeBlocks lir
@@ -260,15 +261,15 @@ simplifyLIR lir = normalizeBlocks $ mergeRegs $ normalizeBlocks lir
 mergeRegs :: LowIRGraph -> LowIRGraph
 mergeRegs lir
     = let keepRegs = Map.map (\(keep,_,_) -> keep) (determineExtents lir)
-      in mapGWithKey (\k bb -> fixBB (fromJust $ Map.lookup k keepRegs) bb) lir
+          lir' = mapGWithKey (\k bb -> fixBB (fromJust $ Map.lookup k keepRegs) bb) lir
+      in lir'
     where fixBB alive bb
               = let alive' = (X86Reg RSP):(X86Reg RBP):alive
                     (trees, test) = evalLowInstrs alive' Map.empty []
                                     (blockCode bb) (blockTest bb)
                     bb' = BasicBlock trees test (blockTestPos bb)
                 in evalLowIRForest alive' (blockTestPos bb) trees test
---            error $ show alive ++ "\n" ++ show bb
-          
+
 
 getFreshSReg :: [RegName] -> RegName
 getFreshSReg regs = head $ filter (`notElem` regs) (map SymbolicReg [0..])
@@ -502,9 +503,10 @@ evalLowIRTreeTest used pos test
                       used' = reg:used
                       code = evalLowIRTree used' (RegStoreNode pos reg oper)
                   in case oper of
-                       LowOperNode (OperReg r) -> (used', (OperReg r), [])
-                       LowOperNode (LowOperConst c) -> (used', (LowOperConst c), [])
-                       _ -> (used, (OperReg reg), code)
+                       LowOperNode (OperReg r) -> (used, (OperReg r), [])
+                       LowOperNode (LowOperConst c) -> (used, (LowOperConst c), [])
+                       LowOperNode (LowOperLabel l) -> (used, (LowOperLabel l), [])
+                       _ -> (used', (OperReg reg), code)
 
 data IRTreeRuleMonad a = IRTreeRuleMonad
     { runIRTreeRuleMonad :: LowIRTree -> [RegName] -> [([RegName], a)] }
