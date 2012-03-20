@@ -79,7 +79,10 @@ instrCode (LoadMem pos reg addr) = [ binInstr "movq" addr reg ]
 
 instrCode (LowCall pos label _) = [ "call " ++ label ]
 
-instrCode (LowCallout pos label _) = [ "call " ++ label ]
+instrCode (LowCallout pos label nargs) = [ unInstr "pushq" RAX
+                                         , binInstr "movq" (nargs - 1) RAX 
+                                         , "call " ++ label
+                                         , unInstr "popq" RAX ]
 
 instrCode s = ["# Blargh! :-( Shouldn't have symbolic registers here: " ++ (show s)]
 
@@ -144,14 +147,20 @@ calleeSaved = [ RBP, RBX, R12, R13, R14, R15 ]
 
 methodCode :: LowIRMethod -> [String]
 methodCode (LowIRMethod pos retP name numArgs localsSize irGraph) =
-  [ name ++ ":"
-  , "enter $(8 * " ++ (show localsSize) ++ "), $0" ] ++
-  map (unInstr "pushq") calleeSaved ++
-  concatMap (basicBlockCode irGraph) (vertices irGraph) ++
-  map (unInstr "popq") (reverse calleeSaved) ++
-  [ "leave"
-  , "ret"]
-
+  let exitCodes = case name of
+        "main" -> [ "movq $1, %rax"
+                  , "movq $0, %rbx"
+                  , "leave"
+                  , "ret" ]
+        _ -> [ "leave"
+             , "ret" ]
+  in
+   [ name ++ ":"
+   , "enter $(8 * " ++ (show localsSize) ++ "), $0" ] ++
+   map (unInstr "pushq") calleeSaved ++
+   concatMap (basicBlockCode irGraph) (vertices irGraph) ++
+   map (unInstr "popq") (reverse calleeSaved) ++
+   exitCodes
 
 fieldsCode :: LowIRField -> [String]
 fieldsCode (LowIRField _ name size) = [ name ++ ":"

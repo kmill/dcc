@@ -162,7 +162,7 @@ doLowIRFile opts ifname input
                             Right _ -> let hast = makeHybridAST r
                                            midir = generateMidIR hast
                                            lowirSymb = toLowIR midir
-                                           lowir = destroySymbRegs lowirSymb
+                                           lowir = lowirSymb --destroySymbRegs lowirSymb
                                        in do
                                          --putStrLn $ show lowir
                                          putStrLn $ lowIRtoGraphViz lowir 
