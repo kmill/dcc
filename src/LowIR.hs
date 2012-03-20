@@ -256,19 +256,21 @@ loadStringLit pos str
 trace' x = trace ("***\n" ++ show x) x
 
 simplifyLIR :: LowIRGraph -> LowIRGraph
-simplifyLIR lir = normalizeBlocks lir  -- $ mergeRegs $ normalizeBlocks lir
+simplifyLIR lir = normalizeBlocks $ mergeRegs $ normalizeBlocks lir
 
 mergeRegs :: LowIRGraph -> LowIRGraph
 mergeRegs lir
-    = let keepRegs = Map.map (\(keep,_,_) -> keep) (determineExtents lir)
-          lir' = mapGWithKey (\k bb -> fixBB (fromJust $ Map.lookup k keepRegs) bb) lir
+    = let extents = (determineExtents lir)
+          keepRegs = Map.map (\(keep,_,_) -> keep) extents
+          lir' = mapGWithKey (\k bb -> fixBB (fromJust $ Map.lookup k extents) bb) lir
       in lir'
-    where fixBB alive bb
-              = let alive' = (X86Reg RSP):(X86Reg RBP):alive
-                    (trees, test) = evalLowInstrs alive' Map.empty []
+    where fixBB (keep,dead,alive) bb
+              = let keep' = (X86Reg RSP):(X86Reg RBP):keep
+                    (trees, test) = evalLowInstrs keep' Map.empty []
                                     (blockCode bb) (blockTest bb)
                     bb' = BasicBlock trees test (blockTestPos bb)
-                in evalLowIRForest alive' (blockTestPos bb) trees test
+                    bb'' = evalLowIRForest keep' (blockTestPos bb) trees test
+                in bb'' --trace ("\n+++1\n" ++ show bb ++ "\n+++2" ++ show bb' ++ "\n+++3" ++ show bb'') bb''
 
 
 getFreshSReg :: [RegName] -> RegName
@@ -309,6 +311,14 @@ setReplaceables (LoadMemNode pos _) [t] = LoadMemNode pos t
 setReplaceables n@(LowCallNode _ _ _) [] = n
 setReplaceables n@(LowCalloutNode _ _ _) [] = n
 setReplaceables _ _ = error "setReplaceables :-("
+
+getUsedRegisters :: LowIRTree -> [RegName]
+getUsedRegisters (LowOperNode (OperReg reg)) = [reg]
+getUsedRegisters (LowOperNode _) = []
+getUsedRegisters node = concatMap getUsedRegisters (getReplaceables node)
+
+getForestUsedRegisters :: [LowIRTree] -> [RegName]
+getForestUsedRegisters trees = concatMap getUsedRegisters trees
 
 instance Show LowIRTree where
   show t = render $ pp t
@@ -461,8 +471,9 @@ evalLowInstrs alive regMap evaled (instr:instrs) test
 
 evalLowIRForest :: [RegName] -> SourcePos -> [LowIRTree] -> IRTest LowIRTree
                 -> LowBasicBlock
-evalLowIRForest used pos nodes test
-    = let code = concatMap (evalLowIRTree used) nodes
+evalLowIRForest keep pos nodes test
+    = let used = keep ++ getForestUsedRegisters nodes
+          code = concatMap (evalLowIRTree used) nodes
           (testcode, test') = evalLowIRTreeTest used pos test
       in BasicBlock (code ++ testcode) test' pos
 

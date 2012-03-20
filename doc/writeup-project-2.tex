@@ -10,35 +10,74 @@
 
 \section {Overview}
 
+The Purpose of this project was to extend the semantic checker
+produced at the end of the last project to actually generate correct
+x86 assembly code. 
+
+Our Code Generator follows a four step process. The first step is to
+translate the Hybrid AST and Symbol Table produced as the output of
+the previous project into a Mid-Level IR that represents the code as a
+graph of Basic Blocks. The second step is to translate the mid IR into
+a Low-Level IR that translates the higher level instructions used in
+the mid IR to low level assembly instructions. The low IR initially
+makes use of a number of ``Symbolic Registers'', so the next step of
+code generation is to use a basic Register Allocator to replace these
+symbolic registers with real registers and memory locations. Finally,
+the low IR with all symbolic registers allocated is translated
+directly into assembly language. 
+
+The rest of this document outlines each of these steps in detail. The
+mid level IR is described in Section~\ref{sec:midir}. The low level IR
+is described in Section~\ref{sec:lowir}. The register allocator is
+described in Section~\ref{sec:regalloc}. The assembly generator is
+described in Section~\ref{sec:assembly}. 
 
 \section{Division of Work} 
 \label{sec:division}
 
+The work was divided as follows. Kyle Miller designed and wrote the
+mid IR and the low IR and wrote all of the translation functions
+between them. Kyle also implemented several optimizations. Alec
+Thomson wrote an initial assembly template that provided some skeleton
+code for eventual assembly generation. Alec also wrote the simple
+register allocator. Patrick Hulin and Steven Valdez wrote the code to translate the
+low ir directly into assembly code. Each member of the team spent a
+considerable amount of time debugging the final product. 
+
 \section{Assumptions about Spec} 
 \label{sec:assumptions}
 
+The following were assumptions we made about the Decaf spec while we
+wrote the code generator: 
+
+\begin{itemize}
+\item The Array index expression is evaluated before the assignment expression. 
+\item Binary operators are evaluated left to right. 
+\item Method arguments are evaluated right to left. 
+\end{itemize}
+
 \section {Mid IR}
+\label{sec:midir}
 
 TODO: Totally put an image of one of the graphs created by graphviz here 
 
 \section {Low IR} 
+\label{sec:lowir}
 
 TODO: Totally put an image of one of the graphs created by graphviz here 
 
 \section {Register Allocation} 
+\label{sec:regalloc}
 
 The code makes use of a very simple register allocator to eliminate
-all symbolic registers from the Low IR. 
+all symbolic registers from the Low IR. It's behavior is very
+simple. It 
 
 \section {Assembly Generation}  
+\label{sec:assembly}
 
 \section {Test Plan}
 
 
-\begin{itemize}
-\item Evaluate Array index expression before assignment expression. 
-\item Binary operators evaluate left to right. 
-\item Evaluate method arguments right to left. 
-\end{itemize}
 
 \end{document}
