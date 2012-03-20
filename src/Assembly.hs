@@ -22,16 +22,16 @@ cmpBinOpString CmpEQ = "e"
 cmpBinOpString CmpNEQ = "ne"
 
 cmovInstr :: CmpBinOp -> String
-cmovInstr cop = "cmov" ++ (cmpBinOpString cop) ++ "q"
+cmovInstr cop = "  cmov" ++ (cmpBinOpString cop) ++ "q"
 
 jmpInstr :: CmpBinOp -> String
-jmpInstr cop = "j" ++ (cmpBinOpString cop)
+jmpInstr cop = "  j" ++ (cmpBinOpString cop)
 
 binInstr :: (Show a, Show b) => String -> a -> b -> String
-binInstr cmd oper1 oper2 = cmd ++ " " ++ (show oper1) ++ ", " ++ (show oper2)
+binInstr cmd oper1 oper2 = "  " ++ cmd ++ " " ++ (show oper1) ++ ", " ++ (show oper2)
 
 unInstr :: (Show a) => String -> a -> String
-unInstr cmd oper = cmd ++ " " ++ (show oper)
+unInstr cmd oper = "  " ++ cmd ++ " " ++ (show oper)
 
 --
 -- Code for instructions inside basic blocks
@@ -75,11 +75,11 @@ instrCode (StoreMem pos addr oper) = [ binInstr "movq" oper addr ]
 
 instrCode (LoadMem pos reg addr) = [ binInstr "movq" addr reg ]
 
-instrCode (LowCall pos label _) = [ "call " ++ label ]
+instrCode (LowCall pos label _) = [ "  call " ++ label ]
 
 instrCode (LowCallout pos label nargs) = [ unInstr "pushq" RAX
                                          , binInstr "movq" (LowOperConst 0) RAX 
-                                         , "call " ++ label
+                                         , "  call " ++ label
                                          , unInstr "popq" RAX ]
 
 instrCode s = ["# Blargh! :-( Shouldn't have symbolic registers here: " ++ (show s)]
@@ -101,27 +101,27 @@ testCode method (Graph graphMap _) vertex =
         trueLabel = vertexLabel method trueEdge
         falseLabel = vertexLabel method falseEdge
     in case test of
-      IRTestTrue -> [ "jmp " ++ trueLabel ]
-      IRTestFalse -> [ "jmp " ++ falseLabel ]
+      IRTestTrue -> [ "  jmp " ++ trueLabel ]
+      IRTestFalse -> [ "  jmp " ++ falseLabel ]
       IRTestBinOp cop oper1 oper2 ->
         [ binInstr "movq" oper1 R14
         , binInstr "cmpq" oper2 R14
         , (jmpInstr cop) ++ " " ++ trueLabel
-        , "jmp " ++ falseLabel ]
+        , "  jmp " ++ falseLabel ]
       IRTest oper ->
         [ binInstr "cmpq" (LowOperConst 0) oper
-        , "jnz " ++ trueLabel
-        , "jmp " ++ falseLabel ]
+        , "  jnz " ++ trueLabel
+        , "  jmp " ++ falseLabel ]
       IRTestNot oper ->
         [ binInstr "cmpq" (LowOperConst 0) oper
-        , "jz " ++ trueLabel
-        , "jmp " ++ falseLabel ]
+        , "  jz " ++ trueLabel
+        , "  jmp " ++ falseLabel ]
       IRReturn (Just oper) -> [ binInstr "movq" oper RAX 
-                              , "jmp post_" ++ method ]
-      IRReturn (Nothing) -> [ "jmp post_" ++ method ]
+                              , "  jmp post_" ++ method ]
+      IRReturn (Nothing) -> [ "  jmp post_" ++ method ]
       IRTestFail _ ->
         [ binInstr "movq" (LowOperConst 1) RDI
-        , "call exit" ]
+        , "  call exit" ]
 
 --
 -- Code for whole basic blocks
