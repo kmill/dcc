@@ -129,10 +129,10 @@ statementDestroySymbRegs inst =
       RegBin pos dest op oper1 oper2 -> 
           do (loadOper1, oper1') <- operDestroySymbRegs pos oper1 (X86Reg R10)
              (loadOper2, oper2') <- operDestroySymbRegs pos oper2 (X86Reg R11) 
-             storeVal <- destRegDestroySymbRegs pos dest (X86Reg RAX)
+             storeVal <- destRegDestroySymbRegs pos dest (X86Reg R12)
              let newCode = loadOper1 ++
                            loadOper2 ++ 
-                           [(RegBin pos (X86Reg RAX) op oper1' oper2')] ++
+                           [(RegBin pos (X86Reg R12) op oper1' oper2')] ++
                            storeVal
              return newCode 
       RegUn pos dest op oper -> 
@@ -152,12 +152,12 @@ statementDestroySymbRegs inst =
       RegCond pos dest cmp cmp1 cmp2 src -> 
           do (loadCmp1, cmp1') <- operDestroySymbRegs pos cmp1 (X86Reg R10) 
              (loadCmp2, cmp2') <- operDestroySymbRegs pos cmp2 (X86Reg R11) 
-             (loadCmpSrc, src') <- operDestroySymbRegs pos src (X86Reg RAX) 
-             storeVal <- destRegDestroySymbRegs pos dest (X86Reg RBX) 
+             (loadCmpSrc, src') <- operDestroySymbRegs pos src (X86Reg R12) 
+             storeVal <- destRegDestroySymbRegs pos dest (X86Reg R13) 
              let newCode = loadCmp1 ++
                            loadCmp2 ++ 
                            loadCmpSrc ++ 
-                           [RegCond pos (X86Reg RBX) cmp cmp1' cmp2' src'] ++ 
+                           [RegCond pos (X86Reg R13) cmp cmp1' cmp2' src'] ++ 
                            storeVal
              return newCode 
       RegPush pos oper -> 
