@@ -77,7 +77,7 @@ instrCode (StoreMem pos addr oper) = [ binInstr "movq" oper addr ]
 
 instrCode (LoadMem pos reg addr) = [ binInstr "movq" addr reg ]
 
-instrCode (LowCall pos label _) = [ "  call " ++ label ]
+instrCode (LowCall pos label _) = [ "  call " ++ (methodLabel label) ]
 
 instrCode (LowCallout pos label nargs) = [ binInstr "movq" (LowOperConst 0) RAX 
                                          , "  call " ++ label ]
@@ -142,20 +142,27 @@ basicBlockCode method irGraph@(Graph graphMap _) vertex = [bLabel ++ ":"] ++ ins
 -- Translate method
 --
 
+methodLabel :: String -> String
+methodLabel "main" = "main"
+methodLabel name = "method_" ++ name
+
 calleeSaved :: [X86Reg]
 calleeSaved = [ RBP, RBX, R12, R13, R14, R15 ]
 
 methodCode :: LowIRMethod -> [String]
 methodCode (LowIRMethod pos retP name numArgs localsSize irGraph) =
-    [ name ++ ":"
+  let exitCodes = case name of
+        "main" -> ["movq $1, %rax", "movq $0, %rbx", "int $0x80"]
+        _ -> ["leave", "ret"]
+  in
+    [ (methodLabel name) ++ ":"
     , "enter $(" ++ (show localsSize) ++ "), $0" ] ++
     map (unInstr "pushq") calleeSaved ++
     [ "jmp " ++ (vertexLabel name (startVertex irGraph))] ++
     concatMap (basicBlockCode name irGraph) (vertices irGraph) ++
     [ "post_" ++ name ++ ":"] ++
     map (unInstr "popq") (reverse calleeSaved) ++
-    [ "leave"
-    , "ret" ]
+    exitCodes
 
 fieldsCode :: LowIRField -> [String]
 fieldsCode (LowIRField _ name size) = [ name ++ ":"
