@@ -182,7 +182,7 @@ statementDestroySymbRegs inst =
       LowCall pos name numArgs ->
           do return $ [LowCall pos name numArgs]
       LowCallout pos name numArgs -> 
-          do return $ [LowCall pos name numArgs]
+          do return $ [LowCallout pos name numArgs]
 
 
 
