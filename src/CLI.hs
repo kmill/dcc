@@ -24,6 +24,8 @@ data CompilerOpts
                    -- ^ Whether @-h@ or @--help@ was specified, which
                    -- immediately quits and provides usage
                    -- information.
+                   , optMode :: Bool
+                   -- ^ Whether to turn on (dangerous) optimizations
                    }
       deriving (Show)
 
@@ -35,6 +37,7 @@ defaultOptions
                    , debugMode = False
                    , compatMode = False
                    , helpMode = False
+                   , optMode = False
                    }
 
 -- | This type represents the possible actions to do with the input
@@ -55,12 +58,14 @@ options =
     , Option []     ["debug"]   (NoArg debug')              "enables debug mode"
     , Option []     ["compat"]  (NoArg compat')             "enables compatibility mode with 6.035 output spec"
     , Option ['h']  ["help"]    (NoArg help')               "prints this usage information"
+    , Option []     ["opt"]     (NoArg optimize')           "enables (dangerous) optimizations"
     ]
     where outfile' s opts = opts { outputFile = Just s }
           target' t opts = opts { target = targetOpt t }
           debug' opts = opts { debugMode = True }
           compat' opts = opts { compatMode = True }
           help' opts = opts { helpMode = True }
+          optimize' opts = opts { optMode = True }
 
 targetOpt :: String -> TargetFlag
 targetOpt s

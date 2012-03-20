@@ -41,14 +41,15 @@ genReg = do s <- get
             return $ SymbolicReg $ nextSymbRegId s
                            
 -- | Main entry point to convert mid-IR to low-IR.
-toLowIR :: MidIRRepr -> LowIRRepr
-toLowIR (MidIRRepr fields methods)
+toLowIR :: Bool -- ^ Whether to perform (dangerous) optimizations
+        -> MidIRRepr -> LowIRRepr
+toLowIR optMode (MidIRRepr fields methods)
     = LowIRRepr fields' (stringMap st) methods'
     where fields' = map toLowIRField fields
           toLowIRField (MidIRField pos name mlen)
               = LowIRField pos name (8 * (fromMaybe 1 mlen))
           globals = map (\(LowIRField _ n _) -> n ) fields'
-          (methods', st) = runState (mapM (methodToLowIR globals) methods) initState
+          (methods', st) = runState (mapM (methodToLowIR optMode globals) methods) initState
           initState = LowIRState
                       { nextSymbRegId = error "should be set later :-("
                       , regMap = error "should be set later :-("
@@ -58,8 +59,8 @@ toLowIR (MidIRRepr fields methods)
 
 type Globals = [String]
 
-methodToLowIR :: Globals -> MidIRMethod -> State LowIRState LowIRMethod
-methodToLowIR glob (MidIRMethod pos retp name args mir)
+methodToLowIR :: Bool -> Globals -> MidIRMethod -> State LowIRState LowIRMethod
+methodToLowIR optMode glob (MidIRMethod pos retp name args mir)
     = do modify $ (\s -> s { nextSymbRegId=0 
                            , regMap=Map.empty
                            , stringLabelPrefix=name })
@@ -67,7 +68,7 @@ methodToLowIR glob (MidIRMethod pos retp name args mir)
          makeargs <- makeArgs
          lir' <- extendWithArgs lir
          return $ LowIRMethod pos retp name
-                    (length args) (fromIntegral 0) (simplifyLIR lir')
+                    (length args) (fromIntegral 0) (simplifyLIR optMode lir')
     where extendWithArgs ir
               = let st' = freshVertex ir
                 in do argcode <- makeArgs    
@@ -255,8 +256,10 @@ loadStringLit pos str
 ---
 trace' x = trace ("***\n" ++ show x) x
 
-simplifyLIR :: LowIRGraph -> LowIRGraph
-simplifyLIR lir = normalizeBlocks $ mergeRegs $ normalizeBlocks lir
+simplifyLIR :: Bool -> LowIRGraph -> LowIRGraph
+simplifyLIR optMode lir = case optMode of
+                            True -> normalizeBlocks $ mergeRegs $ normalizeBlocks lir
+                            False -> normalizeBlocks lir
 
 mergeRegs :: LowIRGraph -> LowIRGraph
 mergeRegs lir
@@ -266,7 +269,7 @@ mergeRegs lir
       in lir'
     where fixBB (keep,dead,alive) bb
               = let keep' = (X86Reg RSP):(X86Reg RBP):keep
-                    (trees, test) = evalLowInstrs keep' Map.empty []
+                    (trees, test) = evalLowInstrs keep' Map.empty Map.empty []
                                     (blockCode bb) (blockTest bb)
                     bb' = BasicBlock trees test (blockTestPos bb)
                     bb'' = evalLowIRForest keep' (blockTestPos bb) trees test
@@ -355,14 +358,14 @@ instance PP LowIRTree where
         = text ("callout " ++ show name ++ " " ++ show nargs)
   pp (LowOperNode o) = text $ show o
 
-timesUsed :: Int -> RegName -> [LowIRInst] -> IRTest LowOper -> Int
-timesUsed cnt r [] test = cnt + (length $ filter (==r) (checkTestExtents test))
-timesUsed cnt r (inst:insts) test
-    = let (d, a) = checkExtents inst
-          cnt' = cnt + (length $ filter (==r) a)
-      in if r `elem` d
-         then cnt'
-         else timesUsed cnt' r insts test
+-- timesUsed :: Int -> RegName -> [LowIRInst] -> IRTest LowOper -> Int
+-- timesUsed cnt r [] test = cnt + (length $ filter (==r) (checkTestExtents test))
+-- timesUsed cnt r (inst:insts) test
+--     = let (d, a) = checkExtents inst
+--           cnt' = cnt + (length $ filter (==r) a)
+--       in if r `elem` d
+--          then cnt'
+--          else timesUsed cnt' r insts test
 
 regLookup :: LowOper -> Map.Map RegName LowIRTree -> LowIRTree
 regLookup (OperReg r) regmap
@@ -371,26 +374,40 @@ regLookup (OperReg r) regmap
         Just x -> x
 regLookup x regmap = LowOperNode x
 
-evalLowInstrs :: [RegName] -> Map.Map RegName LowIRTree
+evalLowInstrs :: [RegName]
+              -> Map.Map RegName LowIRTree
+              -> Map.Map RegName [RegName] 
               -> [LowIRTree] -> [LowIRInst] -> IRTest LowOper
               -> ([LowIRTree], IRTest LowIRTree)
-evalLowInstrs alive regMap evaled [] test
+evalLowInstrs alive regMap stoMap evaled [] test
     = case test of
-        IRTestTrue -> (evaled, IRTestTrue)
-        IRTestFalse -> (evaled, IRTestFalse)
+        IRTestTrue -> (code, IRTestTrue)
+        IRTestFalse -> (code, IRTestFalse)
         IRTestBinOp op oper1 oper2 ->
-            (evaled, IRTestBinOp op (regLookup oper1 regMap) (regLookup oper2 regMap))
+            (code, IRTestBinOp op (regLookup oper1 regMap) (regLookup oper2 regMap))
         IRTest oper ->
-            (evaled, IRTest (regLookup oper regMap))
+            (code, IRTest (regLookup oper regMap))
         IRTestNot oper ->
-            (evaled, IRTestNot (regLookup oper regMap))
+            (code, IRTestNot (regLookup oper regMap))
         IRReturn Nothing ->
-            (evaled, IRReturn Nothing)
+            (code, IRReturn Nothing)
         IRReturn (Just oper) ->
-            (evaled, IRReturn $ Just (regLookup oper regMap))
+            (code, IRReturn $ Just (regLookup oper regMap))
         IRTestFail x ->
-            (evaled, IRTestFail x)
-evalLowInstrs alive regMap evaled (instr:instrs) test
+            (code, IRTestFail x)
+      where
+        code = evaled++precode
+        (precode, regMap', stoMap') = storebefore alive [] regMap stoMap
+        storebefore [] code rmap stom
+            = (code, rmap, stom)
+        storebefore (r:rs) code rmap stom
+            = case Map.lookup r regMap of
+                Just t -> storebefore rs (code++[RegStoreNode noPosition r t]) (Map.delete r regMap) (deleteBinding r stom)
+                Nothing -> storebefore rs code rmap stom
+        deleteBinding r stom
+            = Map.map (\x -> x \\ [r]) stom
+
+evalLowInstrs alive regMap stoMap evaled (instr:instrs) test
     = case instr of
         RegBin pos rd op oper1 oper2 ->
             continueWithStore pos rd False $
@@ -412,47 +429,53 @@ evalLowInstrs alive regMap evaled (instr:instrs) test
         LoadMem pos rd mem ->
             continueWithStore pos rd False $ LoadMemNode pos (evalMem pos mem)
         LowCall pos name nargs ->
-            continueWithStoreForceRegs pos (X86Reg RAX)
-                 (reverse [X86Reg r | r <- catMaybes (take nargs argOrder)]) $
+            continueWithStoreReallyForce pos (X86Reg RAX)
+                 (reverse [X86Reg r | r <- catMaybes (take nargs argOrder)]) [(X86Reg RSP)] $
             LowCallNode pos name nargs
         LowCallout pos name nargs ->
-            continueWithStoreForceRegs pos (X86Reg RAX)
-                 (reverse [X86Reg r | r <- catMaybes (take nargs argOrder)]) $
+            continueWithStoreReallyForce pos (X86Reg RAX)
+                 (reverse [X86Reg r | r <- catMaybes (take nargs argOrder)]) [(X86Reg RSP)] $
             LowCalloutNode pos name nargs
       where
+        addStoreBinding :: RegName -> LowIRTree -> Map.Map RegName [RegName] -> Map.Map RegName [RegName]
+        addStoreBinding r tree stom
+            = let us = nub (getUsedRegisters tree)
+                  stom' = Map.fromList $ zip us rlist
+                  rlist = [r]:rlist
+              in Map.unionWith (\ x y -> nub ((x\\[r]) ++ y))
+                 stom stom'
+        deleteBinding r stom
+            = Map.map (\x -> x \\ [r]) stom
+        doBeforeStore r rmap stom
+            = case Map.lookup r stom of
+                Nothing -> ([], rmap, stom)
+                Just rs -> storebefore rs [] rmap stom
+        storebefore [] code rmap stom
+            = (code, rmap, stom)
+        storebefore (r:rs) code rmap stom
+            = case Map.lookup r regMap of
+                Just t -> storebefore rs (code++[RegStoreNode noPosition r t]) (Map.delete r regMap) (deleteBinding r stom)
+                Nothing -> storebefore rs code rmap stom
+
         -- 'dobefore' represents whether a previous version of rd
         -- should be stored before the current instruction. for
         -- conditional move.
         continueWithStore pos rd dobefore tree
-            = let times = timesUsed 0 rd instrs test
-              in case times of
-                   0 -> if rd `elem` alive
-                        then continueWithStoreForce pos rd dobefore tree
-                        else -- optimize out!
-                            evalLowInstrs alive regMap evaled instrs test
-                   1 -> if rd `elem` alive
-                        then continueWithStoreForce pos rd dobefore tree
-                        else evalLowInstrs alive (Map.insert rd tree regMap)
-                             evaled instrs test
-                   _ -> continueWithStoreForce pos rd dobefore tree
+            = continueWithStoreForce pos rd dobefore tree
         continueWithStoreForce pos rd dobefore tree
-            = evalLowInstrs alive (Map.delete rd regMap)
-              (evaled++before++[RegStoreNode pos rd tree])
-              instrs test
-            where before = if dobefore
-                           then case Map.lookup rd regMap of
-                                  Just t -> [RegStoreNode pos rd t]
-                                  Nothing -> []
-                           else []
+            = continueWithStoreForceRegs pos rd (if dobefore then [rd] else []) tree
         continueWithStoreForceRegs pos rd regsbefore tree
-            = evalLowInstrs alive (Map.delete rd regMap)
-              (evaled++before++[RegStoreNode pos rd tree])
-              instrs test
-            where storebefore r = case Map.lookup r regMap of
-                                  Just t -> [RegStoreNode pos r t]
-                                  Nothing -> []
-                  before = concatMap storebefore regsbefore
-        continue tree = evalLowInstrs alive regMap
+            = let (code1, regMap', stoMap') = doBeforeStore rd regMap stoMap
+                  (code2, regMap'', stoMap'') = storebefore ([X86Reg RSP] ++ regsbefore) [] regMap' stoMap'
+                  stoMap''' = addStoreBinding rd tree stoMap''
+              in evalLowInstrs alive (Map.insert rd tree regMap'') stoMap'''
+                 (evaled++code1++code2) instrs test
+        continueWithStoreReallyForce pos rd regsbefore regsafter tree
+            = let (code1, regMap', stoMap') = doBeforeStore rd regMap stoMap
+                  (code2, regMap'', stoMap'') = storebefore ([X86Reg RSP] ++ regsbefore) [] regMap' stoMap'
+              in evalLowInstrs alive regMap'' stoMap''
+                 (evaled++code1++code2++[RegStoreNode pos rd tree]) instrs test
+        continue tree = evalLowInstrs alive regMap stoMap
                         (evaled ++ [tree])
                         instrs test
         -- let's turn the mem addresses into trees, too!
