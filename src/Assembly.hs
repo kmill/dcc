@@ -8,8 +8,8 @@ import Text.ParserCombinators.Parsec.Pos
 binOpInstr :: BinOp -> String
 binOpInstr OpAdd = "addq"
 binOpInstr OpSub = "subq"
-binOpInstr OpMul = "mulq"
-binOpInstr OpDiv = "divq"
+binOpInstr OpMul = "imulq"
+binOpInstr OpDiv = "idivq"
 binOpInstr OpMod = "modq"
 binOpInstr _ = ""
 
