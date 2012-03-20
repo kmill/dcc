@@ -17,7 +17,7 @@ insertSymbMapping :: RegName -> DestroySymbRegState -> (MemAddr, DestroySymbRegS
 insertSymbMapping reg currentState = case lookupSymbMapping reg currentState of 
                                        Just addr -> (addr, currentState) 
                                        Nothing -> let offset = nextStackOffset currentState 
-                                                      addr = MemAddr (X86Reg RBP) offset Nothing 0 
+                                                      addr = MemAddr (X86Reg RBP) (-offset) Nothing 0 
                                                       oldMap = symbolMappings currentState 
                                                       newMap = Map.insert reg addr oldMap 
                                                       newState = currentState { symbolMappings = newMap 
@@ -92,12 +92,12 @@ operDestroySymbRegs pos oper tmpReg = return ([], oper)
 -- | Function that removes symbolic registers from destination registers 
 -- | Instead, it takes in a temp register (used in place of the destination register) and produces 
 -- | code to move the value in the temp register to the appropriate memlocation of the symbolic register
-destRegDestroySymbRegs :: SourcePos -> RegName -> RegName -> State DestroySymbRegState [LowIRInst] 
+destRegDestroySymbRegs :: SourcePos -> RegName -> RegName -> State DestroySymbRegState ([LowIRInst], RegName) 
 destRegDestroySymbRegs pos reg@(SymbolicReg _) tmpReg
     = do memAddr <- getStackLoc reg 
-         let storeCodes = [StoreMem pos memAddr (OperReg tmpReg)]
+         let storeCodes = ([StoreMem pos memAddr (OperReg tmpReg)], tmpReg)
          return storeCodes
-destRegDestroySymbRegs pos _ tmpReg = return []
+destRegDestroySymbRegs pos reg tmpReg = return ([], reg)
 
 -- | Function that removes symbolic registers from memAddrs 
 memAddrDestroySymbRegs :: SourcePos -> MemAddr -> RegName -> State DestroySymbRegState ([LowIRInst], MemAddr)
@@ -129,35 +129,35 @@ statementDestroySymbRegs inst =
       RegBin pos dest op oper1 oper2 -> 
           do (loadOper1, oper1') <- operDestroySymbRegs pos oper1 (X86Reg R10)
              (loadOper2, oper2') <- operDestroySymbRegs pos oper2 (X86Reg R11) 
-             storeVal <- destRegDestroySymbRegs pos dest (X86Reg R12)
+             (storeVal, dest') <- destRegDestroySymbRegs pos dest (X86Reg R12)
              let newCode = loadOper1 ++
                            loadOper2 ++ 
-                           [(RegBin pos (X86Reg R12) op oper1' oper2')] ++
+                           [(RegBin pos dest' op oper1' oper2')] ++
                            storeVal
              return newCode 
       RegUn pos dest op oper -> 
           do (loadOper, oper') <- operDestroySymbRegs pos oper (X86Reg R10) 
-             storeVal <- destRegDestroySymbRegs pos dest (X86Reg R11) 
+             (storeVal, dest') <- destRegDestroySymbRegs pos dest (X86Reg R11) 
              let newCode = loadOper ++ 
-                           [RegUn pos (X86Reg R11) op oper'] ++ 
+                           [RegUn pos dest' op oper'] ++ 
                            storeVal 
              return newCode 
       RegVal pos dest oper -> 
           do (loadOper, oper') <- operDestroySymbRegs pos oper (X86Reg R10)
-             storeVal <- destRegDestroySymbRegs pos dest (X86Reg R11) 
+             (storeVal, dest') <- destRegDestroySymbRegs pos dest (X86Reg R11) 
              let newCode = loadOper ++ 
-                           [RegVal pos (X86Reg R11) oper'] ++ 
+                           [RegVal pos dest' oper'] ++ 
                            storeVal 
              return newCode 
       RegCond pos dest cmp cmp1 cmp2 src -> 
           do (loadCmp1, cmp1') <- operDestroySymbRegs pos cmp1 (X86Reg R10) 
              (loadCmp2, cmp2') <- operDestroySymbRegs pos cmp2 (X86Reg R11) 
              (loadCmpSrc, src') <- operDestroySymbRegs pos src (X86Reg R12) 
-             storeVal <- destRegDestroySymbRegs pos dest (X86Reg R13) 
+             (storeVal, dest') <- destRegDestroySymbRegs pos dest (X86Reg R13) 
              let newCode = loadCmp1 ++
                            loadCmp2 ++ 
                            loadCmpSrc ++ 
-                           [RegCond pos (X86Reg R13) cmp cmp1' cmp2' src'] ++ 
+                           [RegCond pos dest' cmp cmp1' cmp2' src'] ++ 
                            storeVal
              return newCode 
       RegPush pos oper -> 
@@ -173,16 +173,16 @@ statementDestroySymbRegs inst =
                            [StoreMem pos addr' oper']
              return newCode
       LoadMem pos dest addr -> 
-          do storeVal <- destRegDestroySymbRegs pos dest (X86Reg R10) 
+          do (storeVal, dest') <- destRegDestroySymbRegs pos dest (X86Reg R10) 
              (loadMem, addr') <- memAddrDestroySymbRegs pos addr (X86Reg R11)
              let newCode = loadMem ++
-                           [LoadMem pos (X86Reg R10) addr'] ++
+                           [LoadMem pos dest' addr'] ++
                            storeVal
              return newCode 
       LowCall pos name numArgs ->
           do return $ [LowCall pos name numArgs]
       LowCallout pos name numArgs -> 
-          do return $ [LowCall pos name numArgs]
+          do return $ [LowCallout pos name numArgs]
 
 
 

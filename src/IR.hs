@@ -386,7 +386,7 @@ instance Show MemAddr where
           (show disp) (show base) (show offset) (show scalar)
 --        = printf "[%s + %s + %s * %s]"
 --          (show base) (show disp) (show offset) (show scalar)
-    show (MemAddrPtr s) = "($" ++ s ++ ")"
+    show (MemAddrPtr s) = s
 --    show (MemAddrPtr s) = "[$" ++ s ++ "]"
 
 instance Show X86Reg where

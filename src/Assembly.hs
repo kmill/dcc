@@ -8,8 +8,8 @@ import Text.ParserCombinators.Parsec.Pos
 binOpInstr :: BinOp -> String
 binOpInstr OpAdd = "addq"
 binOpInstr OpSub = "subq"
-binOpInstr OpMul = "mulq"
-binOpInstr OpDiv = "divq"
+binOpInstr OpMul = "imulq"
+binOpInstr OpDiv = "idivq"
 binOpInstr OpMod = "modq"
 binOpInstr _ = ""
 
@@ -40,9 +40,9 @@ unInstr cmd oper = cmd ++ " " ++ (show oper)
 instrCode :: LowIRInst -> [String]
 
 instrCode (RegBin pos (X86Reg reg) (OpBinCmp cop) oper1 oper2) =
-    [ binInstr "movq" (LowOperConst 0) reg
-    , binInstr "movq" oper2 R10
-    , binInstr "cmpq" oper1 R10
+    [ binInstr "movq" oper1 reg
+    , binInstr "cmpq" oper2 reg
+    , binInstr "movq" (LowOperConst 0) reg
     , binInstr "movq" (LowOperConst 1) R10
     , binInstr (cmovInstr cop) R10 reg ]
       
@@ -50,11 +50,9 @@ instrCode (RegBin pos (X86Reg reg) op oper1 oper2) =
     [ binInstr "movq" oper2 reg ]
     ++ opS
     where opS = case op of
-                     OpMul -> [ unInstr "pushq" RAX 
-                              , binInstr "movq" oper1 RAX
-                              , unInstr "mulq" oper2
-                              , binInstr "movq" RAX reg
-                              , unInstr "popq" RAX ]
+                     OpSub -> [ binInstr "movq" oper1 R10
+                              , binInstr "subq" reg R10
+                              , binInstr "movq" R10 reg ]
                      _ -> [binInstr (binOpInstr op) oper1 reg]
 
 instrCode (RegUn pos (X86Reg reg) op oper) = 
@@ -79,7 +77,10 @@ instrCode (LoadMem pos reg addr) = [ binInstr "movq" addr reg ]
 
 instrCode (LowCall pos label _) = [ "call " ++ label ]
 
-instrCode (LowCallout pos label _) = [ "call " ++ label ]
+instrCode (LowCallout pos label nargs) = [ unInstr "pushq" RAX
+                                         , binInstr "movq" (LowOperConst 0) RAX 
+                                         , "call " ++ label
+                                         , unInstr "popq" RAX ]
 
 instrCode s = ["# Blargh! :-( Shouldn't have symbolic registers here: " ++ (show s)]
 
@@ -87,8 +88,8 @@ instrCode s = ["# Blargh! :-( Shouldn't have symbolic registers here: " ++ (show
 -- Code for block-ending tests
 -- 
 
-testCode :: LowIRGraph -> Vertex -> [String]
-testCode (Graph graphMap _) vertex = 
+testCode :: String -> LowIRGraph -> Vertex -> [String]
+testCode method (Graph graphMap _) vertex = 
     let (Just vPair) = Map.lookup vertex graphMap
         (BasicBlock _ test pos, edgeMap) = vPair
         trueEdge = case Map.lookup True edgeMap of
@@ -97,8 +98,8 @@ testCode (Graph graphMap _) vertex =
         falseEdge = case Map.lookup False edgeMap of
           Just x -> x
           Nothing -> 0
-        trueLabel = vertexLabel trueEdge
-        falseLabel = vertexLabel falseEdge
+        trueLabel = vertexLabel method trueEdge
+        falseLabel = vertexLabel method falseEdge
     in case test of
       IRTestTrue -> [ "jmp " ++ trueLabel ]
       IRTestFalse -> [ "jmp " ++ falseLabel ]
@@ -115,8 +116,9 @@ testCode (Graph graphMap _) vertex =
         [ binInstr "cmpq" (LowOperConst 0) oper
         , "jz " ++ trueLabel
         , "jmp " ++ falseLabel ]
-      IRReturn (Just oper) -> [ binInstr "movq" oper RAX ]
-      IRReturn (Nothing) -> []
+      IRReturn (Just oper) -> [ binInstr "movq" oper RAX 
+                              , "jmp post_" ++ method ]
+      IRReturn (Nothing) -> [ "jmp post_" ++ method ]
       IRTestFail _ ->
         [ binInstr "movq" (LowOperConst 1) RDI
         , "call exit" ]
@@ -125,15 +127,15 @@ testCode (Graph graphMap _) vertex =
 -- Code for whole basic blocks
 --
 
-vertexLabel :: Vertex -> String
-vertexLabel vertex = "block_" ++ (show vertex) ++ "_start"
+vertexLabel :: String -> Vertex -> String
+vertexLabel method vertex = "block_" ++ method ++ "_" ++ (show vertex) ++ "_start"
 
-basicBlockCode :: LowIRGraph -> Vertex -> [String]
-basicBlockCode irGraph@(Graph graphMap _) vertex = [bLabel ++ ":"] ++ instrsCode ++ (testCode irGraph vertex)
+basicBlockCode :: String -> LowIRGraph -> Vertex -> [String]
+basicBlockCode method irGraph@(Graph graphMap _) vertex = [bLabel ++ ":"] ++ instrsCode ++ (testCode method irGraph vertex)
     where instrsCode = concatMap instrCode code
           (Just vPair) = Map.lookup vertex graphMap
           (bb@(BasicBlock code _ _), _) = vPair
-          bLabel = vertexLabel vertex
+          bLabel = vertexLabel method vertex
 
 --
 -- Translate method
@@ -144,21 +146,22 @@ calleeSaved = [ RBP, RBX, R12, R13, R14, R15 ]
 
 methodCode :: LowIRMethod -> [String]
 methodCode (LowIRMethod pos retP name numArgs localsSize irGraph) =
-  [ name ++ ":"
-  , "enter $(8 * " ++ (show localsSize) ++ "), $0" ] ++
-  map (unInstr "pushq") calleeSaved ++
-  concatMap (basicBlockCode irGraph) (vertices irGraph) ++
-  map (unInstr "popq") (reverse calleeSaved) ++
-  [ "leave"
-  , "ret"]
-
+    [ name ++ ":"
+    , "enter $(" ++ (show localsSize) ++ "), $0" ] ++
+    map (unInstr "pushq") calleeSaved ++
+    [ "jmp " ++ (vertexLabel name (startVertex irGraph))] ++
+    concatMap (basicBlockCode name irGraph) (vertices irGraph) ++
+    [ "post_" ++ name ++ ":"] ++
+    map (unInstr "popq") (reverse calleeSaved) ++
+    [ "leave"
+    , "ret" ]
 
 fieldsCode :: LowIRField -> [String]
 fieldsCode (LowIRField _ name size) = [ name ++ ":"
                                       , "\t.long " ++ (show size)]
 stringCode :: (String, SourcePos, String) -> [String]
 stringCode (name, _, str) = [ name ++ ":"
-                            , "\t.ascii " ++ (show str)]
+                            , "\t.asciz " ++ (show $ str)]
 --
 -- Full translation
 --
@@ -168,4 +171,5 @@ lowIRReprCode (LowIRRepr fields strings methods) = [".section .data"]
     ++ concatMap fieldsCode fields
     ++ concatMap stringCode strings
     ++ [".globl main"]
-    ++ methodCode (head $ filter (\x -> ("main" == lowIRMethodName x)) methods)
+    ++ concatMap methodCode methods
+--    ++ methodCode (head $ filter (\x -> ("main" == lowIRMethodName x)) methods)

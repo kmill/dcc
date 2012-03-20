@@ -165,7 +165,10 @@ doLowIRFile opts ifname input
                                            lowir = destroySymbRegs lowirSymb
                                        in do
                                          --putStrLn $ show lowir
-                                         putStrLn $ lowIRtoGraphViz lowir 
+                                         if (debugMode opts) then
+                                           putStrLn $ lowIRtoGraphViz lowir 
+                                           else
+                                           putStrLn $ lowIRtoGraphViz lowirSymb
                             Left (udata, errors) ->
                                 do putStrLn "Semantic errors:"
                                    putStrLn ""

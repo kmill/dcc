@@ -228,7 +228,7 @@ statementToMidIR env s c b (HAssignSt senv pos loc op expr)
                   evalexpr <- expressionToMidIR env storeBlock ts expr
                   failBounds <- newBlock []
                                 (IRTestFail $ Just ("Array index out of bounds at "
-                                                    ++ show pos))
+                                                    ++ show pos ++ "\n"))
                                 pos
                   checkBounds2 <- newBlock []
                                   (IRTestBinOp CmpGTE (OperVar ti) (OperConst 0))
