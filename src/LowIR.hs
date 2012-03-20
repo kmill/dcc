@@ -255,7 +255,7 @@ loadStringLit pos str
 ---
 
 simplifyLIR :: LowIRGraph -> LowIRGraph
-simplifyLIR lir = normalizeBlocks $ mergeRegs $ normalizeBlocks lir
+simplifyLIR lir = normalizeBlocks lir -- $ mergeRegs $ normalizeBlocks lir
 
 mergeRegs :: LowIRGraph -> LowIRGraph
 mergeRegs lir
@@ -265,7 +265,8 @@ mergeRegs lir
               = let alive' = (X86Reg RSP):(X86Reg RBP):alive
                     (trees, test) = evalLowInstrs alive' Map.empty []
                                     (blockCode bb) (blockTest bb)
-                in evalLowIRForest alive' (blockTestPos bb) trees test
+                    bb' = BasicBlock trees test (blockTestPos bb)
+                in trace ("**\n" ++ show alive ++ show bb') evalLowIRForest alive' (blockTestPos bb) trees test
 --            error $ show alive ++ "\n" ++ show bb
           
 
