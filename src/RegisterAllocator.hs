@@ -17,7 +17,7 @@ insertSymbMapping :: RegName -> DestroySymbRegState -> (MemAddr, DestroySymbRegS
 insertSymbMapping reg currentState = case lookupSymbMapping reg currentState of 
                                        Just addr -> (addr, currentState) 
                                        Nothing -> let offset = nextStackOffset currentState 
-                                                      addr = MemAddr (X86Reg RBP) offset Nothing 0 
+                                                      addr = MemAddr (X86Reg RBP) (-offset) Nothing 0 
                                                       oldMap = symbolMappings currentState 
                                                       newMap = Map.insert reg addr oldMap 
                                                       newState = currentState { symbolMappings = newMap 
