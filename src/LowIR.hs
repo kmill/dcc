@@ -449,11 +449,12 @@ evalLowInstrs alive regMap evaled (instr:instrs) test
         evalMem pos (MemAddr br 0 Nothing _)
             = (regLookup (OperReg br) regMap)
         evalMem pos (MemAddr br d Nothing _)
-            = RegBinOpNode pos OpAdd (regLookup (OperReg br) regMap)
+            = RegBinOpNode pos OpAdd
               (LowOperNode $ LowOperConst $ fromIntegral d)
+              (regLookup (OperReg br) regMap)              
         evalMem pos (MemAddr br d (Just or) s)
-            = RegBinOpNode pos OpAdd (regLookup (OperReg br) regMap) $
-              RegBinOpNode pos OpAdd (LowOperNode $ LowOperConst $ fromIntegral d) $
+            = RegBinOpNode pos OpAdd (LowOperNode $ LowOperConst $ fromIntegral d) $
+              RegBinOpNode pos OpAdd (regLookup (OperReg br) regMap) $
               RegBinOpNode pos OpMul (LowOperNode $ LowOperConst $ fromIntegral s) $
                  (regLookup (OperReg or) regMap)
 
@@ -475,7 +476,7 @@ evalLowIRTreeTest used pos test
         IRTestFalse -> ([], IRTestFalse)
         IRTestBinOp op oper1 oper2 ->
             let (used', reg1, code1) = evalOper used oper1
-                (used'', reg2, code2) = evalOper used oper2
+                (used'', reg2, code2) = evalOper used' oper2
             in (code1 ++ code2, IRTestBinOp op reg1 reg2)
         IRTest (RegBinOpNode pos (OpBinCmp op) oper1 oper2) ->
             evalLowIRTreeTest used pos (IRTestBinOp op oper1 oper2)
@@ -739,7 +740,7 @@ lowIRTreeToLowIR_rules = foldr1 mplus rules
                   let mem = MemAddr reg 0 Nothing 0
                   dest <- getFreeRegister
                   replaceAndEmit (LowOperNode (OperReg dest))
-                                     [LoadMem pos reg mem]
+                                     [LoadMem pos dest mem]
               , do -- load mem; dest is (disp+reg)
                    (LoadMemNode pos
                     (RegBinOpNode _ OpAdd
