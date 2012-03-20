@@ -148,7 +148,7 @@ calleeSaved = [ RBP, RBX, R12, R13, R14, R15 ]
 methodCode :: LowIRMethod -> [String]
 methodCode (LowIRMethod pos retP name numArgs localsSize irGraph) =
   let exitCodes = case name of
-        "main" -> ["movq $0, %eax", "leave", "ret"]
+        "main" -> ["movq $0, %rax", "leave", "ret"]
         _ -> ["leave", "ret"]
   in
     [ name ++ ":"
