@@ -463,7 +463,7 @@ instance PP LowIRMethod where
 
 lowIRtoGraphViz m = "digraph name {\n"
                     ++ (showFields (lowIRFields m))
-                    ++ (showStrings (lowIRStrings m))
+                    -- ++ (showStrings (lowIRStrings m))
                     ++ (concatMap showMethod (lowIRMethods m))
                     ++ "}"
   where showMethod (LowIRMethod pos retp name nargs locspace g)
