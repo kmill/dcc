@@ -79,10 +79,9 @@ instrCode (LoadMem pos reg addr) = [ binInstr "movq" addr reg ]
 
 instrCode (LowCall pos label _) = [ "  call " ++ label ]
 
-instrCode (LowCallout pos label nargs) = [ unInstr "pushq" RAX
-                                         , binInstr "movq" (LowOperConst 0) RAX 
-                                         , "  call " ++ label
-                                         , unInstr "popq" RAX ]
+instrCode (LowCallout pos label nargs) = [ binInstr "movq" (LowOperConst 0) RAX 
+                                         , "  call " ++ label ]
+                                          --, unInstr "popq" RAX ]
 
 instrCode s = ["# Blargh! :-( Shouldn't have symbolic registers here: " ++ (show s)]
 
