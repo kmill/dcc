@@ -8,8 +8,11 @@ class Program
 	sum = 0;
 	for (j = 0; 10) {
             sum += j;
+	    callout("printf", "actual value: %d \n", sum);
         }
-
+	
+	callout("printf", "final sum: %d \n", sum);
+	
         if (sum != 45) {
             callout("printf", "ERROR: for loop is bad (1)\n");
         }

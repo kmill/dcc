@@ -371,7 +371,7 @@ instance Show LowOper where
 
 instance Show MemAddr where
     show (MemAddr base 0 Nothing _)
-        = printf "%s" (show base)
+        = printf "(%s)" (show base)
 --        = printf "[%s]" (show base)
     show (MemAddr base disp Nothing _)
         = printf "%s(%s)" (show disp) (show base)

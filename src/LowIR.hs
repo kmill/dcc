@@ -255,7 +255,7 @@ loadStringLit pos str
 ---
 
 simplifyLIR :: LowIRGraph -> LowIRGraph
-simplifyLIR lir = normalizeBlocks lir -- $ mergeRegs $ normalizeBlocks lir
+simplifyLIR lir = normalizeBlocks $ mergeRegs $ normalizeBlocks lir
 
 mergeRegs :: LowIRGraph -> LowIRGraph
 mergeRegs lir
@@ -266,7 +266,7 @@ mergeRegs lir
                     (trees, test) = evalLowInstrs alive' Map.empty []
                                     (blockCode bb) (blockTest bb)
                     bb' = BasicBlock trees test (blockTestPos bb)
-                in trace ("**\n" ++ show alive ++ show bb') evalLowIRForest alive' (blockTestPos bb) trees test
+                in evalLowIRForest alive' (blockTestPos bb) trees test
 --            error $ show alive ++ "\n" ++ show bb
           
 
@@ -474,13 +474,9 @@ evalLowIRTreeTest used pos test
         IRTestTrue -> ([], IRTestTrue)
         IRTestFalse -> ([], IRTestFalse)
         IRTestBinOp op oper1 oper2 ->
-            let reg1 = getFreshSReg used
-                used' = reg1:used
-                reg2 = getFreshSReg used'
-                used'' = reg2:used'
-                code1 = evalLowIRTree used'' (RegStoreNode pos reg1 oper1)
-                code2 = evalLowIRTree used'' (RegStoreNode pos reg2 oper2)
-            in (code1 ++ code2, IRTestBinOp op (OperReg reg1) (OperReg reg2))
+            let (used', reg1, code1) = evalOper used oper1
+                (used'', reg2, code2) = evalOper used oper2
+            in (code1 ++ code2, IRTestBinOp op reg1 reg2)
         IRTest (RegBinOpNode pos (OpBinCmp op) oper1 oper2) ->
             evalLowIRTreeTest used pos (IRTestBinOp op oper1 oper2)
         IRTest oper ->
@@ -500,6 +496,14 @@ evalLowIRTreeTest used pos test
             let code = evalLowIRTree used (RegStoreNode pos (X86Reg RAX) a)
             in (code, IRReturn (Just $ OperReg $ X86Reg RAX))
         IRTestFail ms -> ([], IRTestFail ms)
+      where evalOper used oper
+                = let reg = getFreshSReg used
+                      used' = reg:used
+                      code = evalLowIRTree used' (RegStoreNode pos reg oper)
+                  in case oper of
+                       LowOperNode (OperReg r) -> (used', (OperReg r), [])
+                       LowOperNode (LowOperConst c) -> (used', (LowOperConst c), [])
+                       _ -> (used, (OperReg reg), code)
 
 data IRTreeRuleMonad a = IRTreeRuleMonad
     { runIRTreeRuleMonad :: LowIRTree -> [RegName] -> [([RegName], a)] }
@@ -551,7 +555,8 @@ runRuleSubtrees rule = rule `mplus` do node <- getNode
                                                  withTree sub subtreerule)
                                        (subs', code) <- combineEmits emits
                                        let node' = setReplaceables node subs'
-                                       withTree node' rule
+                                       (mt, insts) <- withTree node' rule
+                                       return (mt, code ++ insts)
     where
       combineEmits :: [IRTreeEmit] -> IRTreeRuleMonad ([LowIRTree], [LowIRInst])
       combineEmits emits = do unmaybed <- mapM unmaybe emits
