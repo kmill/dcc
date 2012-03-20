@@ -116,8 +116,9 @@ testCode method (Graph graphMap _) vertex =
         [ binInstr "cmpq" (LowOperConst 0) oper
         , "jz " ++ trueLabel
         , "jmp " ++ falseLabel ]
-      IRReturn (Just oper) -> [ binInstr "movq" oper RAX ]
-      IRReturn (Nothing) -> []
+      IRReturn (Just oper) -> [ binInstr "movq" oper RAX 
+                              , "ret" ]
+      IRReturn (Nothing) -> [ "ret" ]
       IRTestFail _ ->
         [ binInstr "movq" (LowOperConst 1) RDI
         , "call exit" ]
@@ -148,7 +149,8 @@ methodCode (LowIRMethod pos retP name numArgs localsSize irGraph) =
   [ name ++ ":"
   , "enter $(" ++ (show localsSize) ++ "), $0" ] ++
   map (unInstr "pushq") calleeSaved ++
-  concatMap (basicBlockCode name irGraph) (vertices irGraph) ++
+  basicBlockCode name irGraph (startVertex irGraph) ++
+  concatMap (basicBlockCode name irGraph) (filter (/= (startVertex irGraph)) (vertices irGraph)) ++
   map (unInstr "popq") (reverse calleeSaved) ++
   [ "leave"
   , "ret" ]
