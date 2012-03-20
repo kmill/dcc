@@ -40,9 +40,9 @@ unInstr cmd oper = cmd ++ " " ++ (show oper)
 instrCode :: LowIRInst -> [String]
 
 instrCode (RegBin pos (X86Reg reg) (OpBinCmp cop) oper1 oper2) =
-    [ binInstr "movq" (LowOperConst 0) reg
-    , binInstr "movq" oper2 R10
-    , binInstr "cmpq" oper1 R10
+    [ binInstr "movq" oper1 reg
+    , binInstr "cmpq" oper2 reg
+    , binInstr "movq" (LowOperConst 0) reg
     , binInstr "movq" (LowOperConst 1) R10
     , binInstr (cmovInstr cop) R10 reg ]
       
