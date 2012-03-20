@@ -208,7 +208,11 @@ statementToMidIR env s c b (HAssignSt senv pos loc op expr)
     = case loc of
         HPlainLocation _ pos tok ->
             let var' = fromJust $ lookup (tokenString tok) env
-            in expressionToMidIR env s var' expr
+                loc' = HLoadLoc senv pos loc
+            in case op of
+                 Assign -> expressionToMidIR env s var' expr
+                 IncAssign -> handleBinaryOp env s var' pos "+" loc' expr
+                 DecAssign -> handleBinaryOp env s var' pos "-" loc' expr
         HArrayLocation _ pos tok iexpr ->
             let var = tokenString tok
                 var' = fromJust $ lookup var env
@@ -218,11 +222,21 @@ statementToMidIR env s c b (HAssignSt senv pos loc op expr)
             in do ts <- genTmpVar
                   td <- genTmpVar
                   ti <- genTmpVar
-                  storeBlock <- newBlock [ BinAssign pos ti OpMul
+                  tl <- genTmpVar
+                  let doUpdate = case op of
+                                   Assign -> []
+                                   IncAssign -> [ UnAssign pos tl OpDeref (OperVar td)
+                                                , BinAssign pos ts OpAdd
+                                                  (OperVar tl) (OperVar ts) ]
+                                   DecAssign -> [ UnAssign pos tl OpDeref (OperVar td)
+                                                , BinAssign pos ts OpSub
+                                                  (OperVar tl) (OperVar ts)]
+                  storeBlock <- newBlock ([ BinAssign pos ti OpMul
                                             (OperVar ti) (OperConst 8)
-                                         , BinAssign pos td OpAdd
-                                           (OperLabel var') (OperVar ti)
-                                         , IndAssign pos td (OperVar ts)]
+                                          , BinAssign pos td OpAdd
+                                            (OperLabel var') (OperVar ti) ]
+                                          ++ doUpdate ++
+                                          [ IndAssign pos td (OperVar ts)])
                                 IRTestTrue pos
                   addEdge storeBlock True s
                   evalexpr <- expressionToMidIR env storeBlock ts expr
@@ -247,13 +261,12 @@ statementToMidIR env s c b (HAssignSt senv pos loc op expr)
 ---
 --- Expressions
 ---
-
-expressionToMidIR :: IREnv
-                  -> Int -- ^ BasicBlock on success
-                  -> String -- ^ variable to output to
-                  -> HExpr a -> State MidIRState Int
-expressionToMidIR env s out (HBinaryOp _ pos expr1 optok expr2)
-    = case tokenString optok of
+                  
+handleBinaryOp :: IREnv -> Int -> String
+               -> SourcePos -> String -> HExpr a -> HExpr a
+               -> State MidIRState Int
+handleBinaryOp env s out pos opstr expr1 expr2
+    = case opstr of
         "||" -> orExpr
         "&&" -> andExpr
         "+" -> normalExpr OpAdd
@@ -303,6 +316,14 @@ expressionToMidIR env s out (HBinaryOp _ pos expr1 optok expr2)
                                expr2Block <- expressionToMidIR env opBlock t2 expr2
                                expr1Block <- expressionToMidIR env expr2Block t1 expr1
                                return expr1Block
+
+expressionToMidIR :: IREnv
+                  -> Int -- ^ BasicBlock on success
+                  -> String -- ^ variable to output to
+                  -> HExpr a -> State MidIRState Int
+expressionToMidIR env s out (HBinaryOp _ pos expr1 optok expr2)
+    = handleBinaryOp env s out pos (tokenString optok) expr1 expr2
+
 expressionToMidIR env s out (HUnaryOp _ pos optok expr)
     = case tokenString optok of
         "!" -> normalExpr OpNot
