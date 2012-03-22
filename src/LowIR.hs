@@ -7,6 +7,7 @@ import Control.Applicative
 import Control.Monad
 import Control.Monad.State
 import Data.Graphs
+import qualified Data.Traversable as Trav
 import AST (PP(..), SourcePos, showPos)
 import qualified Data.Map as Map
 import Text.PrettyPrint.HughesPJ
@@ -199,43 +200,29 @@ statementToLowIR glob inst =
              return $ code1 ++ [RegVal pos regd reg1] ++ coded
       MidCall pos mret name opers ->
           do coderegs <- mapM (operToLoadCode glob pos) opers
-             let coderegs' = reverse $ zip argOrder coderegs
-             (coded, regd) <- case mret of
-                                Just rret -> destToStoreCode glob pos rret
-                                Nothing -> error "MidCall lowir :-("
-             return $ (concatMap handleArg coderegs')
-                        ++ [ LowCall pos name (length opers) ]
-                        ++ (case mret of
-                               Just rret -> [ RegBin pos (X86Reg RSP) OpAdd 
-                                                         (LowOperConst $ fromIntegral $ 8 * (max 0 $ (length opers) - 6) ) 
-                                                         (OperReg (X86Reg RSP) )
-                                            , RegVal pos regd (OperReg (X86Reg RAX))]
-                                            ++ coded
-                               Nothing -> [])
-          where handleArg (Nothing, (code, sreg))
-                    = code ++ [RegPush pos sreg]
-                handleArg ((Just dreg), (code, src))
-                    = code ++ [RegVal pos (X86Reg dreg) src]
+             doCall coderegs LowCall pos mret name opers
       MidCallout pos mret name opers ->
           do coderegs <- mapM (either (loadStringLit pos) (operToLoadCode glob pos))
                          opers
-             let coderegs' = reverse $ zip argOrder coderegs
-             (coded, regd) <- case mret of
-                                Just rret -> destToStoreCode glob pos rret
-                                Nothing -> error "MidCall lowir :-("
-             return $ (concatMap handleArg coderegs')
-                         ++ [ LowCallout pos name (length opers) ]
-                         ++ (case mret of
-                               Just rret -> [ RegBin pos (X86Reg RSP) OpAdd 
-                                                         (LowOperConst $ fromIntegral $ 8 * (max 0 $ (length opers) - 6) ) 
-                                                         (OperReg (X86Reg RSP) )
-                                            , RegVal pos regd (OperReg (X86Reg RAX))]
-                                            ++ coded
-                               Nothing -> [])
-          where handleArg (Nothing, (code, sreg))
-                    = code ++ [RegPush pos sreg]
-                handleArg ((Just dreg), (code, src))
-                    = code ++ [RegVal pos (X86Reg dreg) src]
+             doCall coderegs LowCall pos mret name opers
+    where doCall coderegs cons pos mret name opers
+              = do mcode <- Trav.mapM (destToStoreCode glob pos) mret
+                   return $
+                       [ FuncProlog pos $ map X86Reg calleeSaved ]
+                       ++ (concatMap handleArg coderegs')
+                       ++ [ cons pos name (length opers) ]
+                       ++ maybe [] (\(coded, regd) ->
+                              [ RegBin pos (X86Reg RSP) OpAdd
+                                (LowOperConst $ fromIntegral $
+                                                  8 * (max 0 $ (length opers) - 6))
+                                (OperReg (X86Reg RSP))
+                              , RegVal pos regd (OperReg (X86Reg RAX)) ])
+                             mcode
+              where handleArg (Nothing, (code, sreg))
+                        = code ++ [RegPush pos sreg]
+                    handleArg ((Just dreg), (code, src))
+                        = code ++ [RegVal pos (X86Reg dreg) src]
+                    coderegs' = reverse $ zip argOrder coderegs
 
 loadStringLit :: SourcePos -> String
               -> State LowIRState ([LowIRInst], LowOper)

@@ -146,9 +146,6 @@ methodLabel :: String -> String
 methodLabel "main" = "main"
 methodLabel name = "method_" ++ name
 
-calleeSaved :: [X86Reg]
-calleeSaved = [ RBP, RBX, R12, R13, R14, R15 ]
-
 {-
                   
 -}

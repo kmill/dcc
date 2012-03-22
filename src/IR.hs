@@ -39,6 +39,12 @@ argStackDepth :: [Int]
 argStackDepth = [no, no, no, no, no, no] ++ [16, 16+8..]
     where no = error "argStackDepth for non-stack-arg :-("
 
+callerSaved :: [X86Reg]
+callerSaved = [RAX, R10, R11]
+
+calleeSaved :: [X86Reg]
+calleeSaved = [RBP, RBX, R12, R13, R14, R15] -- should RBP be in this?
+
 data IRTest b = IRTestTrue
               | IRTestFalse
               | IRTestBinOp CmpBinOp b b
@@ -163,6 +169,7 @@ data LowIRInst
     | RegPush SourcePos LowOper
     | StoreMem SourcePos MemAddr LowOper
     | LoadMem SourcePos RegName MemAddr
+    | FuncProlog SourcePos [RegName]
     | LowCall SourcePos String Int -- ^ int is number of args
     | LowCallout SourcePos String Int
 
@@ -430,6 +437,9 @@ instance Show LowIRInst where
     show (LoadMem pos reg mem)
         = printf "%s := %s  {%s}"
           (show reg) (show mem) (showPos pos)
+    show (FuncProlog pos regs)
+        = printf "prolog %s  {%s}"
+          (show regs) (showPos pos)
     show (LowCall pos name numargs)
         = printf "call %s %s  {%s}" name (show numargs) (showPos pos)
     show (LowCallout pos name numargs)
