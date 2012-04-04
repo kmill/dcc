@@ -1,7 +1,8 @@
 #!/bin/sh
 
 runparser() {
-  java -jar `dirname $0`/../../dist/Compiler.jar -target parse $1
+    
+  ../../dcc --compat --target parse $1
 }
 
 fail=0
