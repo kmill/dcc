@@ -17,24 +17,41 @@ bFalse = 0
 boolToInt :: Bool -> Int64
 boolToInt b = if b then bTrue else bFalse
 
+-- | This is the type of the monad for working with graphs in Hoopl.
+type GM = CheckingFuelMonad (SimpleUniqueMonad)
+
 ---
 --- IRs
 ---
 
 type VarName = String
 
+data MidIRRepr = MidIRRepr
+    { midIRFields :: [MidIRField]
+    , midIRMethods :: [MidIRMethod] }
+data MidIRField = MidIRField SourcePos String (Maybe Int64)
+
+data LowIRRepr = LowIRRepr
+    { lowIRFields :: [LowIRField]
+    , lowIRStrings :: [(String, SourcePos, String)]
+    , lowIRMethods :: [LowIRMethod] }
+data LowIRField = LowIRField SourcePos String Int64
+
 -- | Has a list of arguments
-type MidFunc = Func [String] VarName
+type MidIRMethod = Method [String] VarName
 -- | Has the number of arguments
-type LowFunc = Func Int Reg
+type LowIRMethod = Method Int Reg
+
+type MidIRInst = Inst VarName
+type LowIRInst = Inst Reg
 
 ---
---- Functions
+--- Methods
 ---
 
 -- | 'a' is the type of the metadata of the function (such as
--- arguments), and 'v' is the type of the variables.
-data Func a v = Func
+-- arguments), and 'v' is the type of the variables
+data Method a v = Method
     { funcName :: String
     , funcArgs :: a
     , funcEntry :: Label
@@ -193,8 +210,8 @@ instance Show v => Show (Inst v e x) where
         = printf "fail  {%s}"
           (showPos pos)
 
-instance (Show a, Show v) => Show (Func a v) where
-    show (Func name args entry body)
+instance (Show a, Show v) => Show (Method a v) where
+    show (Method name args entry body)
         = name ++ " " ++ show args ++ " {\n"
           ++ "goto " ++ show entry ++ "\n"
           ++ showGraph show body ++ "}\n"
