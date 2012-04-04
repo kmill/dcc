@@ -23,8 +23,22 @@ boolToInt b = if b then bTrue else bFalse
 
 type VarName = String
 
-type MidFunc = Func VarName
-type LowFunc = Func Reg
+-- | Has a list of arguments
+type MidFunc = Func [String] VarName
+-- | Has the number of arguments
+type LowFunc = Func Int Reg
+
+---
+--- Functions
+---
+
+-- | 'a' is the type of the metadata of the function (such as
+-- arguments), and 'v' is the type of the variables.
+data Func a v = Func
+    { funcName :: String
+    , funcArgs :: a
+    , funcEntry :: Label
+    , funcBody :: Graph (Inst v) C C }
 
 ---
 --- Expr
@@ -66,17 +80,6 @@ instance NonLocal (Inst v) where
     successors (CondBranch _ exp tlbl flbl) = [tlbl, flbl]
     successors (Return _ _) = []
     successors (Fail _) = []
-
----
---- Functions
----
-
-data Func v = Func
-    { funcName :: String
-    , funcArgs :: [v]
-    , funcEntry :: Label
-    , funcBody :: Graph (Inst v) C C }
-
 
 ---
 --- Registers
@@ -190,9 +193,9 @@ instance Show v => Show (Inst v e x) where
         = printf "fail  {%s}"
           (showPos pos)
 
-instance Show v => Show (Func v) where
+instance (Show a, Show v) => Show (Func a v) where
     show (Func name args entry body)
-        = name ++ "(" ++ intercalate ", " (map show args) ++ ") {\n"
+        = name ++ " " ++ show args ++ " {\n"
           ++ "goto " ++ show entry ++ "\n"
           ++ showGraph show body ++ "}\n"
 
