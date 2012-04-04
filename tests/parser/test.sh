@@ -1,7 +1,7 @@
 #!/bin/sh
 
 runparser() {
-  ../../dcc --compat --target parse $1
+  ../../../dcc --compat --target parse $1
 }
 
 cd `dirname $0`
