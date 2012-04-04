@@ -28,6 +28,7 @@ type VarName = String
 
 data MidIRRepr = MidIRRepr
     { midIRFields :: [MidIRField]
+    , midIRStrings :: [(String, SourcePos, String)]
     , midIRMethods :: [MidIRMethod] }
 data MidIRField = MidIRField SourcePos String (Maybe Int64)
 
@@ -49,13 +50,15 @@ type LowIRInst = Inst Reg
 --- Methods
 ---
 
--- | 'a' is the type of the metadata of the function (such as
+-- | 'a' is the type of the metadata of the method (such as
 -- arguments), and 'v' is the type of the variables
 data Method a v = Method
-    { funcName :: String
-    , funcArgs :: a
-    , funcEntry :: Label
-    , funcBody :: Graph (Inst v) C C }
+    { methodPos :: SourcePos
+    , methodName :: String
+    , methodRets :: Bool -- ^ whether the method returns something
+    , methodArgs :: a
+    , methodEntry :: Label
+    , methodBody :: Graph (Inst v) C C }
 
 ---
 --- Expr
@@ -72,8 +75,7 @@ data Expr v = Lit SourcePos Int64
 
 data UnOp = OpNeg | OpNot
 data BinOp = OpAdd | OpSub | OpMul | OpDiv | OpMod
-           | OpCmp Cmp
-data Cmp = CmpLT | CmpGT | CmpLTE | CmpGTE | CmpEQ | CmpNEQ
+           | CmpLT | CmpGT | CmpLTE | CmpGTE | CmpEQ | CmpNEQ
 
 ---
 --- Instructions
@@ -81,9 +83,9 @@ data Cmp = CmpLT | CmpGT | CmpLTE | CmpGTE | CmpEQ | CmpNEQ
 
 data Inst v e x where
     Label      :: SourcePos -> Label                     -> Inst v C O
-    Assign     :: SourcePos -> v -> Expr v               -> Inst v O O
-    CondAssign :: SourcePos -> v -> Expr v -> Expr v     -> Inst v O O
-    IndAssign  :: SourcePos -> Expr v -> Expr v          -> Inst v O O
+    Store      :: SourcePos -> v -> Expr v               -> Inst v O O
+    CondStore  :: SourcePos -> v -> Expr v -> Expr v     -> Inst v O O
+    IndStore   :: SourcePos -> Expr v -> Expr v          -> Inst v O O
     Call       :: SourcePos -> v -> String -> [Expr v]   -> Inst v O O
     Callout    :: SourcePos -> v -> String -> [Expr v]   -> Inst v O O
     Branch     :: SourcePos -> Label                     -> Inst v O C
@@ -150,9 +152,9 @@ instance Show Reg where
 
 instance Show v => Show (Expr v) where
     show (Lit pos x) = show x
-    show (LitLabel pos lab) = show lab
+    show (LitLabel pos lab) = "$" ++ lab
     show (Var pos v) = show v
-    show (Load pos expr) = "[" ++ show expr ++ "]"
+    show (Load pos expr) = "*(" ++ show expr ++ ")"
     show (UnOp pos op expr) = show op ++ " " ++ show expr
     show (BinOp pos op ex1 ex2)
         = paren ex1 ++ " " ++ show op ++ " " ++ paren ex2
@@ -168,9 +170,6 @@ instance Show BinOp where
     show OpMul = "*"
     show OpDiv = "/"
     show OpMod = "%"
-    show (OpCmp c) = show c
-
-instance Show Cmp where
     show CmpLT = "<"
     show CmpGT = ">"
     show CmpLTE = "<="
@@ -182,14 +181,14 @@ instance Show v => Show (Inst v e x) where
     show (Label pos lbl)
         = printf "%s:  {%s}"
           (show lbl) (showPos pos)
-    show (Assign pos var expr)
+    show (Store pos var expr)
         = printf "%s := %s  {%s}"
           (show var) (show expr) (showPos pos)
-    show (CondAssign pos var cond expr)
+    show (CondStore pos var cond expr)
         = printf "%s := (if %s) %s  {%s}"
           (show var) (show cond) (show expr) (showPos pos)
-    show (IndAssign pos dest expr)
-        = printf "[%s] := %s  {%s}"
+    show (IndStore pos dest expr)
+        = printf "*(%s) := %s  {%s}"
           (show dest) (show expr) (showPos pos)
     show (Call pos dest name args)
         = printf "%s := call %s (%s)  {%s}"
@@ -211,10 +210,11 @@ instance Show v => Show (Inst v e x) where
           (showPos pos)
 
 instance (Show a, Show v) => Show (Method a v) where
-    show (Method name args entry body)
-        = name ++ " " ++ show args ++ " {\n"
+    show (Method pos name retp args entry body)
+        = typ ++ " " ++ name ++ " " ++ show args ++ " {\n"
           ++ "goto " ++ show entry ++ "\n"
           ++ showGraph show body ++ "}\n"
+    where typ = if retp then "ret" else "void"
 
 instance Show X86Reg where
     show RAX = "%rax"
