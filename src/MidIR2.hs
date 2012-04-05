@@ -373,16 +373,14 @@ expressionToMidIR env (HExprMethod _ _ call)
     = case call of
         HNormalMethod _ pos tok exprs ->
             do (gexs, exs) <- unzip `fmap` (mapM (expressionToMidIR env) exprs)
-               r <- genTmpVar
                let g' = catGraphs gexs -- args in right-to-left order
-               return $ ( g' <*> (mkMiddle $ Call pos r (tokenString tok) exs)
-                        , Var pos r )
+               return $ ( g' <*> (mkMiddle $ Call pos (MReg RAX) (tokenString tok) exs)
+                        , Var pos (MReg RAX) )
         HCalloutMethod _ pos tok args ->
             do (gexs, exs) <- unzip `fmap` (mapM evalArg args)
-               r <- genTmpVar
                let g' = catGraphs gexs -- args in right-to-left order
-               return $ ( g' <*> (mkMiddle $ Callout pos r (tokenString tok) exs)
-                        , Var pos r )
+               return $ ( g' <*> (mkMiddle $ Callout pos (MReg RAX) (tokenString tok) exs)
+                        , Var pos (MReg RAX) )
             where evalArg (HCArgString _ s)
                       = (\e -> (GNil, LitLabel pos e)) `fmap` genStr pos (tokenString s)
                   evalArg (HCArgExpr _ ex)

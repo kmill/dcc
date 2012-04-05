@@ -1,4 +1,4 @@
-{-# LANGUAGE GADTs, RankNTypes #-}
+{-# LANGUAGE GADTs, RankNTypes, TypeSynonymInstances #-}
 
 module IR2 where
 
@@ -25,14 +25,19 @@ type GM = SimpleUniqueMonad
 runGM :: GM a -> a
 runGM = runSimpleUniqueMonad
 
+instance Functor GM where
+    fmap f ma = do a <- ma
+                   return $ f a
+
 ---
 --- IRs
 ---
 
-data VarName = MV String deriving (Eq, Ord)
+data VarName = MV String | MReg X86Reg deriving (Eq, Ord)
 
 instance Show VarName where
     show (MV s) = s
+    show (MReg r) = show r
     
 varToLabel :: SourcePos -> VarName -> Expr VarName
 varToLabel pos (MV s) = LitLabel pos s
