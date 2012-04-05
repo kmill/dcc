@@ -25,11 +25,13 @@ import Data.List
 --- Go from HAST to MidIRRepr
 ---
 
--- | This is the main entry point to the conversion.
---generateMidIR :: HDProgram a -> MidIRRepr
---generateMidIR prgm = programToMidIR prgm
+-- | This is the main entry point to the conversion.  It's inside the
+-- GM monad because we probably want to generate new unique labels for
+-- the graph at some point later (i.e., for optimizations).
+generateMidIR :: HDProgram a -> GM MidIRRepr
+generateMidIR prgm = programToMidIR prgm
 
-type IREnv = [(String, (Bool, String))] -- (name, (is_field, mangled_name))
+type IREnv = [(String, (Bool, VarName))] -- (name, (is_field, mangled_name))
 
 data MidIRState = MidIRState
     { genVarId :: Int
@@ -46,22 +48,22 @@ type MidM = StateT MidIRState GM
 instance UniqueMonad MidM where
     freshUnique = lift freshUnique
 
-newLocalEnvEntry :: String -> IREnv -> MidM (String, IREnv)
+newLocalEnvEntry :: String -> IREnv -> MidM (VarName, IREnv)
 newLocalEnvEntry s env = do st <- get
                             let s' = "local_" ++ show (genVarId st) ++ "_" ++ s
                             put (st { genVarId = 1 + genVarId st } )
-                            return (s', (s,(False, s')):env)
-newLocalEnvEntries :: [String] -> IREnv -> MidM ([String], IREnv)
+                            return (MV s', (s,(False, MV s')):env)
+newLocalEnvEntries :: [String] -> IREnv -> MidM ([VarName], IREnv)
 newLocalEnvEntries [] env = return ([], env)
 newLocalEnvEntries (s:ss) env
     = do (s, env') <- newLocalEnvEntry s env
          (ss', env'') <- newLocalEnvEntries ss env'
          return (s:ss', env'')
 
-genTmpVar :: MidM String
+genTmpVar :: MidM VarName
 genTmpVar = do s <- get
                put $ s { genVarId = 1 + genVarId s }
-               return $ "temp_" ++ (show $ genVarId s)
+               return $ MV $ "temp_" ++ (show $ genVarId s)
 
 genStr :: SourcePos -> String -> MidM String
 genStr pos str
@@ -77,31 +79,13 @@ genStr pos str
 withBranch :: Graph (Inst v) e O -> SourcePos -> Label -> Graph (Inst v) e C
 withBranch g pos l = g <*> (mkLast $ Branch pos l)
 
+makeStore :: SourcePos -> Bool -> VarName -> MidIRExpr -> Graph MidIRInst O O
 makeStore pos isfield var ex
     = case isfield of
         False -> mkMiddle $ Store pos var ex
-        True -> mkMiddle $ IndStore pos (LitLabel pos var) ex
+        True -> mkMiddle $ IndStore pos (varToLabel pos var) ex
 
--- programToMidIR :: HDProgram a -> MidIRRepr
--- programToMidIR (HDProgram _ _ fields methods)
---     = MidIRRepr fields' midIRmethods
---       where fields' = concatMap getFields fields
---             getFields (HFieldDecl _ p typ vars)
---                 = flip map vars $
---                   (\v -> case v of
---                            HPlainVar e pos tok ->
---                                MidIRField pos ("field_" ++ tokenString tok) Nothing
---                            HArrayVar e pos tok l ->
---                                MidIRField pos ("field_" ++ tokenString tok) (Just l))
---             initenv = concatMap getEnvNames fields
---             getEnvNames (HFieldDecl _ p typ vars)
---                 = flip map vars $
---                   (\v -> case v of
---                            HPlainVar e pos tok -> (n, "field_" ++ n)
---                                where n = tokenString tok
---                            HArrayVar e pos tok l -> (n, "field_" ++ n)
---                                where n = tokenString tok)
---             midIRmethods = map (methodToMidIR initenv) methods
+
 
 programToMidIR :: HDProgram a -> GM MidIRRepr
 programToMidIR (HDProgram _ _ fields methods)
@@ -115,7 +99,7 @@ programToMidIR (HDProgram _ _ fields methods)
                              MidIRField pos ("field_" ++ tokenString tok) Nothing
                          HArrayVar e pos tok l ->
                              MidIRField pos ("field_" ++ tokenString tok) (Just l))
-          initenv = map (\(k,v) -> (k,(True,v))) $ concatMap getEnvNames fields
+          initenv = map (\(k,v) -> (k, (True, MV v))) $ concatMap getEnvNames fields
           getEnvNames (HFieldDecl _ p typ vars)
               = flip map vars $
                 (\v -> case v of
@@ -155,7 +139,7 @@ statementToMidIR :: IREnv
 statementToMidIR env c b (HBlock _ pos vars stmts)
     = do (v', env') <- newLocalEnvEntries svarnames env
          stmts' <- mapM (statementToMidIR env' c b) stmts
-         return $ foldl1 (<*>) $ map init (zip v' svarposs) ++ stmts'
+         return $ catGraphs $ map init (zip v' svarposs) ++ stmts'
     where svars = concatMap getSVars vars
           getSVars (HVarDecl _ pos _ toks)
               = [(tokenString t, pos) | t <- toks]
@@ -252,7 +236,7 @@ statementToMidIR env c b (HAssignSt senv pos loc op expr)
                 (Term _ (SArray _ len)) = fromJust $ envLookup var senv
                 -- | gets the pointer to var'[i']
                 arrptr i' = (BinOp pos OpAdd
-                                       (LitLabel pos var')
+                                       (varToLabel pos var')
                                        (BinOp pos OpMul (Lit pos 8) (Var pos i')))
             in do (gi, i) <- expressionToMidIR env iexpr
                   i' <- genTmpVar -- temp var for index
@@ -366,7 +350,7 @@ expressionToMidIR env (HLoadLoc senv pos loc)
                 (Term _ (SArray _ len)) = fromJust $ envLookup var senv
                 -- | gets the pointer to var'[i']
                 arrptr i' = (BinOp pos OpAdd
-                                       (LitLabel pos var')
+                                       (varToLabel pos var')
                                        (BinOp pos OpMul (Lit pos 8) (Var pos i')))
             in do (gi, i) <- expressionToMidIR env iexpr
                   i' <- genTmpVar -- temp var for index
@@ -390,13 +374,13 @@ expressionToMidIR env (HExprMethod _ _ call)
         HNormalMethod _ pos tok exprs ->
             do (gexs, exs) <- unzip `fmap` (mapM (expressionToMidIR env) exprs)
                r <- genTmpVar
-               let g' = foldl1 (<*>) gexs -- args in right-to-left order
+               let g' = catGraphs gexs -- args in right-to-left order
                return $ ( g' <*> (mkMiddle $ Call pos r (tokenString tok) exs)
                         , Var pos r )
         HCalloutMethod _ pos tok args ->
             do (gexs, exs) <- unzip `fmap` (mapM evalArg args)
                r <- genTmpVar
-               let g' = foldl1 (<*>) gexs -- args in right-to-left order
+               let g' = catGraphs gexs -- args in right-to-left order
                return $ ( g' <*> (mkMiddle $ Callout pos r (tokenString tok) exs)
                         , Var pos r )
             where evalArg (HCArgString _ s)
@@ -410,6 +394,8 @@ expressionToMidIR env (HExprMethod _ _ call)
 
 -- instance Show MidIRRepr where
 --   show = render . pp
+
+
 
 -- instance PP MidIRRepr where
 --     pp m = text "MidIR"

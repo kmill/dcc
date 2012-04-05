@@ -1,4 +1,4 @@
-{-# LANGUAGE GADTs #-}
+{-# LANGUAGE GADTs, RankNTypes #-}
 
 module IR2 where
 
@@ -7,7 +7,9 @@ import Text.ParserCombinators.Parsec.Pos (newPos, SourcePos)
 import Compiler.Hoopl
 import Data.Int
 import Data.List
+import Data.Maybe
 import Text.Printf
+import Text.Regex
 import AST (PP, showPos)
 
 bTrue, bFalse :: Int64
@@ -18,13 +20,22 @@ boolToInt :: Bool -> Int64
 boolToInt b = if b then bTrue else bFalse
 
 -- | This is the type of the monad for working with graphs in Hoopl.
-type GM = CheckingFuelMonad (SimpleUniqueMonad)
+type GM = SimpleUniqueMonad
+
+runGM :: GM a -> a
+runGM = runSimpleUniqueMonad
 
 ---
 --- IRs
 ---
 
-type VarName = String
+data VarName = MV String deriving (Eq, Ord)
+
+instance Show VarName where
+    show (MV s) = s
+    
+varToLabel :: SourcePos -> VarName -> Expr VarName
+varToLabel pos (MV s) = LitLabel pos s
 
 data MidIRRepr = MidIRRepr
     { midIRFields :: [MidIRField]
@@ -39,7 +50,7 @@ data LowIRRepr = LowIRRepr
 data LowIRField = LowIRField SourcePos String Int64
 
 -- | Has a list of arguments
-type MidIRMethod = Method [String] VarName
+type MidIRMethod = Method [VarName] VarName
 -- | Has the number of arguments
 type LowIRMethod = Method Int Reg
 
@@ -182,29 +193,29 @@ instance Show BinOp where
 
 instance Show v => Show (Inst v e x) where
     show (Label pos lbl)
-        = printf "%s:  {%s}"
+        = printf "%s:  {%s};"
           (show lbl) (showPos pos)
     show (Store pos var expr)
-        = printf "%s := %s  {%s}"
+        = printf "%s := %s  {%s};"
           (show var) (show expr) (showPos pos)
     show (CondStore pos var cond expr)
-        = printf "%s := (if %s) %s  {%s}"
+        = printf "%s := (if %s) %s  {%s};"
           (show var) (show cond) (show expr) (showPos pos)
     show (IndStore pos dest expr)
-        = printf "*(%s) := %s  {%s}"
+        = printf "*(%s) := %s  {%s};"
           (show dest) (show expr) (showPos pos)
     show (Call pos dest name args)
-        = printf "%s := call %s (%s)  {%s}"
+        = printf "%s := call %s (%s)  {%s};"
           (show dest) name (intercalate ", " $ map show args) (showPos pos)
     show (Callout pos dest name args)
-        = printf "%s := callout %s (%s)  {%s}"
-          (show dest) name (intercalate ", " $ map show args) (showPos pos)
+        = printf "%s := callout %s (%s)  {%s};"
+          (show dest) (show name) (intercalate ", " $ map show args) (showPos pos)
     show (Branch pos lbl)
-        = printf "goto %s  {%s}"
+        = printf "goto %s  {%s};"
           (show lbl) (showPos pos)
     show (CondBranch pos expr tlbl flbl)
-        = printf "if %s  {%s}then\n  goto %s\nelse\n  goto %s"
-          (show expr) (show tlbl) (show flbl) (showPos pos)
+        = printf "if %s then  {%s}\n  goto %s\nelse\n  goto %s"
+          (show expr) (showPos pos) (show tlbl) (show flbl)
     show (Return pos mexpr)
         = printf "return %s  {%s}"
           (maybe "" show mexpr) (showPos pos)
@@ -236,3 +247,60 @@ instance Show X86Reg where
     show R13 = "%r13"
     show R14 = "%r14"
     show R15 = "%r15"
+
+
+instance Show MidIRRepr where
+    show (MidIRRepr fields strs methods)
+        = "MidIR"
+          ++ " fields\n"
+          ++ unlines (map showField fields)
+          ++ " strings\n"
+          ++ unlines (map showStr strs)
+          ++ unlines (map show methods)
+        where showField (MidIRField pos s Nothing)
+                  = "  " ++ s ++ "  {" ++ showPos pos ++ "}"
+              showField (MidIRField pos s (Just l))
+                  = "  " ++ s ++ "[" ++ show l ++  "]  {" ++ showPos pos ++ "}"
+              showStr (label, pos, string)
+                  = "  " ++ label ++ " = " ++ show string ++ "  {" ++ showPos pos ++ "}"
+
+midIRToGraphViz m = "digraph name {\n"
+                    ++ (showFields (midIRFields m))
+                    ++ (showStrings (midIRStrings m))
+                    ++ (concatMap showMethod (midIRMethods m))
+                    ++ "}"
+    where showMethod (Method pos name retp args entry body)
+              = graphToGraphViz show body
+                ++ name ++ " [shape=doubleoctagon,label="++show mlabel++"];\n"
+                ++ name ++ " -> " ++ show entry ++ ";\n"
+              where mlabel = (if retp then "ret " else "void ")
+                             ++ name ++ " (" ++ intercalate ", " (map show args) ++ ")"
+          showField (MidIRField pos name msize)
+              = "{" ++ name ++ "|" ++ fromMaybe "val" (msize >>= return . show) ++ "}"
+          showFields fields = "_fields_ [shape=record,label=\"fields|{"
+                              ++ intercalate "|" (map showField fields)
+                              ++ "}\"];\n"
+          showString (name, pos, str)
+              = "{" ++ name ++ "|" ++ showPos pos ++ "|" ++ show str ++ "}"
+          showStrings strings = "_strings_ [shape=record,label="
+                              ++ show ("strings|{"
+                                       ++ intercalate "|" (map showString strings)
+                                       ++ "}")
+                              ++ "];\n"
+
+type Showing n = forall e x . n e x -> String
+
+graphToGraphViz :: NonLocal n => Showing n -> Graph n C C -> String
+graphToGraphViz node (GMany _ g_blocks _) = concatMap bviz (mapElems g_blocks)
+  where bviz block = lab ++ " [shape=box, label="
+                     ++ (leftAlign $ show $ b block ++ "\n") ++ "];\n"
+                     ++ (concatMap (showEdge lab) (successors block))
+            where lab = show $ entryLabel block
+                  showEdge e x = printf "%s -> %s;\n" (show e) (show x)
+                  -- | turns \n into \l so graphviz left-aligns
+                  leftAlign t = subRegex (mkRegex "([^\\\\])\\\\n") t "\\1\\l"
+        b block = node a ++ "\n" ++ unlines (map node bs) ++ node c
+            where f :: (MaybeC C (n C O), [n O O], MaybeC C (n O C))
+                    -> (n C O, [n O O], n O C)
+                  f (JustC e, nodes, JustC x) = (e, nodes, x)
+                  (a, bs, c) = f (blockToNodeList block)

@@ -22,6 +22,9 @@ import MidIR
 import LowIR
 import RegisterAllocator
 import Assembly
+
+import qualified IR2
+import qualified MidIR2
  
 -- | The main entry point to @dcc@.  See 'CLI' for command line
 -- arguments.
@@ -131,9 +134,9 @@ doMidIRFile opts ifname input
                       Right r ->
                           case doSemanticCheck r of
                             Right _ -> let hast = makeHybridAST r
-                                           midir = generateMidIR hast
+                                           midir = IR2.runGM $ MidIR2.generateMidIR hast
                                        in do 
-                                         putStrLn $ midIRToGraphViz midir
+                                         putStrLn $ IR2.midIRToGraphViz midir
                             Left (udata, errors) ->
                                 do putStrLn "Semantic errors:"
                                    putStrLn ""
