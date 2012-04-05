@@ -170,14 +170,13 @@ instance Show Reg where
 ------------------------------------------------------------
 
 instance Show v => Show (Expr v) where
-    show (Lit pos x) = show x
-    show (LitLabel pos lab) = "$" ++ lab
-    show (Var pos v) = show v
-    show (Load pos expr) = "*(" ++ show expr ++ ")"
-    show (UnOp pos op expr) = show op ++ " " ++ show expr
-    show (BinOp pos op ex1 ex2)
-        = paren ex1 ++ " " ++ show op ++ " " ++ paren ex2
-          where paren o = "(" ++ show o ++ ")"
+    showsPrec _ (Lit pos x) = shows x
+    showsPrec _ (LitLabel pos lab) = showString ("$" ++ lab)
+    showsPrec _ (Var pos v) = shows v
+    showsPrec _ (Load pos expr) = showString "*(" . showsPrec 0 expr . showString ")"
+    showsPrec p (UnOp pos op expr) = showParen (p>0) (shows op . showString " " . showsPrec 1 expr)
+    showsPrec p (BinOp pos op ex1 ex2)
+        = showParen (p>0) (showsPrec 1 ex1 . showString " " . shows op . showString " " . showsPrec 1 ex2)
 
 instance Show UnOp where
     show OpNeg = "negate"
