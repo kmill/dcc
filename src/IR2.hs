@@ -90,6 +90,15 @@ data UnOp = OpNeg | OpNot
 data BinOp = OpAdd | OpSub | OpMul | OpDiv | OpMod
            | CmpLT | CmpGT | CmpLTE | CmpGTE | CmpEQ | CmpNEQ
 
+-- | applies a function which replaces variables
+mapE :: (v1 -> v2) -> Expr v1 -> Expr v2
+mapE f (Lit pos x) = Lit pos x
+mapE f (Var pos v) = Var pos (f v)
+mapE f (LitLabel pos l) = LitLabel pos l
+mapE f (Load pos exp) = Load pos (mapE f exp)
+mapE f (UnOp pos op exp) = UnOp pos op (mapE f exp)
+mapE f (BinOp pos op exp1 exp2) = BinOp pos op (mapE f exp1) (mapE f exp2)
+
 ---
 --- Instructions
 ---
@@ -118,6 +127,23 @@ instance NonLocal (Inst v) where
     successors (CondBranch _ exp tlbl flbl) = [tlbl, flbl]
     successors (Return _ _) = []
     successors (Fail _) = []
+
+
+-- | applies a function which replaces variables
+mapI :: (v1 -> v2) -> Inst v1 e x -> Inst v2 e x
+mapI f (Label pos l) = Label pos l
+mapI f (Enter pos l args) = Enter pos l (map f args)
+mapI f (Store pos d exp) = Store pos (f d) (mapE f exp)
+mapI f (CondStore pos d cexp exp) = CondStore pos (f d) (mapE f cexp) (mapE f exp)
+mapI f (IndStore pos d s) = IndStore pos (mapE f d) (mapE f s)
+mapI f (Spill pos id v) = Spill pos id (f v)
+mapI f (UnSpill pos v id) = UnSpill pos (f v) id
+mapI f (Call pos d name args) = Call pos (f d) name (map (mapE f) args)
+mapI f (Callout pos d name args) = Callout pos (f d) name (map (mapE f) args)
+mapI f (Branch pos l) = Branch pos l
+mapI f (CondBranch pos cexp lt lf) = CondBranch pos (mapE f cexp) lt lf
+mapI f (Return pos mexp) = Return pos (mexp >>= Just . (mapE f))
+mapI f (Fail pos) = Fail pos
 
 ---
 --- Registers
