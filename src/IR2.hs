@@ -214,7 +214,7 @@ instance (Show a, Show v) => Show (Method a v) where
         = typ ++ " " ++ name ++ " " ++ show args ++ " {\n"
           ++ "goto " ++ show entry ++ "\n"
           ++ showGraph show body ++ "}\n"
-    where typ = if retp then "ret" else "void"
+        where typ = if retp then "ret" else "void"
 
 instance Show X86Reg where
     show RAX = "%rax"
