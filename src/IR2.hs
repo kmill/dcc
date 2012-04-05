@@ -46,6 +46,9 @@ type LowIRMethod = Method Int Reg
 type MidIRInst = Inst VarName
 type LowIRInst = Inst Reg
 
+type MidIRExpr = Expr VarName
+type LowIRExpr = Expr Reg
+
 ---
 --- Methods
 ---

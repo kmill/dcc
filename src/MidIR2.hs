@@ -1,29 +1,33 @@
+{-# LANGUAGE GADTs, TypeSynonymInstances #-}
+
 -- | Stuff to take a hybrid AST and turn it into a MidIR
 
 module MidIR2 where
 
 import IR2
+import Compiler.Hoopl
 import Control.Monad.State
 import qualified Data.Map as Map
 import Data.Array
 --import Text.ParserCombinators.Parsec (SourcePos)
 import Text.PrettyPrint.HughesPJ
-import AST
+import qualified AST as A
+import AST(SourcePos, showPos, tokenString, tokenPos)
 import SymbolTable
 import Data.Int
 import Debug.Trace
 import Data.Maybe
 import Data.Char
 import Data.List
-import Data.Graphs
+--import Data.Graphs
 
 ---
 --- Go from HAST to MidIRRepr
 ---
 
 -- | This is the main entry point to the conversion.
-generateMidIR :: HDProgram a -> MidIRRepr
-generateMidIR prgm = programToMidIR prgm
+--generateMidIR :: HDProgram a -> MidIRRepr
+--generateMidIR prgm = programToMidIR prgm
 
 type IREnv = [(String, (Bool, String))] -- (name, (is_field, mangled_name))
 
@@ -34,7 +38,13 @@ data MidIRState = MidIRState
     , stringMap :: [(String, SourcePos, String)]
     }
 
+setStrPrefix :: String -> MidM ()
+setStrPrefix p = modify (\s -> s { genStrPrefix = p })
+
 type MidM = StateT MidIRState GM
+
+instance UniqueMonad MidM where
+    freshUnique = lift freshUnique
 
 newLocalEnvEntry :: String -> IREnv -> MidM (String, IREnv)
 newLocalEnvEntry s env = do st <- get
@@ -64,149 +74,163 @@ genStr pos str
          return sname
 
 
-newGLabel :: SourcePos -> MidM (Graph (Inst v) C O)
-newGLabel pos = do l <- uniqueToLabel `fmap` (lift $ freshUnique)
-                   return $ gUnitCO $ Label pos lend
-
 withBranch :: Graph (Inst v) e O -> SourcePos -> Label -> Graph (Inst v) e C
-withBranch g pos l = g <*> (gUnitOC $ Branch pos l)
+withBranch g pos l = g <*> (mkLast $ Branch pos l)
 
+makeStore pos isfield var ex
+    = case isfield of
+        False -> mkMiddle $ Store pos var ex
+        True -> mkMiddle $ IndStore pos (LitLabel pos var) ex
 
-programToMidIR :: HDProgram a -> MidIRRepr
+-- programToMidIR :: HDProgram a -> MidIRRepr
+-- programToMidIR (HDProgram _ _ fields methods)
+--     = MidIRRepr fields' midIRmethods
+--       where fields' = concatMap getFields fields
+--             getFields (HFieldDecl _ p typ vars)
+--                 = flip map vars $
+--                   (\v -> case v of
+--                            HPlainVar e pos tok ->
+--                                MidIRField pos ("field_" ++ tokenString tok) Nothing
+--                            HArrayVar e pos tok l ->
+--                                MidIRField pos ("field_" ++ tokenString tok) (Just l))
+--             initenv = concatMap getEnvNames fields
+--             getEnvNames (HFieldDecl _ p typ vars)
+--                 = flip map vars $
+--                   (\v -> case v of
+--                            HPlainVar e pos tok -> (n, "field_" ++ n)
+--                                where n = tokenString tok
+--                            HArrayVar e pos tok l -> (n, "field_" ++ n)
+--                                where n = tokenString tok)
+--             midIRmethods = map (methodToMidIR initenv) methods
+
+programToMidIR :: HDProgram a -> GM MidIRRepr
 programToMidIR (HDProgram _ _ fields methods)
-    = MidIRRepr fields' midIRmethods
-      where fields' = concatMap getFields fields
-            getFields (HFieldDecl _ p typ vars)
-                = flip map vars $
-                  (\v -> case v of
-                           HPlainVar e pos tok ->
-                               MidIRField pos ("field_" ++ tokenString tok) Nothing
-                           HArrayVar e pos tok l ->
-                               MidIRField pos ("field_" ++ tokenString tok) (Just l))
-            initenv = concatMap getEnvNames fields
-            getEnvNames (HFieldDecl _ p typ vars)
-                = flip map vars $
-                  (\v -> case v of
-                           HPlainVar e pos tok -> (n, "field_" ++ n)
-                               where n = tokenString tok
-                           HArrayVar e pos tok l -> (n, "field_" ++ n)
-                               where n = tokenString tok)
-            midIRmethods = map (methodToMidIR initenv) methods
+    = do (methods, endstate) <- domethods
+         return $ MidIRRepr fields' (stringMap endstate) methods
+    where fields' = concatMap getFields fields
+          getFields (HFieldDecl _ p typ vars)
+              = flip map vars $
+                (\v -> case v of
+                         HPlainVar e pos tok ->
+                             MidIRField pos ("field_" ++ tokenString tok) Nothing
+                         HArrayVar e pos tok l ->
+                             MidIRField pos ("field_" ++ tokenString tok) (Just l))
+          initenv = map (\(k,v) -> (k,(True,v))) $ concatMap getEnvNames fields
+          getEnvNames (HFieldDecl _ p typ vars)
+              = flip map vars $
+                (\v -> case v of
+                         HPlainVar e pos tok -> (tokenString tok, "field_" ++ tokenString tok)
+                         HArrayVar e pos tok l -> (tokenString tok, "field_" ++ tokenString tok))
+          initstate = MidIRState
+              { genVarId = 0
+              , genStrId = 0
+              , genStrPrefix = error "method should set this"
+              , stringMap = [] }
+          domethods = runStateT (mapM (methodToMidIR initenv) methods) initstate
 
-methodToMidIR :: IREnv -> HMethodDecl a -> MidIRMethod
+methodToMidIR :: IREnv -> HMethodDecl a -> MidM MidIRMethod
 methodToMidIR env (HMethodDecl _ pos typ tok args st)
-    = MidIRMethod (tokenPos tok) returnsSomething name margs (normalizeBlocks ir)
-      where name = tokenString tok
-            (margs, ir) = evalState methodToMidIR' initState
-            methodToMidIR' = do (sargs', env') <- newLocalEnvEntries sargs env
-                                endBlock <- newBlock [] (IRReturn methReturn) pos
-                                startBlock <- statementToMidIR env' endBlock no no st
-                                state <- get
-                                return (sargs', createGraph
-                                                  (currBasicBlocks state)
-                                                  (currEdges state)
-                                                  startBlock)
-                where no = error "continue/break used when converting to MidIR :-("
-            sargs = [tokenString t | (HMethodArg _ _ t) <- args]
-            initState = MidIRState
-                      { genVarId = 0
-                      , genBlockId = 0
-                      , currBasicBlocks = []
-                      , currEdges = []
-                      }
-            methReturn = case typ of
-                           MethodVoid -> Nothing
-                           _ -> Just (OperConst 0)
-            returnsSomething = case typ of
-                                 MethodVoid -> False
-                                 _ -> True
+    = do setStrPrefix name
+         (args', env') <- newLocalEnvEntries [tokenString t | (HMethodArg _ _ t) <- args] env
+         graph <- statementToMidIR env' no no st
+         startl <- freshLabel
+         let graph' = mkFirst (Label (tokenPos tok) startl)
+                    <*> graph
+                    <*> mkLast (Return (tokenPos tok) defret)
+         return $ Method (tokenPos tok) name rets args' startl graph'
+    where name = (tokenString tok)
+          rets = case typ of
+                   A.MethodVoid -> False
+                   _ -> True
+          defret = case typ of
+                     A.MethodVoid -> Nothing
+                     _ -> Just (Lit (tokenPos tok) 0)
+          no = error "continue/break used when converting to MidIR :-("
 
 statementToMidIR :: IREnv
                  -> Label -- ^ label on continue
                  -> Label -- ^ label on break
-                 -> HStatement a -> MidM (Graph (Inst v) O O)
+                 -> HStatement a -> MidM (Graph MidIRInst O O)
 -- | Block
 statementToMidIR env c b (HBlock _ pos vars stmts)
-    = do (v', env') <- newLocalEnvEntries svars env
+    = do (v', env') <- newLocalEnvEntries svarnames env
          stmts' <- mapM (statementToMidIR env' c b) stmts
-         return $ (map init v') <*> (foldl1 (<*>) stmts')
+         return $ foldl1 (<*>) $ map init (zip v' svarposs) ++ stmts'
     where svars = concatMap getSVars vars
           getSVars (HVarDecl _ pos _ toks)
-              = [tokenString t | t <- toks]
-          init v = gUnitOO $ Store pos v (Lit 0)
+              = [(tokenString t, pos) | t <- toks]
+          (svarnames, svarposs) = unzip svars
+          init (v, pos) = mkMiddle $ Store pos v (Lit pos 0)
 -- | If
 statementToMidIR env c b (HIfSt _ pos expr cons malt)
-    = do (gconsl, galtl, gend) <- replicateM 3 (newGLabel pos)
+    = do [consl, altl, endl] <- replicateM 3 freshLabel
          (gexpr, expr) <- expressionToMidIR env expr
          gcons <- statementToMidIR env c b cons
-         galt <- statementToMidIR env c b alt
-         gif <- gUnitOC $ CondBranch pos expr (entryLabel gconsl) (entryLabel galtl)
-         return $ gexpr <*> gif
-                  |*><*| withBranch (gconsl <*> gcons) pos (entryLabel lend)
-                  |*><*| withBranch (galtl <*> galt) pos (entryLabel lend)
-                  |*><*| gend
+         galt <- case malt of
+                   Just alt -> statementToMidIR env c b alt
+                   Nothing -> return GNil
+         return $ gexpr <*> (mkLast $ CondBranch pos expr consl altl)
+                  |*><*| withBranch (mkFirst (Label pos consl) <*> gcons) pos endl
+                  |*><*| withBranch (mkFirst (Label pos altl) <*> galt) pos endl
+                  |*><*| mkFirst (Label pos endl)
 -- | For
 statementToMidIR env c b (HForSt _ pos tok exprlow exprhigh st)
     = do high <- genTmpVar
          (i, env') <- newLocalEnvEntry (tokenString tok) env
-         (gcheckl, gloopl, gincrl, gendl) <- replicateM 4 (newGLabel pos)
+         [checkl, loopl, incrl, endl] <- replicateM 4 freshLabel
          (glowex, lowex) <- expressionToMidIR env exprlow
          (ghighex, highex) <- expressionToMidIR env exprhigh
-         loop <- statementToMidIR env' (entryLabel gincrl) (entryLabel gendl) st
-         return $ (glowex <*> (gUnitOO $ Store pos i lowex)
-                   <*> ghighex <*> (gUnitOO $ Store pos high highex)
-                   <*> (gUnitOC $ Branch pos (entryLabel gcheckl)))
-             |*><*| (gcheckl
-                     <*> (gUnitOC $ CondBranch pos (BinOp pos CmpLT (Var i) (Var high))
-                                      (entryLabel gloopl) (entryLabel gendl)))
-             |*><*| (gloopl <*> loop
-                     <*> (gUnitOC $ Branch pos (entryLabel gincrl)))
-             |*><*| (gincrl
-                     <*> (gUnitOO $ Store pos i (BinOp pos Add (Var i) (Lit 1)))
-                     <*> (gUnitOC $ Branch pos (entryLabel gcheckl)))
-             |*><*| gendl
+         loop <- statementToMidIR env' incrl endl st
+         return $ (glowex <*> (mkMiddle $ Store pos i lowex)
+                   <*> ghighex <*> (mkMiddle $ Store pos high highex)
+                   <*> (mkLast $ Branch pos checkl))
+             |*><*| (mkFirst (Label pos checkl)
+                     <*> (mkLast $ CondBranch pos (BinOp pos CmpLT (Var pos i) (Var pos high))
+                                      loopl endl))
+             |*><*| (mkFirst (Label pos loopl) <*> loop
+                     <*> (mkLast $ Branch pos incrl))
+             |*><*| (mkFirst (Label pos incrl)
+                     <*> (mkMiddle $ Store pos i (BinOp pos OpAdd (Var pos i) (Lit pos 1)))
+                     <*> (mkLast $ Branch pos checkl))
+             |*><*| mkFirst (Label pos endl)
 
 -- | While
 statementToMidIR env c b (HWhileSt _ pos expr st)
     = do t <- genTmpVar
-         (gcheckl, gloopl, gendl) <- replicateM 3 (newGLabel pos)
+         [checkl, loopl, endl] <- replicateM 3 freshLabel
          (gex, ex) <- expressionToMidIR env expr
-         loop <- statementToMidIR env (entryLabel gcheckl) (entryLabel gendl) st
-         return $ (gcheckl
+         loop <- statementToMidIR env checkl endl st
+         return $ (mkLast $ Branch pos checkl)
+             |*><*| (mkFirst (Label pos checkl)
                    <*> gex
-                   <*> (gUnitOC $ CondBranch pos ex (entryLabel gloopl) (entryLabel gendl)))
-             |*><*| (gloopl <*> loop
-                     <*> gUnitOC $ Branch pos (entryLabel gcheckl))
-             |*><*| gendl
+                   <*> (mkLast $ CondBranch pos ex loopl endl))
+             |*><*| (mkFirst (Label pos loopl) <*> loop
+                     <*> (mkLast $ Branch pos checkl))
+             |*><*| mkFirst (Label pos endl)
 
 -- | Return
 statementToMidIR env c b (HReturnSt _ pos mexpr)
-    = do dead <- newGLabel pos
+    = do dead <- freshLabel
          (gex, mex) <- case mexpr of
-                        Just expr -> justify $ expressionToMidIR env expr
-                        Nothing -> (gNil, Nothing)
-         return $ gex <*> gUnitOC (Return pos mex) |*><*| dead
+                        Just expr -> justify `fmap` expressionToMidIR env expr
+                        Nothing -> return (GNil, Nothing)
+         return $ gex <*> mkLast (Return pos mex) |*><*| mkFirst (Label pos dead)
     where justify (gex, ex) = (gex, Just ex)
 
 -- | Break
 statementToMidIR env c b (HBreakSt _ pos)
-    = do dead <- newGLabel pos
-         return $ gUnitOC (Branch pos b) |*><*| dead
+    = do dead <- freshLabel
+         return $ mkLast (Branch pos b) |*><*| mkFirst (Label pos dead)
 -- | Continue
 statementToMidIR env c b (HContinueSt _ pos)
-    = do dead <- newGLabel pos
-         return $ gUnitOC (Branch pos b) |*><*| dead
+    = do dead <- freshLabel
+         return $ mkLast (Branch pos b) |*><*| mkFirst (Label pos dead)
 
 -- | Expression
 statementToMidIR env c b (HExprSt _ expr)
     = do (gex, ex) <- expressionToMidIR env expr
          return $ gex -- we ignore ex because side-effect-bearing
                       -- stuff should be in gex
-
-makeStore pos isfield var ex
-    = case isfield of
-        False -> gUnitOO $ Store pos var ex
-        True -> gUnitOO $ IndStore pos (LitLabel pos var) ex
 
 -- | Assign
 statementToMidIR env c b (HAssignSt senv pos loc op expr)
@@ -215,9 +239,9 @@ statementToMidIR env c b (HAssignSt senv pos loc op expr)
             let (isfield, var') = fromJust $ lookup (tokenString tok) env -- destination var
                 loc' = HLoadLoc senv pos loc -- load destination var
             in do (gex, ex) <- case op of
-                                 Assign -> expressionToMidIR env expr
-                                 IncAssign -> handleBinaryOp env pos "+" loc' expr
-                                 DecAssign -> handleBinaryOp env pos "-" loc' expr
+                                 A.Assign -> expressionToMidIR env expr
+                                 A.IncAssign -> handleBinaryOp env pos "+" loc' expr
+                                 A.DecAssign -> handleBinaryOp env pos "-" loc' expr
                   return $ gex <*> makeStore pos isfield var' ex
         HArrayLocation _ pos tok iexpr ->
             let var = tokenString tok -- array var name (for error message)
@@ -227,37 +251,37 @@ statementToMidIR env c b (HAssignSt senv pos loc op expr)
                 -- keeps track of the length of the arrays!
                 (Term _ (SArray _ len)) = fromJust $ envLookup var senv
                 -- | gets the pointer to var'[i']
-                arrptr i' = (BinOp pos Add
+                arrptr i' = (BinOp pos OpAdd
                                        (LitLabel pos var')
-                                       (BinOp pos Mul (Lit pos 8) (Var pos i')))
+                                       (BinOp pos OpMul (Lit pos 8) (Var pos i')))
             in do (gi, i) <- expressionToMidIR env iexpr
                   i' <- genTmpVar -- temp var for index
                   deadv <- genTmpVar
                   (gex, ex) <- expressionToMidIR env expr
-                  errl <- genStr $ "Array index out of bounds at " ++ show pos ++ "\n"
+                  errl <- genStr pos $ "Array index out of bounds at " ++ show pos ++ "\n"
                   let ex' = case op of
-                              Assign -> ex
-                              IncAssign -> BinOp pos Add ex (Load pos (arrptr i'))
-                              DecAssign -> BinOp pos Sub (Load pos (arrptr i')) ex
-                  (gcheckhighl, gokl, gfaill) <- replicateM 3 (newGLabel pos)
-                  return $ ((gUnitOO $ Store pos i' i)
-                            <*> (gUnitOC $ CondBranch pos (BinOp pos CmpGTE (Var pos i') 0)
-                                             (entryLabel gcheckhighl) (entryLabel gfaill)))
-                      |*><*| (gcheckhighl
-                              <*> (gUnitOC $ CondBranch pos (BinOp pos CmpLT (Var pos i') len)
-                                               (entryLabel gokl) (entryLabel gfaill)))
-                      |*><*| (gfaill
-                              <*> (gUnitOO $ Callout pos deadv "printf" [LitLabel errl]) -- maybe stderr?
-                              <*> (gUnitOC $ Fail))
-                      |*><*| (gokl <*> gex
-                              <*> (gUnitOO $ IndStore pos (arrptr i') ex'))
+                              A.Assign -> ex
+                              A.IncAssign -> BinOp pos OpAdd ex (Load pos (arrptr i'))
+                              A.DecAssign -> BinOp pos OpSub (Load pos (arrptr i')) ex
+                  [checkhighl, okl, faill] <- replicateM 3 freshLabel
+                  return $ ((mkMiddle $ Store pos i' i)
+                            <*> (mkLast $ CondBranch pos (BinOp pos CmpGTE (Var pos i') (Lit pos 0))
+                                             checkhighl faill))
+                      |*><*| (mkFirst (Label pos checkhighl)
+                              <*> (mkLast $ CondBranch pos (BinOp pos CmpLT (Var pos i') (Lit pos len))
+                                               okl faill))
+                      |*><*| (mkFirst (Label pos faill)
+                              <*> (mkMiddle $ Callout pos deadv "printf" [LitLabel pos errl]) -- maybe stderr?
+                              <*> (mkLast $ Fail pos))
+                      |*><*| (mkFirst (Label pos okl) <*> gex
+                              <*> (mkMiddle $ IndStore pos (arrptr i') ex'))
 
 ---
 --- Expressions
 ---
                   
 handleBinaryOp :: IREnv -> SourcePos -> String -> HExpr a -> HExpr a
-               -> State MidIRState (Graph (Inst v) O O, Expr v)
+               -> MidM (Graph MidIRInst O O, MidIRExpr)
 handleBinaryOp env pos opstr expr1 expr2
     = case opstr of
         "||" -> orExpr
@@ -267,42 +291,38 @@ handleBinaryOp env pos opstr expr1 expr2
         "*" -> normalExpr OpMul
         "/" -> normalExpr OpDiv
         "%" -> normalExpr OpMod
-        "==" -> normalExpr (OpCmp CmpEQ)
-        "!=" -> normalExpr (OpCmp CmpNEQ)
-        "<" -> normalExpr (OpCmp CmpLT)
-        ">" -> normalExpr (OpCmp CmpGT)
-        "<=" -> normalExpr (OpCmp CmpLTE)
-        ">=" -> normalExpr (OpCmp CmpGTE)
+        "==" -> normalExpr CmpEQ
+        "!=" -> normalExpr CmpNEQ
+        "<" -> normalExpr CmpLT
+        ">" -> normalExpr CmpGT
+        "<=" -> normalExpr CmpLTE
+        ">=" -> normalExpr CmpGTE
         _ -> error "Unknown operator type in expressionToMidIR"
       where orExpr = do t <- genTmpVar
                         (gex1, ex1) <- expressionToMidIR env expr1
                         (gex2, ex2) <- expressionToMidIR env expr2
-                        (ifex2l, iffalsel, donel) <- replicateM 3 (newGLabel pos)
-                        let g = ((gUnitOO $ Assign pos t (Lit pos bTrue))
-                                 <*> gex1 <*> (gUnitOC $ CondBranch pos ex1
-                                                           (entryLabel donel) (entryLabel ifex2l)))
-                              |*><*| (ifex2l <*> gex2
-                                      <*> (gUnitOC $ CondBranch pos ex2
-                                                       (entryLabel donel) (entryLabel iffalsel)))
-                              |*><*| (iffalsel
-                                      <*> (gUnitOO $ Assign pos t (Lit pos bFalse))
-                                      <*> (gUnitOC $ Branch pos (entryLabel donel)))
-                              |*><*| donel
-                         return (g, Var pos t)
+                        [ifex2l, iffalsel, donel] <- replicateM 3 freshLabel
+                        let g = ((mkMiddle $ Store pos t (Lit pos bTrue))
+                                 <*> gex1 <*> (mkLast $ CondBranch pos ex1 donel ifex2l))
+                              |*><*| (mkFirst (Label pos ifex2l) <*> gex2
+                                      <*> (mkLast $ CondBranch pos ex2 donel iffalsel))
+                              |*><*| (mkFirst (Label pos iffalsel)
+                                      <*> (mkMiddle $ Store pos t (Lit pos bFalse))
+                                      <*> (mkLast $ Branch pos donel))
+                              |*><*| mkFirst (Label pos donel)
+                        return (g, Var pos t)
             andExpr = do t <- genTmpVar
-                        (gex1, ex1) <- expressionToMidIR env expr1
-                        (gex2, ex2) <- expressionToMidIR env expr2
-                        (ifex2l, iftruel, donel) <- replicateM 3 (newGLabel pos)
-                        let g = ((gUnitOO $ Assign pos t (Lit pos bFalse))
-                                 <*> gex1 <*> (gUnitOC $ CondBranch pos ex1
-                                                           (entryLabel ifex2l) (entryLabel donel)))
-                              |*><*| (ifex2l <*> gex2
-                                      <*> (gUnitOC $ CondBranch pos ex2
-                                                       (entryLabel iftruel) (entryLabel donel)))
-                              |*><*| (iftruel
-                                      <*> (gUnitOO $ Assign pos t (Lit pos bTrue))
-                                      <*> (gUnitOC $ Branch pos (entryLabel donel)))
-                              |*><*| donel
+                         (gex1, ex1) <- expressionToMidIR env expr1
+                         (gex2, ex2) <- expressionToMidIR env expr2
+                         [ifex2l, iftruel, donel] <- replicateM 3 freshLabel
+                         let g = ((mkMiddle $ Store pos t (Lit pos bFalse))
+                                  <*> gex1 <*> (mkLast $ CondBranch pos ex1 ifex2l donel))
+                               |*><*| (mkFirst (Label pos ifex2l) <*> gex2
+                                       <*> (mkLast $ CondBranch pos ex2 iftruel donel))
+                               |*><*| (mkFirst (Label pos iftruel)
+                                       <*> (mkMiddle $ Store pos t (Lit pos bTrue))
+                                       <*> (mkLast $ Branch pos donel))
+                               |*><*| mkFirst (Label pos donel)
                          return (g, Var pos t)
             normalExpr op = do (gex1, ex1) <- expressionToMidIR env expr1
                                (gex2, ex2) <- expressionToMidIR env expr2
@@ -310,7 +330,7 @@ handleBinaryOp env pos opstr expr1 expr2
 
 expressionToMidIR :: IREnv
                   -> HExpr a
-                  -> State MidIRState (Graph (Inst v) O O, Expr v)
+                  -> MidM (Graph MidIRInst O O, MidIRExpr)
 expressionToMidIR env (HBinaryOp _ pos expr1 optok expr2)
     = handleBinaryOp env pos (tokenString optok) expr1 expr2
 
@@ -323,20 +343,20 @@ expressionToMidIR env (HUnaryOp _ pos optok expr)
                              return $ (gex, UnOp pos op ex)
       
 expressionToMidIR env (HExprBoolLiteral _ pos bool)
-    = return (gNil, Lit pos $ boolToInt bool)
+    = return (GNil, Lit pos $ boolToInt bool)
 expressionToMidIR env (HExprIntLiteral _ pos i)
-    = return (gNil, Lit pos $ i)
+    = return (GNil, Lit pos $ i)
 expressionToMidIR env (HExprCharLiteral _ pos c)
-    = return (gNil, Lit pos $ fromIntegral $ ord c)
+    = return (GNil, Lit pos $ fromIntegral $ ord c)
 expressionToMidIR env (HExprStringLiteral _ pos _)
     = error "Unexpected string literal in expressionToMidIR :-("
 expressionToMidIR env (HLoadLoc senv pos loc)
     = case loc of
         HPlainLocation _ pos tok ->
             let (isfield, var') = fromJust $ lookup (tokenString tok) env
-            in return $ gUnitOO $ case isfield of
-                                    False -> Var pos var'
-                                    True -> Load pos var'
+            in return (GNil, case isfield of
+                               False -> Var pos var'
+                               True -> Load pos (Var pos var'))
         HArrayLocation _ pos tok iexpr ->
             let var = tokenString tok -- array var name (for error message)
                 (_, var') = fromJust $ lookup var env -- destination array var
@@ -345,90 +365,92 @@ expressionToMidIR env (HLoadLoc senv pos loc)
                 -- keeps track of the length of the arrays!
                 (Term _ (SArray _ len)) = fromJust $ envLookup var senv
                 -- | gets the pointer to var'[i']
-                arrptr i' = (BinOp pos Add
+                arrptr i' = (BinOp pos OpAdd
                                        (LitLabel pos var')
-                                       (BinOp pos Mul (Lit pos 8) (Var pos i')))
+                                       (BinOp pos OpMul (Lit pos 8) (Var pos i')))
             in do (gi, i) <- expressionToMidIR env iexpr
                   i' <- genTmpVar -- temp var for index
                   deadv <- genTmpVar
-                  errl <- genStr $ "Array index out of bounds at " ++ show pos ++ "\n"
-                  (gcheckhighl, gokl, gfaill) <- replicateM 3 (newGLabel pos)
-                  let g = ((gUnitOO $ Store pos i' i)
-                           <*> (gUnitOC $ CondBranch pos (BinOp pos CmpGTE (Var i') 0)
-                                            (entryLabel gcheckhighl) (entryLabel gfaill)))
-                        |*><*| (gcheckhighl
-                                <*> (gUnitOC $ CondBranch pos (BinOp pos CmpLT (Var i') len)
-                                                 (entryLabel gokl) (entryLabel gfaill)))
-                        |*><*| (gfaill
-                                <*> (gUnitOO $ Callout pos deadv "printf" [LitLabel errl]) -- maybe stderr?
-                                <*> (gUnitOC $ Fail))
-                        |*><*| gokl
+                  errl <- genStr pos $ "Array index out of bounds at " ++ show pos ++ "\n"
+                  [checkhighl, okl, faill] <- replicateM 3 freshLabel
+                  let g = ((mkMiddle $ Store pos i' i)
+                           <*> (mkLast $ CondBranch pos (BinOp pos CmpGTE (Var pos i') (Lit pos 0))
+                                            checkhighl faill))
+                        |*><*| (mkFirst (Label pos checkhighl)
+                                <*> (mkLast $ CondBranch pos (BinOp pos CmpLT (Var pos i') (Lit pos len))
+                                                 okl faill))
+                        |*><*| (mkFirst (Label pos faill)
+                                <*> (mkMiddle $ Callout pos deadv "printf" [LitLabel pos errl]) -- maybe stderr?
+                                <*> (mkLast $ Fail pos))
+                        |*><*| mkFirst (Label pos okl)
                   return (g, Load pos (arrptr i'))
 
 expressionToMidIR env (HExprMethod _ _ call)
     = case call of
         HNormalMethod _ pos tok exprs ->
-            do (gexs, exs) -> unzip `fmap` (mapM (expressionToMidIR env) exprs)
+            do (gexs, exs) <- unzip `fmap` (mapM (expressionToMidIR env) exprs)
                r <- genTmpVar
-               let g' = foldl (<*>) gexs -- args in right-to-left order
-               return $ ( g' <*> (gUnitOO $ Call pos r (tokenString tok) exs)
+               let g' = foldl1 (<*>) gexs -- args in right-to-left order
+               return $ ( g' <*> (mkMiddle $ Call pos r (tokenString tok) exs)
                         , Var pos r )
         HCalloutMethod _ pos tok args ->
-            do (gexs, exs) -> unzip `fmap` (mapM evalArg exprs)
+            do (gexs, exs) <- unzip `fmap` (mapM evalArg args)
                r <- genTmpVar
-               let g' = foldl (<*>) gexs -- args in right-to-left order
-               return $ ( g' <*> (gUnitOO $ Callout pos r (tokenString tok) exs)
+               let g' = foldl1 (<*>) gexs -- args in right-to-left order
+               return $ ( g' <*> (mkMiddle $ Callout pos r (tokenString tok) exs)
                         , Var pos r )
-            where evalArg (HCArgString _ s) = LitLabel pos `fmap` genStr s
-                  evalArg (HCArgExpr _ ex) = expressionToMidIR env ex
+            where evalArg (HCArgString _ s)
+                      = (\e -> (GNil, LitLabel pos e)) `fmap` genStr pos (tokenString s)
+                  evalArg (HCArgExpr _ ex)
+                      = expressionToMidIR env ex
 
 ---
 --- Show MidIRRepr!
 ---
 
-instance Show MidIRRepr where
-  show = render . pp
+-- instance Show MidIRRepr where
+--   show = render . pp
 
-instance PP MidIRRepr where
-    pp m = text "MidIR"
-           $+$ (nest 3 ((text "fields" $+$ (nest 3 fields))
-                        $+$ (text "methods" $+$ (nest 3 methods))))
-      where fields = vcat (map showField $ midIRFields m)
-            showField (MidIRField pos s Nothing)
-                = text s
-                  <+> text ("{" ++ show pos ++ "}")
-            showField (MidIRField pos s (Just l))
-              = text s
-                <+> text ("[" ++ show l ++ "]")
-                <+> text ("{" ++ show pos ++ "}")
-            methods = vcat [pp m | m <- midIRMethods m]
+-- instance PP MidIRRepr where
+--     pp m = text "MidIR"
+--            $+$ (nest 3 ((text "fields" $+$ (nest 3 fields))
+--                         $+$ (text "methods" $+$ (nest 3 methods))))
+--       where fields = vcat (map showField $ midIRFields m)
+--             showField (MidIRField pos s Nothing)
+--                 = text s
+--                   <+> text ("{" ++ show pos ++ "}")
+--             showField (MidIRField pos s (Just l))
+--               = text s
+--                 <+> text ("[" ++ show l ++ "]")
+--                 <+> text ("{" ++ show pos ++ "}")
+--             methods = vcat [pp m | m <- midIRMethods m]
 
-instance PP MidIRMethod where
-    pp (MidIRMethod pos retp name args ir)
-        = text ("{" ++ show pos ++ "}")
-           $+$ (if retp then text "ret" else text "void") <+> text name
-           <+> parens (hsep $ punctuate comma [text a | a <- args])
-           $+$ (text $ "start = " ++ show (startVertex ir))
-           $+$ (nest 3 (vcat [showVertex v | v <- labels ir]))
-        where showVertex (i,bb) = text (show i)
-                                   <+> (nest 3 (pp bb))
-                                   $+$ (nest 5 (vcat (map showEdge outedges)))
-                  where outedges = adjEdges ir i
-                        showEdge (b,y) = text (show b ++ " -> " ++ show y)
+-- instance PP MidIRMethod where
+--     pp (MidIRMethod pos retp name args ir)
+--         = text ("{" ++ show pos ++ "}")
+--            $+$ (if retp then text "ret" else text "void") <+> text name
+--            <+> parens (hsep $ punctuate comma [text a | a <- args])
+--            $+$ (text $ "start = " ++ show (startVertex ir))
+--            $+$ (nest 3 (vcat [showVertex v | v <- labels ir]))
+--         where showVertex (i,bb) = text (show i)
+--                                    <+> (nest 3 (pp bb))
+--                                    $+$ (nest 5 (vcat (map showEdge outedges)))
+--                   where outedges = adjEdges ir i
+--                         showEdge (b,y) = text (show b ++ " -> " ++ show y)
                         
 
-midIRToGraphViz m = "digraph name {\n"
-                    ++ (showFields (midIRFields m))
-                    ++ (concatMap showMethod (midIRMethods m))
-                    ++ "}"
-  where showMethod (MidIRMethod pos retp name args g)
-            = graphToGraphVizSubgraph g (name ++ "_")
-              (name ++ " [shape=doubleoctagon,label="++show mlabel++"];\n"
-              ++ name ++ " -> " ++ name ++ "_" ++ show (startVertex g) ++ ";\n")
-            where mlabel = (if retp then "ret " else "void ")
-                           ++ name ++ " (" ++ intercalate ", " args ++ ")"
-        showField (MidIRField pos name msize)
-            = "{" ++ name ++ "|" ++ fromMaybe "val" (msize >>= return . show) ++ "}"
-        showFields fields = "_fields_ [shape=record,label=\"fields|{"
-                            ++ intercalate "|" (map showField fields)
-                            ++ "}\"];\n"
+-- midIRToGraphViz m = "digraph name {\n"
+--                     ++ (showFields (midIRFields m))
+--                     ++ (concatMap showMethod (midIRMethods m))
+--                     ++ "}"
+--   where showMethod (MidIRMethod pos retp name args g)
+--             = graphToGraphVizSubgraph g (name ++ "_")
+--               (name ++ " [shape=doubleoctagon,label="++show mlabel++"];\n"
+--               ++ name ++ " -> " ++ name ++ "_" ++ show (startVertex g) ++ ";\n")
+--             where mlabel = (if retp then "ret " else "void ")
+--                            ++ name ++ " (" ++ intercalate ", " args ++ ")"
+--         showField (MidIRField pos name msize)
+--             = "{" ++ name ++ "|" ++ fromMaybe "val" (msize >>= return . show) ++ "}"
+--         showFields fields = "_fields_ [shape=record,label=\"fields|{"
+--                             ++ intercalate "|" (map showField fields)
+--                             ++ "}\"];\n"

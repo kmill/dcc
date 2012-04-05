@@ -26,6 +26,7 @@ module AST ( PP(..)
 
 import Scanner(Token(..),TokenType(..))
 import Text.ParserCombinators.Parsec
+import Text.ParserCombinators.Parsec.Pos (newPos)
 import Text.PrettyPrint.HughesPJ
 import Data.Int
 
@@ -37,6 +38,9 @@ class PP a where
 showPos :: SourcePos -> String
 showPos pos = "line " ++ (show $ sourceLine pos)
               ++ ", col " ++ (show $ sourceColumn pos)
+              
+-- | A null position for programmer laziness
+noPosition = newPos "<none>" (-1) (-1)
 
 ---
 --- AST data
