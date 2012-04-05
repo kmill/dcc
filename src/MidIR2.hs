@@ -89,8 +89,9 @@ makeStore pos isfield var ex
 
 programToMidIR :: HDProgram a -> GM MidIRRepr
 programToMidIR (HDProgram _ _ fields methods)
-    = do (methods, endstate) <- domethods
-         return $ MidIRRepr fields' (stringMap endstate) methods
+    = do (methods', endstate) <- domethods
+         let (methods, graphs) = unzip methods'
+         return $ MidIRRepr fields' (stringMap endstate) methods (catGraphsCC graphs)
     where fields' = concatMap getFields fields
           getFields (HFieldDecl _ p typ vars)
               = flip map vars $
@@ -111,21 +112,20 @@ programToMidIR (HDProgram _ _ fields methods)
               , genStrPrefix = error "method should set this"
               , stringMap = [] }
           domethods = runStateT (mapM (methodToMidIR initenv) methods) initstate
+          catGraphsCC [] = error "there should alway at least be a block for the main function"
+          catGraphsCC gs = foldl1 (|*><*|) gs
 
-methodToMidIR :: IREnv -> HMethodDecl a -> MidM MidIRMethod
+methodToMidIR :: IREnv -> HMethodDecl a -> MidM (Method, Graph MidIRInst C C)
 methodToMidIR env (HMethodDecl _ pos typ tok args st)
     = do setStrPrefix name
          (args', env') <- newLocalEnvEntries [tokenString t | (HMethodArg _ _ t) <- args] env
          graph <- statementToMidIR env' no no st
          startl <- freshLabel
-         let graph' = mkFirst (Label (tokenPos tok) startl)
+         let graph' = mkFirst (Enter (tokenPos tok) startl args')
                     <*> graph
                     <*> mkLast (Return (tokenPos tok) defret)
-         return $ Method (tokenPos tok) name rets args' startl graph'
+         return (Method (tokenPos tok) name startl, graph')
     where name = (tokenString tok)
-          rets = case typ of
-                   A.MethodVoid -> False
-                   _ -> True
           defret = case typ of
                      A.MethodVoid -> Nothing
                      _ -> Just (Lit (tokenPos tok) 0)

@@ -45,19 +45,16 @@ varToLabel pos (MV s) = LitLabel pos s
 data MidIRRepr = MidIRRepr
     { midIRFields :: [MidIRField]
     , midIRStrings :: [(String, SourcePos, String)]
-    , midIRMethods :: [MidIRMethod] }
+    , midIRMethods :: [Method]
+    , midIRGraph :: Graph MidIRInst C C }
 data MidIRField = MidIRField SourcePos String (Maybe Int64)
 
 data LowIRRepr = LowIRRepr
     { lowIRFields :: [LowIRField]
     , lowIRStrings :: [(String, SourcePos, String)]
-    , lowIRMethods :: [LowIRMethod] }
+    , lowIRMethods :: [Method]
+    , lowIRGraph :: Graph LowIRInst C C }
 data LowIRField = LowIRField SourcePos String Int64
-
--- | Has a list of arguments
-type MidIRMethod = Method [VarName] VarName
--- | Has the number of arguments
-type LowIRMethod = Method Int Reg
 
 type MidIRInst = Inst VarName
 type LowIRInst = Inst Reg
@@ -71,13 +68,10 @@ type LowIRExpr = Expr Reg
 
 -- | 'a' is the type of the metadata of the method (such as
 -- arguments), and 'v' is the type of the variables
-data Method a v = Method
+data Method = Method
     { methodPos :: SourcePos
     , methodName :: String
-    , methodRets :: Bool -- ^ whether the method returns something
-    , methodArgs :: a
-    , methodEntry :: Label
-    , methodBody :: Graph (Inst v) C C }
+    , methodEntry :: Label }
 
 ---
 --- Expr
@@ -100,11 +94,16 @@ data BinOp = OpAdd | OpSub | OpMul | OpDiv | OpMod
 --- Instructions
 ---
 
+type SpillId = Int
+
 data Inst v e x where
     Label      :: SourcePos -> Label                     -> Inst v C O
+    Enter      :: SourcePos -> Label -> [v]              -> Inst v C O
     Store      :: SourcePos -> v -> Expr v               -> Inst v O O
     CondStore  :: SourcePos -> v -> Expr v -> Expr v     -> Inst v O O
     IndStore   :: SourcePos -> Expr v -> Expr v          -> Inst v O O
+    Spill      :: SourcePos -> SpillId -> v              -> Inst v O O
+    UnSpill    :: SourcePos -> v -> SpillId              -> Inst v O O
     Call       :: SourcePos -> v -> String -> [Expr v]   -> Inst v O O
     Callout    :: SourcePos -> v -> String -> [Expr v]   -> Inst v O O
     Branch     :: SourcePos -> Label                     -> Inst v O C
@@ -114,6 +113,7 @@ data Inst v e x where
 
 instance NonLocal (Inst v) where
     entryLabel (Label _ lbl) = lbl
+    entryLabel (Enter _ lbl _) = lbl
     successors (Branch _ lbl) = [lbl]
     successors (CondBranch _ exp tlbl flbl) = [tlbl, flbl]
     successors (Return _ _) = []
@@ -199,6 +199,9 @@ instance Show v => Show (Inst v e x) where
     show (Label pos lbl)
         = printf "%s:  {%s};"
           (show lbl) (showPos pos)
+    show (Enter pos lbl args)
+        = printf "%s: enter %s  {%s};"
+          (show lbl) (show args) (showPos pos)
     show (Store pos var expr)
         = printf "%s := %s  {%s};"
           (show var) (show expr) (showPos pos)
@@ -208,6 +211,12 @@ instance Show v => Show (Inst v e x) where
     show (IndStore pos dest expr)
         = printf "*(%s) := %s  {%s};"
           (show dest) (show expr) (showPos pos)
+    show (Spill pos sid var)
+        = printf "spill %s <- %s  {%s};"
+          (show sid) (show var) (showPos pos)
+    show (UnSpill pos var sid)
+        = printf "unspill %s <- %s  {%s};"
+          (show var) (show sid) (showPos pos)
     show (Call pos dest name args)
         = printf "%s := call %s (%s)  {%s};"
           (show dest) name (intercalate ", " $ map show args) (showPos pos)
@@ -227,12 +236,10 @@ instance Show v => Show (Inst v e x) where
         = printf "fail  {%s}"
           (showPos pos)
 
-instance (Show a, Show v) => Show (Method a v) where
-    show (Method pos name retp args entry body)
-        = typ ++ " " ++ name ++ " " ++ show args ++ " {\n"
-          ++ "goto " ++ show entry ++ "\n"
-          ++ showGraph show body ++ "}\n"
-        where typ = if retp then "ret" else "void"
+instance Show Method where
+    show (Method pos name entry)
+        = "method " ++ name
+          ++ " goto " ++ show entry
 
 instance Show X86Reg where
     show RAX = "%rax"
@@ -254,13 +261,14 @@ instance Show X86Reg where
 
 
 instance Show MidIRRepr where
-    show (MidIRRepr fields strs methods)
+    show (MidIRRepr fields strs methods graph)
         = "MidIR"
           ++ " fields\n"
           ++ unlines (map showField fields)
           ++ " strings\n"
           ++ unlines (map showStr strs)
           ++ unlines (map show methods)
+          ++ showGraph show graph
         where showField (MidIRField pos s Nothing)
                   = "  " ++ s ++ "  {" ++ showPos pos ++ "}"
               showField (MidIRField pos s (Just l))
@@ -272,13 +280,11 @@ midIRToGraphViz m = "digraph name {\n"
                     ++ (showFields (midIRFields m))
                     ++ (showStrings (midIRStrings m))
                     ++ (concatMap showMethod (midIRMethods m))
+                    ++ graphToGraphViz show (midIRGraph m)
                     ++ "}"
-    where showMethod (Method pos name retp args entry body)
-              = graphToGraphViz show body
-                ++ name ++ " [shape=doubleoctagon,label="++show mlabel++"];\n"
+    where showMethod (Method pos name entry)
+              = name ++ " [shape=doubleoctagon,label="++show name++"];\n"
                 ++ name ++ " -> " ++ show entry ++ ";\n"
-              where mlabel = (if retp then "ret " else "void ")
-                             ++ name ++ " (" ++ intercalate ", " (map show args) ++ ")"
           showField (MidIRField pos name msize)
               = "{" ++ name ++ "|" ++ fromMaybe "val" (msize >>= return . show) ++ "}"
           showFields fields = "_fields_ [shape=record,label=\"fields|{"
