@@ -105,9 +105,10 @@ mapE f (BinOp pos op exp1 exp2) = BinOp pos op (mapE f exp1) (mapE f exp2)
 
 type SpillId = Int
 
+-- | 'v' is type of variables.
 data Inst v e x where
     Label      :: SourcePos -> Label                     -> Inst v C O
-    Enter      :: SourcePos -> Label -> [v]              -> Inst v C O
+    Enter      :: SourcePos -> Label -> Int              -> Inst v C O
     Store      :: SourcePos -> v -> Expr v               -> Inst v O O
     CondStore  :: SourcePos -> v -> Expr v -> Expr v     -> Inst v O O
     IndStore   :: SourcePos -> Expr v -> Expr v          -> Inst v O O
@@ -132,7 +133,7 @@ instance NonLocal (Inst v) where
 -- | applies a function which replaces variables
 mapI :: (v1 -> v2) -> Inst v1 e x -> Inst v2 e x
 mapI f (Label pos l) = Label pos l
-mapI f (Enter pos l args) = Enter pos l (map f args)
+mapI f (Enter pos l nargs) = Enter pos l nargs
 mapI f (Store pos d exp) = Store pos (f d) (mapE f exp)
 mapI f (CondStore pos d cexp exp) = CondStore pos (f d) (mapE f cexp) (mapE f exp)
 mapI f (IndStore pos d s) = IndStore pos (mapE f d) (mapE f s)
@@ -158,6 +159,12 @@ argOrder = (map Just [RDI, RSI, RDX, RCX, R8, R9]) ++ nothings
 argStackDepth :: [Int]
 argStackDepth = [no, no, no, no, no, no] ++ [16, 16+8..]
     where no = error "argStackDepth for non-stack-arg :-("
+
+-- | Gives a midir expression for getting any particular argument.
+argExprs :: SourcePos -> [Expr VarName]
+argExprs pos = (map (Var pos . MReg) [RDI, RSI, RDX, RCX, R8, R9])
+               ++ (map (\d -> Load pos (BinOp pos OpAdd (Lit pos d) (Var pos (MReg RBP))))
+                   [16, 16+8..])
 
 callerSaved :: [X86Reg]
 callerSaved = [RAX, R10, R11]
@@ -226,7 +233,7 @@ instance Show v => Show (Inst v e x) where
         = printf "%s:  {%s};"
           (show lbl) (showPos pos)
     show (Enter pos lbl args)
-        = printf "%s: enter %s  {%s};"
+        = printf "%s: enter (%s args)  {%s};"
           (show lbl) (show args) (showPos pos)
     show (Store pos var expr)
         = printf "%s := %s  {%s};"

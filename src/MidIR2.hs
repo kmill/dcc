@@ -121,9 +121,11 @@ methodToMidIR env (HMethodDecl _ pos typ tok args st)
          (args', env') <- newLocalEnvEntries [tokenString t | (HMethodArg _ _ t) <- args] env
          graph <- statementToMidIR env' no no st
          startl <- freshLabel
-         let graph' = mkFirst (Enter (tokenPos tok) startl args')
-                    <*> graph
-                    <*> mkLast (Return (tokenPos tok) defret)
+         let graph' = mkFirst (Enter (tokenPos tok) startl (length args))
+                      <*> mkMiddles (map (uncurry $ Store pos)
+                                     (zip args' (argExprs pos)))
+                      <*> graph
+                      <*> mkLast (Return (tokenPos tok) defret)
          return (Method (tokenPos tok) name startl, graph')
     where name = (tokenString tok)
           defret = case typ of
