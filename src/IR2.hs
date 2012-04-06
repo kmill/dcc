@@ -239,8 +239,8 @@ instance Show v => Show (Inst v e x) where
         = printf "%s := %s  {%s};"
           (show var) (show expr) (showPos pos)
     show (CondStore pos var cond expr)
-        = printf "%s := (if %s) %s  {%s};"
-          (show var) (show cond) (show expr) (showPos pos)
+        = printf "%s := %s ? %s : %s  {%s};"
+          (show var) (show cond) (show expr) (show var) (showPos pos)
     show (IndStore pos dest expr)
         = printf "*(%s) := %s  {%s};"
           (show dest) (show expr) (showPos pos)
