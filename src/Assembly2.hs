@@ -8,22 +8,36 @@ import Text.ParserCombinators.Parsec.Pos
 data RegName = FReg X86Reg
              | SymReg Int64
 
+instance Show RegName where
+  show (FReg reg) = show reg
+  show (SymReg val) = "#Where goes Reg " ++ (show val)
+
 data ConstLoc = Label
               | Int64
 
 data MemLoc = MemConst Int64
-            | LabelLoc String
+            | LabelLoc Label
+            | RegLoc RegName
             | RegAddr { baseReg :: RegName
-                      , displace :: [ConstLoc]
-                      , offsetReg :: RegName
+                      , displace :: Int64
+                      , offsetReg :: Maybe RegName
                       , scalar :: Int64 }
 
+instance Show MemLoc where
+  show (MemConst val) = ""
+  show (LabelLoc lab) = lab
+  show (RegLoc reg) = show reg
+  show (RegAddr reg 0 Nothing _) = show reg
+  show (RegAddr reg disp Nothing _) = disp ++ "(" ++ (show reg) ++ ")"
+  show (RegAddr reg 0 (Just oReg) scal) = "(" ++ (show reg) ++ ", " ++ (show oReg) ++ ", " ++ scal ++  ")"
+  show (RegAddr reg disp (Just oReg) scal) = disp ++ "(" ++ (show reg) ++ ", " ++ (show oReg) ++ ", " ++ scal ++  ")"
+  
 data Asm e x where
   LabelAsm  :: SourcePos -> Label                                 -> Asm C O
   AddAsm    :: SourcePos -> MemLoc -> RegLoc RegName              -> Asm O O
   SubAsm    :: SourcePos -> MemLoc -> RegLoc RegName              -> Asm O O
   MulAsm    :: SourcePos -> MemLoc -> RegLoc RegName              -> Asm O O
-  DivAsm    :: SourcePos -> MemLoc -> RegLoc RegName              -> Asm O O
+  DivAsm    :: SourcePos -> MemLoc                                -> Asm O O
   ModAsm    :: SourcePos -> MemLoc -> RegLoc RegName              -> Asm O O
   CmpAsm    :: SourcePos -> MemLoc -> RegLoc RegName              -> Asm O O
   MovAsm    :: SourcePos -> MemLoc -> RegLoc RegName              -> Asm O O
@@ -35,196 +49,48 @@ data Asm e x where
   StoreAsm  :: SourcePos -> MemLoc -> MemLoc                      -> Asm O O
   LoadAsm   :: SourcePos -> MemLoc -> MemLoc                      -> Asm O O
   JmpAsm    :: SourcePos -> Label                                 -> Asm O O
-  CJmpAsm   :: SourcePos -> CmpSInstr -> Label                    -> Asm O C
+  NopAsm    :: SourcePos                                          -> Asm O O
+  CJmpAsm   :: SourcePos -> CmpSInstr -> Label -> Label           -> Asm O C
   RetAsm    :: SourcePos                                          -> Asm O C
   
 data CmpSIntr = CmpLT | CmpGT | CmpLTE | CmpGTE | CmpEQ | CmpNEQ
 
-binOpInstr :: BinOp -> String
-binOpInstr OpAdd = "addq"
-binOpInstr OpSub = "subq"
-binOpInstr OpMul = "imulq"
-binOpInstr OpDiv = "idivq"
-binOpInstr OpMod = "modq"
-binOpInstr _ = ""
+instance NonLocal Asm where
+  entryLavel (Label _ lbl) = lbl
+  successors (CJmpAsm _ tr fa) = [tr, fa]
+  successors (RetAsm _) = []
 
-cmpBinOpString :: CmpBinOp -> String
-cmpBinOpString CmpLT = "l"
-cmpBinOpString CmpGT = "g"
-cmpBinOpString CmpLTE = "le"
-cmpBinOpString CmpGTE = "ge"
-cmpBinOpString CmpEQ = "e"
-cmpBinOpString CmpNEQ = "ne"
+instance Show Asm where
+  show (LabelAsm _ l) = l ++ ":"
+  show (AddAsm _ op1 op2) = binOp "addq" op1 op2
+  show (SubAsm _ op1 op2) = binOp "subq" op1 op2
+  show (MulAsm _ op1 op2) = binOp "imulq" op1 op2
+  show (DivAsm _ op1)     = uniOp "idivq" op1 
+  show (ModAsm _ op1 op2) = binOp "modq" op1 op2
+  show (CmpAsm _ op1 op2) = binOp "addq" op1 op2
+  show (MovAsm _ op1 op2) = binOp "addq" op1 op2
+  show (NegAsm _ op1 op2) = binOp "addq" op1 op2
+  show (XorAsm _ op1 op2) = binOp "addq" op1 op2
+  show (ShlAsm _ op1 op2) = binOp "addq" op1 op2
+  show (ShrAsm _ op1 op2) = binOp "addq" op1 op2
+  show (CMovAsm _ csi op1 op2) = binOp ("cmov" ++ (show csi)) op1 op2
+  show (StoreAsm _ op1 op2) = binOp "movq" op1 op2
+  show (LoadAsm _ op1 op2) = binOp "movq" op1 op2
+  show (JmpAsm _ op1) = uniOp "jmp" op1
+  show (CJmpAsm _ csi op1 op2) = binOp ("j" ++ (show csi)) op1 op2
+  show (RetAsm _) = "return"
+  show (NopAsm _) = "nop"
 
-cmovInstr :: CmpBinOp -> String
-cmovInstr cop = "  cmov" ++ (cmpBinOpString cop) ++ "q"
+binOp :: String -> MemLoc -> MemLoc -> String
+binOp op o1 o2 = op ++ " " ++ (show o1) ++ " " ++ (show o2)
 
-jmpInstr :: CmpBinOp -> String
-jmpInstr cop = "  j" ++ (cmpBinOpString cop)
+uniOp :: String -> MemLoc -> String
+uniOp op o1 = op ++ " " ++ (show o1)
 
-binInstr :: (Show a, Show b) => String -> a -> b -> String
-binInstr cmd oper1 oper2 = "  " ++ cmd ++ " " ++ (show oper1) ++ ", " ++ (show oper2)
-
-unInstr :: (Show a) => String -> a -> String
-unInstr cmd oper = "  " ++ cmd ++ " " ++ (show oper)
-
---
--- Code for instructions inside basic blocks
--- 
-
-instrCode :: LowIRInst -> [String]
-
-instrCode (RegBin pos (X86Reg reg) (OpBinCmp cop) oper1 oper2) =
-  [ binInstr "movq" oper1 reg
-  , binInstr "cmpq" oper2 reg
-  , binInstr "movq" (LowOperConst 0) reg
-    , binInstr "movq" (LowOperConst 1) R14
-    , binInstr (cmovInstr cop) R14 reg ]
-      
-instrCode (RegBin pos (X86Reg reg) op oper1 oper2) =
-    [ binInstr "movq" oper2 reg ]
-    ++ opS
-    where opS = case op of
-                     OpSub -> [ binInstr "movq" oper1 R14
-                              , binInstr "subq" reg R14
-                              , binInstr "movq" R14 reg ]
-                     _ -> [binInstr (binOpInstr op) oper1 reg]
-
-instrCode (RegUn pos (X86Reg reg) op oper) = 
-    case op of
-        OpNeg -> [ binInstr "movq" oper reg
-                 , unInstr "neqg" reg ]
-        OpNot -> [ binInstr "movq" oper reg
-                 , unInstr "xorq $1, " reg ]
-        _ -> error "shouldn't have derefs or addrs this low :-("
-
-instrCode (RegVal pos (X86Reg reg) oper) =
-    [ binInstr "movq" oper reg ]
-
-instrCode (RegCond pos (X86Reg reg) cop oper1 oper2 src) =
-    [ binInstr "movq" oper2 reg
-    , binInstr "cmpq" oper1 reg
-    , binInstr (cmovInstr cop) src reg ]
-
-instrCode (RegPush pos oper) = [ unInstr "pushq" oper ]
-
-instrCode (StoreMem pos addr oper) = [ binInstr "movq" oper addr ]
-
-instrCode (LoadMem pos reg addr) = [ binInstr "movq" addr reg ]
-
-instrCode (LowCall pos label _) = [ "  call " ++ (methodLabel label) ]
-
-instrCode (LowCallout pos label nargs) = [ binInstr "movq" (LowOperConst 0) RAX 
-                                         , "  call " ++ label ]
-                                          --, unInstr "popq" RAX ]
-
-instrCode s = ["# Blargh! :-( Shouldn't have symbolic registers here: " ++ (show s)]
-
--- 
--- Code for block-ending tests
--- 
-
-testCode :: String -> LowIRGraph -> Vertex -> [String]
-testCode method (Graph graphMap _) vertex = 
-    let (Just vPair) = Map.lookup vertex graphMap
-        (BasicBlock _ test pos, edgeMap) = vPair
-        trueEdge = case Map.lookup True edgeMap of
-          Just x -> x
-          Nothing -> 0
-        falseEdge = case Map.lookup False edgeMap of
-          Just x -> x
-          Nothing -> 0
-        trueLabel = vertexLabel method trueEdge
-        falseLabel = vertexLabel method falseEdge
-    in case test of
-      IRTestTrue -> [ "  jmp " ++ trueLabel ]
-      IRTestFalse -> [ "  jmp " ++ falseLabel ]
-      IRTestBinOp cop oper1 oper2 ->
-        [ binInstr "movq" oper1 R14
-        , binInstr "cmpq" oper2 R14
-        , (jmpInstr cop) ++ " " ++ trueLabel
-        , "  jmp " ++ falseLabel ]
-      IRTest oper ->
-        [ binInstr "cmpq" (LowOperConst 1) oper
-        , "  jz " ++ trueLabel
-        , "  jmp " ++ falseLabel ]
-      IRTestNot oper ->
-        [ binInstr "cmpq" (LowOperConst 1) oper
-        , "  jz " ++ falseLabel
-        , "  jmp " ++ trueLabel ]
-      IRReturn (Just oper) -> [ binInstr "movq" oper RAX 
-                              , "  jmp post_" ++ method ]
-      IRReturn (Nothing) -> [ "  jmp post_" ++ method ]
-      IRTestFail _ ->
-        [ binInstr "movq" (LowOperConst 1) RDI
-        , "  call exit" ]
-
---
--- Code for whole basic blocks
---
-
-vertexLabel :: String -> Vertex -> String
-vertexLabel method vertex = "block_" ++ method ++ "_" ++ (show vertex) ++ "_start"
-
-basicBlockCode :: String -> LowIRGraph -> Vertex -> [String]
-basicBlockCode method irGraph@(Graph graphMap _) vertex = [bLabel ++ ":"] ++ instrsCode ++ (testCode method irGraph vertex)
-    where instrsCode = concatMap instrCode code
-          (Just vPair) = Map.lookup vertex graphMap
-          (bb@(BasicBlock code _ _), _) = vPair
-          bLabel = vertexLabel method vertex
-
---
--- Translate method
---
-
-methodLabel :: String -> String
-methodLabel "main" = "main"
-methodLabel name = "method_" ++ name
-
-{-
-                  
--}
-
-methodCode :: LowIRMethod -> [String]
-methodCode (LowIRMethod pos retP name numArgs localsSize irGraph) =
-  let exitCodes = case name of
-        -- "main" -> [ "movq $4, %rax"
-        --          , "movq $1, %rbx"
-        --          , "int $0x80"
-        --          , "movq $1, %rax"
-        --          , "movq $0, %rbx"
-        --          , "int $0x80"
-        --          , "leave"
-        --          , "ret" ]
-        "main" -> [ "movq $0, %rax"
-                  , "leave"
-                  , "ret" ]
-        _ -> [ "leave"
-             , "ret" ]
-  in
-    [ (methodLabel name) ++ ":"
-    , "enter $(" ++ (show localsSize) ++ "), $0" ] ++
-    map (unInstr "pushq") calleeSaved ++
-    [ "jmp " ++ (vertexLabel name (startVertex irGraph))] ++
-    concatMap (basicBlockCode name irGraph) (vertices irGraph) ++
-    [ "post_" ++ name ++ ":"] ++
-    map (unInstr "popq") (reverse calleeSaved) ++
-    exitCodes
-
-fieldsCode :: LowIRField -> [String]
-fieldsCode (LowIRField _ name size) = [ name ++ ":"
-                                      , "\t.skip " ++ (show size)]
-stringCode :: (String, SourcePos, String) -> [String]
-stringCode (name, _, str) = [ name ++ ":"
-                            , "\t.asciz " ++ (show $ str)]
---
--- Full translation
---
-
-lowIRReprCode :: LowIRRepr -> [String]
-lowIRReprCode (LowIRRepr fields strings methods) = [".section .data"]
-    ++ concatMap fieldsCode fields
-    ++ concatMap stringCode strings
-    ++ [".globl main"]
-    ++ concatMap methodCode methods
---    ++ methodCode (head $ filter (\x -> ("main" == lowIRMethodName x)) methods)
+instance Show CmpSIntr where
+  show CmpLT = "l"
+  show CmpGT = "g"
+  show CmpLTE = "le"
+  show CmpGTE = "ge"
+  show CmpEQ = "e"
+  show CmpNEQ = "ne"
