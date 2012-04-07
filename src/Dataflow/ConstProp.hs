@@ -7,7 +7,7 @@ import qualified Data.Map as Map
 
 import Compiler.Hoopl
 import IR2
-import AST(SourcePos)
+import AST(SourcePos, noPosition)
 import Data.Int
 import Data.Maybe 
 
@@ -44,8 +44,8 @@ varHasLit = mkFTransfer ft
           | xtrue == xfalse  = Map.insert x (PElem (pos, xtrue)) f
       ft (CondStore _ x _ _ _) f = Map.insert x Top f
       ft (IndStore _ _ _) f = f
-      ft (Spill _ _ _) f = f
-      ft (UnSpill _ x _) f = Map.insert x Top f 
+      ft (Spill _ _) f = f
+      ft (Reload _ _) f = f
       ft (Call _ _ _ _) f = f
       ft (Callout _ _ _ _) f = f
       ft (Branch _ l) f = mapSingleton l f
@@ -149,8 +149,8 @@ mapEN f (IndStore pos e1 e2) =
     case (f e1, f e2) of 
         (Nothing, Nothing) -> Nothing 
         (e1', e2') -> Just $ IndStore pos (fromMaybe e1 e1') (fromMaybe e2 e2')
-mapEN _ (Spill _ _ _) = Nothing 
-mapEN _ (UnSpill _ _ _) = Nothing 
+mapEN _ (Spill _ _) = Nothing 
+mapEN _ (Reload _ _) = Nothing 
 mapEN f (Call pos var str es) = 
     if all isNothing es' then Nothing 
     else Just $ Call pos var str (map (uncurry fromMaybe) (zip es es'))
@@ -178,8 +178,8 @@ insnToG n@(Enter _ _ _) = mkFirst n
 insnToG n@(Store _ _ _) = mkMiddle n 
 insnToG n@(CondStore _ _ _ _ _) = mkMiddle n 
 insnToG n@(IndStore _ _ _) = mkMiddle n 
-insnToG n@(Spill _ _ _) = mkMiddle n 
-insnToG n@(UnSpill _ _ _) = mkMiddle n 
+insnToG n@(Spill _ _) = mkMiddle n 
+insnToG n@(Reload _ _) = mkMiddle n 
 insnToG n@(Call _ _ _ _) = mkMiddle n 
 insnToG n@(Callout _ _ _ _) = mkMiddle n 
 insnToG n@(Branch _ _) = mkLast n 

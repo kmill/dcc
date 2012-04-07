@@ -106,17 +106,18 @@ mapE f (BinOp pos op exp1 exp2) = BinOp pos op (mapE f exp1) (mapE f exp2)
 --- Instructions
 ---
 
-type SpillId = Int
-
 -- | 'v' is type of variables. Confused?  Look at Show (Inst v e x).
 data Inst v e x where
     Label      :: SourcePos -> Label                           -> Inst v C O
     Enter      :: SourcePos -> Label -> Int                    -> Inst v C O
     Store      :: SourcePos -> v -> Expr v                     -> Inst v O O
+    -- | Semantics of (CondStore _ dest cond texp fexp) are
+    -- dest := cond ? texp : fexp, with both texp and fexp
+    -- being evaluated.
     CondStore  :: SourcePos -> v -> Expr v -> Expr v -> Expr v -> Inst v O O
     IndStore   :: SourcePos -> Expr v -> Expr v                -> Inst v O O
-    Spill      :: SourcePos -> SpillId -> v                    -> Inst v O O
-    UnSpill    :: SourcePos -> v -> SpillId                    -> Inst v O O
+    Spill      :: SourcePos -> v                               -> Inst v O O
+    Reload     :: SourcePos -> v                               -> Inst v O O
     Call       :: SourcePos -> v -> String -> [Expr v]         -> Inst v O O
     Callout    :: SourcePos -> v -> String -> [Expr v]         -> Inst v O O
     Branch     :: SourcePos -> Label                           -> Inst v O C
@@ -140,8 +141,8 @@ mapI f (Enter pos l nargs) = Enter pos l nargs
 mapI f (Store pos d exp) = Store pos (f d) (mapE f exp)
 mapI f (CondStore pos d cexp texp fexp) = CondStore pos (f d) (mapE f cexp) (mapE f texp) (mapE f fexp)
 mapI f (IndStore pos d s) = IndStore pos (mapE f d) (mapE f s)
-mapI f (Spill pos id v) = Spill pos id (f v)
-mapI f (UnSpill pos v id) = UnSpill pos (f v) id
+mapI f (Spill pos v) = Spill pos (f v)
+mapI f (Reload pos v) = Reload pos (f v)
 mapI f (Call pos d name args) = Call pos (f d) name (map (mapE f) args)
 mapI f (Callout pos d name args) = Callout pos (f d) name (map (mapE f) args)
 mapI f (Branch pos l) = Branch pos l
@@ -247,12 +248,12 @@ instance Show v => Show (Inst v e x) where
     show (IndStore pos dest expr)
         = printf "*(%s) := %s  {%s};"
           (show dest) (show expr) (showPos pos)
-    show (Spill pos sid var)
-        = printf "spill %s <- %s  {%s};"
-          (show sid) (show var) (showPos pos)
-    show (UnSpill pos var sid)
-        = printf "unspill %s <- %s  {%s};"
-          (show var) (show sid) (showPos pos)
+    show (Spill pos var)
+        = printf "spill %s  {%s};"
+          (show var) (showPos pos)
+    show (Reload pos var)
+        = printf "reload %s  {%s};"
+          (show var) (showPos pos)
     show (Call pos dest name args)
         = printf "%s := call %s (%s)  {%s};"
           (show dest) name (intercalate ", " $ map show args) (showPos pos)
