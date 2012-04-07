@@ -8,10 +8,13 @@ import Text.ParserCombinators.Parsec.Pos
 data RegName = FReg X86Reg
              | SymReg Int64
 
+data ConstLoc = Label
+              | Int64
+
 data MemLoc = MemConst Int64
             | LabelLoc String
             | RegAddr { baseReg :: RegName
-                      , displace :: Int64
+                      , displace :: [ConstLoc]
                       , offsetReg :: RegName
                       , scalar :: Int64 }
 
