@@ -137,7 +137,7 @@ doMidIRFile opts ifname input
                           case doSemanticCheck r of
                             Right _ -> let hast = makeHybridAST r
                                            mmidir = do mir <- MidIR2.generateMidIR hast
-                                                       mir <- runWithFuel 2222222 $ performConstPropPass mir
+                                                       mir <- runWithFuel 2222222 $ performDataflowAnalysis mir
                                                        return mir
                                            midir = IR2.runGM mmidir
                                        in do 
