@@ -57,9 +57,10 @@ Executable dcc
     containers >= 0.3,
     filepath,
     array >= 0.3,
-    regex-compat,
-    hoopl >= 3.8.7
---  extensions:
+    regex-compat
+--    hoopl >= 3.8.7
+  extensions:
+    CPP
 --    MultiParamTypeClasses
   
   -- Modules not exported by this package.

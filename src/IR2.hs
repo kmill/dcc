@@ -19,6 +19,9 @@ bFalse = 0
 boolToInt :: Bool -> Int64
 boolToInt b = if b then bTrue else bFalse
 
+intToBool :: Int64 -> Bool 
+intToBool = (/= 0) 
+
 -- | This is the type of the monad for working with graphs in Hoopl.
 type GM = SimpleUniqueMonad
 

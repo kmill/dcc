@@ -22,10 +22,11 @@ import MidIR
 import LowIR
 import RegisterAllocator
 import Assembly
+import Dataflow
 
 import qualified IR2
 import qualified MidIR2
- 
+
 -- | The main entry point to @dcc@.  See 'CLI' for command line
 -- arguments.
 main :: IO ()
@@ -134,7 +135,10 @@ doMidIRFile opts ifname input
                       Right r ->
                           case doSemanticCheck r of
                             Right _ -> let hast = makeHybridAST r
-                                           midir = IR2.runGM $ MidIR2.generateMidIR hast
+                                           mmidir = do mir <- MidIR2.generateMidIR hast
+                                                       mir <- evalStupidFuelMonad (performConstPropPass mir) 222222222
+                                                       return mir
+                                           midir = IR2.runGM mmidir
                                        in do 
                                          putStrLn $ IR2.midIRToGraphViz midir
                             Left (udata, errors) ->
