@@ -4,6 +4,7 @@
 module AST ( PP(..)
            , SourcePos
            , showPos
+           , noPosition
            , DProgram(..) 
            , FieldDecl(..)
            , FieldVar(..)
