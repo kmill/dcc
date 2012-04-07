@@ -100,6 +100,10 @@ simplify = deepFwdRw simp
       s_node (CondBranch pos (Lit _ x) tl fl) 
           = Just $ Branch pos (if intToBool x then tl else fl)
       s_node n = (mapEN . mapEE) s_exp n 
+      s_exp (BinOp pos OpDiv expr (Lit _ 0)) 
+          = Nothing
+      s_exp (BinOp pos OpMod expr (Lit _ 0)) 
+          = Nothing
       s_exp (BinOp pos op (Lit _ x1) (Lit _ x2)) 
           = Just $ Lit pos $ (binOp op) x1 x2
       s_exp (UnOp pos op (Lit _ x))
