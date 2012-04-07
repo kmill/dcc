@@ -8,9 +8,12 @@ import Text.ParserCombinators.Parsec.Pos
 data RegName = FReg X86Reg
              | SymReg Int64
 
-data MemLoc = RegLoc RegName
-            | MemConst Int64
+data MemLoc = MemConst Int64
             | LabelLoc String
+            | RegAddr { baseReg :: RegName
+                      , displace :: Int64
+                      , offsetReg :: RegName
+                      , scalar :: Int64 }
 
 data Asm e x where
   LabelAsm  :: SourcePos -> Label                                 -> Asm C O
