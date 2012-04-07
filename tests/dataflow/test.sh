@@ -44,7 +44,7 @@ for file in `dirname $0`/*.dcf; do
     fi
     echo $msg
   fi
-  rm -f $diffout $output $binary $asm;
+  rm -f $diffout $output $binary $asm $desired;
 done
 
 exit $fail;
