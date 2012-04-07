@@ -40,7 +40,9 @@ varHasLit = mkFTransfer ft
       ft (Enter _ _ _) f = f
       ft (Store _ x (Lit pos k)) f = Map.insert x (PElem (pos, k)) f
       ft (Store _ x _) f = Map.insert x Top f
-      ft (CondStore _ x _ _)  f = Map.insert x Top f 
+      ft (CondStore _ x _ (Lit pos xtrue) (Lit _ xfalse)) f
+          | xtrue == xfalse  = Map.insert x (PElem (pos, xtrue)) f
+      ft (CondStore _ x _ _ _) f = Map.insert x Top f
       ft (IndStore _ _ _) f = f
       ft (Spill _ _ _) f = f
       ft (UnSpill _ x _) f = Map.insert x Top f 
@@ -48,33 +50,11 @@ varHasLit = mkFTransfer ft
       ft (Callout _ _ _ _) f = f
       ft (Branch _ l) f = mapSingleton l f
       ft (CondBranch _ (Var pos x) tl fl) f 
-          = mkFactBase constLattice [ (tl, Map.insert x (PElem (pos, -1)) f)
-                                    , (fl, Map.insert x (PElem (pos, 0)) f) ]
+          = mkFactBase constLattice [ (tl, Map.insert x (PElem (pos, bTrue)) f)
+                                    , (fl, Map.insert x (PElem (pos, bFalse)) f) ]
       ft (CondBranch _ _ tl fl) f 
           = mkFactBase constLattice [ (tl, f)
                                     , (fl, f) ]
-      ft (Return _ _) f = mapEmpty
-      ft (Fail _) f = mapEmpty
-
-varHasLit' :: FwdTransfer Node ConstFact 
-varHasLit' = mkFTransfer ft 
-    where 
-      ft :: MidIRInst e x -> ConstFact -> Fact x ConstFact
-      ft (Label _ _) f = f
-      ft (Enter _ _ _) f = f
-      ft (Store _ x (Lit pos k)) f = f
-      ft (Store _ x _) f = f
-      ft (CondStore _ x _ _)  f =f
-      ft (IndStore _ _ _) f = f
-      ft (Spill _ _ _) f = f
-      ft (UnSpill _ x _) f =f
-      ft (Call _ _ _ _) f = f
-      ft (Callout _ _ _ _) f = f
-      ft (Branch _ l) f = mapEmpty
-      ft (CondBranch _ (Var pos x) tl fl) f 
-          = mapEmpty
-      ft (CondBranch _ _ tl fl) f 
-          = mapEmpty
       ft (Return _ _) f = mapEmpty
       ft (Fail _) f = mapEmpty
 
@@ -99,6 +79,8 @@ simplify = deepFwdRw simp
       s_node :: Node e x -> Maybe (Node e x)
       s_node (CondBranch pos (Lit _ x) tl fl) 
           = Just $ Branch pos (if intToBool x then tl else fl)
+      s_node (CondStore pos dest (Lit _ x) tl fl)
+          = Just $ Store pos dest (if intToBool x then tl else fl)
       s_node n = (mapEN . mapEE) s_exp n 
       s_exp (BinOp pos OpDiv expr (Lit _ 0)) 
           = Nothing
@@ -157,10 +139,12 @@ mapEE f e@(BinOp pos op e1 e2) =
 mapEN _ (Label _ _) = Nothing 
 mapEN _ (Enter _ _ _) = Nothing 
 mapEN f (Store pos var expr) = liftM (Store pos var) $ f expr
-mapEN f (CondStore pos var e1 e2) =
-    case (f e1, f e2) of 
-        (Nothing, Nothing) -> Nothing
-        (e1', e2') -> Just $ CondStore pos var (fromMaybe e1 e1') (fromMaybe e2 e2')
+mapEN f (CondStore pos var e1 etrue efalse) =
+    case (f e1, f etrue, f efalse) of 
+        (Nothing, Nothing, Nothing) -> Nothing
+        (e1', etrue', efalse')
+            -> Just $ CondStore pos var (fromMaybe e1 e1')
+                                   (fromMaybe etrue etrue') (fromMaybe efalse efalse')
 mapEN f (IndStore pos e1 e2) = 
     case (f e1, f e2) of 
         (Nothing, Nothing) -> Nothing 
@@ -192,7 +176,7 @@ insnToG :: Node e x -> Graph Node e x
 insnToG n@(Label _ _) = mkFirst n
 insnToG n@(Enter _ _ _) = mkFirst n
 insnToG n@(Store _ _ _) = mkMiddle n 
-insnToG n@(CondStore _ _ _ _) = mkMiddle n 
+insnToG n@(CondStore _ _ _ _ _) = mkMiddle n 
 insnToG n@(IndStore _ _ _) = mkMiddle n 
 insnToG n@(Spill _ _ _) = mkMiddle n 
 insnToG n@(UnSpill _ _ _) = mkMiddle n 
