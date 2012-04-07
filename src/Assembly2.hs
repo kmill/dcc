@@ -23,11 +23,13 @@ data Asm e x where
   MovAsm    :: SourcePos -> MemLoc -> RegLoc RegName              -> Asm O O
   NegAsm    :: SourcePos -> MemLoc -> RegLoc RegName              -> Asm O O
   XorAsm    :: SourcePos -> MemLoc -> RegLoc RegName              -> Asm O O
-  CMovAsm   :: CmpSInstr -> SourcePos -> MemLoc -> RegLoc RegName -> Asm O O
+  ShlAsm    :: SourcePos -> MemLoc -> RegLoc RegName              -> Asm O O
+  ShrAsm    :: SourcePos -> MemLoc -> RegLoc RegName              -> Asm O O  
+  CMovAsm   :: SourcePos -> CmpSInstr -> MemLoc -> RegLoc RegName -> Asm O O
   StoreAsm  :: SourcePos -> MemLoc -> MemLoc                      -> Asm O O
   LoadAsm   :: SourcePos -> MemLoc -> MemLoc                      -> Asm O O
   JmpAsm    :: SourcePos -> Label                                 -> Asm O O
-  CJmpAsm   :: CmpSInstr -> SourcePos -> Label                    -> Asm O C
+  CJmpAsm   :: SourcePos -> CmpSInstr -> Label                    -> Asm O C
   RetAsm    :: SourcePos                                          -> Asm O C
   
 data CmpSIntr = CmpLT | CmpGT | CmpLTE | CmpGTE | CmpEQ | CmpNEQ
