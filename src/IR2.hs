@@ -108,21 +108,21 @@ mapE f (BinOp pos op exp1 exp2) = BinOp pos op (mapE f exp1) (mapE f exp2)
 
 type SpillId = Int
 
--- | 'v' is type of variables.
+-- | 'v' is type of variables. Confused?  Look at Show (Inst v e x).
 data Inst v e x where
-    Label      :: SourcePos -> Label                     -> Inst v C O
-    Enter      :: SourcePos -> Label -> Int              -> Inst v C O
-    Store      :: SourcePos -> v -> Expr v               -> Inst v O O
-    CondStore  :: SourcePos -> v -> Expr v -> Expr v     -> Inst v O O
-    IndStore   :: SourcePos -> Expr v -> Expr v          -> Inst v O O
-    Spill      :: SourcePos -> SpillId -> v              -> Inst v O O
-    UnSpill    :: SourcePos -> v -> SpillId              -> Inst v O O
-    Call       :: SourcePos -> v -> String -> [Expr v]   -> Inst v O O
-    Callout    :: SourcePos -> v -> String -> [Expr v]   -> Inst v O O
-    Branch     :: SourcePos -> Label                     -> Inst v O C
-    CondBranch :: SourcePos -> Expr v -> Label -> Label  -> Inst v O C
-    Return     :: SourcePos -> Maybe (Expr v)            -> Inst v O C
-    Fail       :: SourcePos                              -> Inst v O C
+    Label      :: SourcePos -> Label                           -> Inst v C O
+    Enter      :: SourcePos -> Label -> Int                    -> Inst v C O
+    Store      :: SourcePos -> v -> Expr v                     -> Inst v O O
+    CondStore  :: SourcePos -> v -> Expr v -> Expr v -> Expr v -> Inst v O O
+    IndStore   :: SourcePos -> Expr v -> Expr v                -> Inst v O O
+    Spill      :: SourcePos -> SpillId -> v                    -> Inst v O O
+    UnSpill    :: SourcePos -> v -> SpillId                    -> Inst v O O
+    Call       :: SourcePos -> v -> String -> [Expr v]         -> Inst v O O
+    Callout    :: SourcePos -> v -> String -> [Expr v]         -> Inst v O O
+    Branch     :: SourcePos -> Label                           -> Inst v O C
+    CondBranch :: SourcePos -> Expr v -> Label -> Label        -> Inst v O C
+    Return     :: SourcePos -> Maybe (Expr v)                  -> Inst v O C
+    Fail       :: SourcePos                                    -> Inst v O C
 
 instance NonLocal (Inst v) where
     entryLabel (Label _ lbl) = lbl
@@ -138,7 +138,7 @@ mapI :: (v1 -> v2) -> Inst v1 e x -> Inst v2 e x
 mapI f (Label pos l) = Label pos l
 mapI f (Enter pos l nargs) = Enter pos l nargs
 mapI f (Store pos d exp) = Store pos (f d) (mapE f exp)
-mapI f (CondStore pos d cexp exp) = CondStore pos (f d) (mapE f cexp) (mapE f exp)
+mapI f (CondStore pos d cexp texp fexp) = CondStore pos (f d) (mapE f cexp) (mapE f texp) (mapE f fexp)
 mapI f (IndStore pos d s) = IndStore pos (mapE f d) (mapE f s)
 mapI f (Spill pos id v) = Spill pos id (f v)
 mapI f (UnSpill pos v id) = UnSpill pos (f v) id
@@ -241,9 +241,9 @@ instance Show v => Show (Inst v e x) where
     show (Store pos var expr)
         = printf "%s := %s  {%s};"
           (show var) (show expr) (showPos pos)
-    show (CondStore pos var cond expr)
+    show (CondStore pos var cond texpr fexp)
         = printf "%s := %s ? %s : %s  {%s};"
-          (show var) (show cond) (show expr) (show var) (showPos pos)
+          (show var) (show cond) (show texpr) (show fexp) (showPos pos)
     show (IndStore pos dest expr)
         = printf "*(%s) := %s  {%s};"
           (show dest) (show expr) (showPos pos)
