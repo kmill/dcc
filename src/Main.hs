@@ -23,6 +23,7 @@ import LowIR
 import RegisterAllocator
 import Assembly
 import Dataflow
+import Compiler.Hoopl.Fuel
 
 import qualified IR2
 import qualified MidIR2
@@ -136,7 +137,7 @@ doMidIRFile opts ifname input
                           case doSemanticCheck r of
                             Right _ -> let hast = makeHybridAST r
                                            mmidir = do mir <- MidIR2.generateMidIR hast
-                                                       mir <- evalStupidFuelMonad (performConstPropPass mir) 222222222
+                                                       mir <- runWithFuel 2222222 $ performConstPropPass mir
                                                        return mir
                                            midir = IR2.runGM mmidir
                                        in do 

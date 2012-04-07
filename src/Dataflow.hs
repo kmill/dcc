@@ -10,7 +10,7 @@ import Compiler.Hoopl.Fuel
 import IR2 
 import Debug.Trace
 
-type RM = StupidFuelMonadT GM
+type RM = CheckingFuelMonad GM
 
 
 
@@ -48,20 +48,22 @@ instance Monad m => FuelMonad (StupidFuelMonadT m) where
 
 performConstPropPass :: MidIRRepr -> RM MidIRRepr 
 performConstPropPass midir 
-    = do (graph', factBase) <- analyzeAndRewriteFwdBody
-                               constPropPass
-                               mlabels
-                               (trace (show $ map (successors . snd) $ mapToList body) body)
-                               mapEmpty
-         return $ midir { midIRGraph = GMany NothingO graph' NothingO }
-    where GMany _ body _ = midIRGraph midir
+    = do (graph', factBase, _) <- analyzeAndRewriteFwd
+                                  constPropPass
+                                  (JustC mlabels)
+                                  graph
+                                  (mapFromList (map (\l -> (l, emptyFact) ) mlabels))
+         return $ midir { midIRGraph = graph'}
+    where graph = midIRGraph midir
           mlabels = (map methodEntry $ midIRMethods midir)
-                               
+
+      
+-- (trace (map (show . entryLabel) (forwardBlockList mlabels body)) body)
 
 constPropPass :: (CheckpointMonad m, FuelMonad m) => FwdPass m MidIRInst ConstFact 
 constPropPass = FwdPass 
                 { fp_lattice = constLattice 
-                , fp_transfer = varHasLit'
-                , fp_rewrite = noFwdRewrite } --constProp } -- `thenFwdRw` simplify } 
+                , fp_transfer = varHasLit
+                , fp_rewrite = constProp `thenFwdRw` simplify } 
 
 

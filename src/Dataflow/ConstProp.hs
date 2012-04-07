@@ -19,7 +19,7 @@ type Node = MidIRInst
 -- Need to figure out what "Var" Corresponds to 
 type ConstFact = Map.Map VarName (WithTop LitVal)
 constLattice :: DataflowLattice ConstFact
-constLattice = DataflowLattice { fact_name = ""
+constLattice = DataflowLattice { fact_name = "Constant Propagation Lattice (Arhrhrhghg)"
                                , fact_bot = Map.empty 
                                , fact_join = joinMaps (extendJoinDomain constFactAdd) }
     where constFactAdd _ (OldFact old) (NewFact new) = if new == old then (NoChange, PElem new)
@@ -27,6 +27,9 @@ constLattice = DataflowLattice { fact_name = ""
 
 initFact :: [VarName] -> ConstFact 
 initFact vars = Map.fromList $ [(v, Top) | v <- vars]
+
+emptyFact :: ConstFact 
+emptyFact = fact_bot constLattice
 
 -- Analysis: variable equals a literal constant
 varHasLit :: FwdTransfer Node ConstFact
