@@ -1,7 +1,7 @@
 -- | The 'CLI' module is for parsing decaf command line arguments to
 -- meet the 6.035 specification.
 
-module CLI ( compilerOpts, CompilerOpts(..), TargetFlag(..)) where
+module CLI ( compilerOpts, CompilerOpts(..), TargetFlag(..), OptFlags(..)) where
 
 import System.Console.GetOpt
 import System.Exit
@@ -24,7 +24,7 @@ data CompilerOpts
                    -- ^ Whether @-h@ or @--help@ was specified, which
                    -- immediately quits and provides usage
                    -- information.
-                   , optMode :: Bool
+                   , optMode :: OptFlags
                    -- ^ Whether to turn on (dangerous) optimizations
                    }
       deriving (Show)
@@ -37,7 +37,7 @@ defaultOptions
                    , debugMode = False
                    , compatMode = False
                    , helpMode = False
-                   , optMode = False
+                   , optMode = optAll
                    }
 
 -- | This type represents the possible actions to do with the input
@@ -51,6 +51,17 @@ data TargetFlag = TargetScan -- ^ Given by @scan@.
                 | TargetDefault -- ^ The default value if no target is given.
                   deriving (Show)
 
+data OptFlags = OptFlags { optCSE :: Bool
+                         , optCP :: Bool
+                         , optDC :: Bool
+                         , optBE :: Bool 
+                         , optFlat :: Bool 
+                         , optRA :: Bool }
+              deriving (Show)
+
+optAll = OptFlags True True True True True True
+optNone = OptFlags False False False False False False
+
 options :: [OptDescr (CompilerOpts -> CompilerOpts)]
 options =
     [ Option ['o']  ["out"]     (ReqArg outfile' "FILE")    "output FILE"
@@ -58,14 +69,14 @@ options =
     , Option []     ["debug"]   (NoArg debug')              "enables debug mode"
     , Option []     ["compat"]  (NoArg compat')             "enables compatibility mode with 6.035 output spec"
     , Option ['h']  ["help"]    (NoArg help')               "prints this usage information"
-    , Option []     ["opt"]     (NoArg optimize')           "enables (dangerous) optimizations"
+    , Option []     ["opt"]     (OptArg optimize' "OPTIMIZATION")           "enables (dangerous) optimizations"
     ]
     where outfile' s opts = opts { outputFile = Just s }
           target' t opts = opts { target = targetOpt t }
           debug' opts = opts { debugMode = True }
           compat' opts = opts { compatMode = True }
           help' opts = opts { helpMode = True }
-          optimize' opts = opts { optMode = True }
+          optimize' t opts = opts { optMode = optOpt opts t }
 
 targetOpt :: String -> TargetFlag
 targetOpt s
@@ -80,6 +91,21 @@ targetOpt s
         "assembly" -> TargetCodeGen
         _ -> TargetDefault
 
+optOpt :: CompilerOpts -> Maybe String -> OptFlags
+optOpt opts s  
+  = case s of
+         Nothing -> oFlags
+         Just m -> 
+           case m of
+             "all" -> optAll
+             "cse" -> oFlags { optCSE = True }
+             "cp" -> oFlags { optCP = True }
+             "dc" -> oFlags { optDC = True }  
+             "be" -> oFlags { optBE = True }
+             "flatten" -> oFlags { optFlat = True }
+             "ra" -> oFlags { optRA = True }
+             "none" -> optNone
+    where oFlags = optMode opts 
 
 -- | Takes an argument list and gives a 'CompilerOpts'.  If there's a
 -- parse error or help request, this function uses 'System.Exit' to

@@ -13,6 +13,7 @@ import qualified Data.Map as Map
 import Text.PrettyPrint.HughesPJ
 import Data.List
 import Debug.Trace
+import CLI
 
 ---
 --- Convert to LowIR
@@ -42,7 +43,7 @@ genReg = do s <- get
             return $ SymbolicReg $ nextSymbRegId s
                            
 -- | Main entry point to convert mid-IR to low-IR.
-toLowIR :: Bool -- ^ Whether to perform (dangerous) optimizations
+toLowIR :: OptFlags -- ^ Whether to perform (dangerous) optimizations
         -> MidIRRepr -> LowIRRepr
 toLowIR optMode (MidIRRepr fields methods)
     = LowIRRepr fields' (stringMap st) methods'
@@ -60,7 +61,7 @@ toLowIR optMode (MidIRRepr fields methods)
 
 type Globals = [String]
 
-methodToLowIR :: Bool -> Globals -> MidIRMethod -> State LowIRState LowIRMethod
+methodToLowIR :: OptFlags -> Globals -> MidIRMethod -> State LowIRState LowIRMethod
 methodToLowIR optMode glob (MidIRMethod pos retp name args mir)
     = do modify $ (\s -> s { nextSymbRegId=0 
                            , regMap=Map.empty
@@ -243,10 +244,12 @@ loadStringLit pos str
 ---
 trace' x = trace ("***\n" ++ show x) x
 
-simplifyLIR :: Bool -> LowIRGraph -> LowIRGraph
-simplifyLIR optMode lir = case optMode of
-                            True -> normalizeBlocks $ mergeRegs $ normalizeBlocks lir
-                            False -> normalizeBlocks lir
+simplifyLIR :: OptFlags -> LowIRGraph -> LowIRGraph
+simplifyLIR optMode lir = if (optRA optMode) 
+                          then
+                            normalizeBlocks $ mergeRegs $ normalizeBlocks lir
+                          else 
+                            normalizeBlocks lir
 
 mergeRegs :: LowIRGraph -> LowIRGraph
 mergeRegs lir

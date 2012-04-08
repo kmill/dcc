@@ -16,6 +16,7 @@ import Compiler.Hoopl.Fuel
 import IR2 
 import Debug.Trace
 import Data.Maybe
+import CLI
 
 type RM = StupidFuelMonadT GM
 
@@ -61,15 +62,29 @@ instance FuelMonadT StupidFuelMonadT where
 ---
 
 
-performDataflowAnalysis :: MidIRRepr -> RM MidIRRepr 
-performDataflowAnalysis midir 
-    = do midir <- performFwdPass constPropPass midir emptyFact
-         midir <- performBwdPass deadCodePass midir S.empty
-         midir <- performBwdPass blockElimPass midir Nothing
---         midir <- performBwdPass deadCodePass midir
-         midir <- performFwdPass flattenPass midir ()
-         midir <- performCSEPass midir
-         return midir
+performDataflowAnalysis :: OptFlags -> MidIRRepr -> RM MidIRRepr 
+performDataflowAnalysis opts midir = do 
+  midir <- if optCP opts 
+           then performCPPass midir 
+           else return midir
+  midir <- if optDC opts 
+           then performDCPass midir 
+           else return midir
+  midir <- if optBE opts 
+           then performBEPass midir 
+           else return midir
+  midir <- if optFlat opts 
+           then performFlattenPass midir 
+           else return midir
+  midir <- if optCSE opts 
+           then performCSEPass midir 
+           else return midir
+  return midir
+
+performCPPass midir = performFwdPass constPropPass midir emptyFact
+performDCPass midir = performBwdPass deadCodePass midir S.empty
+performBEPass midir = performBwdPass blockElimPass midir Nothing
+performFlattenPass midir = performFwdPass flattenPass midir ()
 
 performFwdPass :: (FwdPass (StupidFuelMonadT GM) MidIRInst a) -> MidIRRepr -> a -> RM MidIRRepr
 performFwdPass pass midir eFact
