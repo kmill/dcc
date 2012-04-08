@@ -53,7 +53,7 @@ withTmpC pos e f = do tmp <- genUniqueName "flatten"
 
 flattenRewrite :: forall m. (FuelMonad m, UniqueNameMonad m)
                   => FwdRewrite m MidIRInst ()
-flattenRewrite = mkFRewrite fl
+flattenRewrite = deepFwdRw fl
     where
       fl :: MidIRInst e x -> () -> m (Maybe (Graph MidIRInst e x))
       fl (Label _ _) f = return Nothing
