@@ -19,7 +19,7 @@ data MemLoc = MemConst Int64
             | LabelLoc Label
             | RegLoc RegName
             | RegAddr { baseReg :: RegName
-                      , displace :: Int64
+                      , displace :: [ConstLoc]
                       , offsetReg :: Maybe RegName
                       , scalar :: Int64 }
 
@@ -27,10 +27,10 @@ instance Show MemLoc where
   show (MemConst val) = ""
   show (LabelLoc lab) = lab
   show (RegLoc reg) = show reg
-  show (RegAddr reg 0 Nothing _) = show reg
-  show (RegAddr reg disp Nothing _) = disp ++ "(" ++ (show reg) ++ ")"
-  show (RegAddr reg 0 (Just oReg) scal) = "(" ++ (show reg) ++ ", " ++ (show oReg) ++ ", " ++ scal ++  ")"
-  show (RegAddr reg disp (Just oReg) scal) = disp ++ "(" ++ (show reg) ++ ", " ++ (show oReg) ++ ", " ++ scal ++  ")"
+  show (RegAddr reg [] Nothing _) = show reg
+  show (RegAddr reg disp Nothing _) = "(" ++ (intercalate " ++ " disp) ++ ")(" ++ (show reg) ++ ")"
+  show (RegAddr reg [] (Just oReg) scal) = "(" ++ (show reg) ++ ", " ++ (show oReg) ++ ", " ++ scal ++  ")"
+  show (RegAddr reg disp (Just oReg) scal) = "(" ++ (intercalate " ++ " disp) ++ ")(" ++ (show reg) ++ ", " ++ (show oReg) ++ ", " ++ scal ++  ")"
   
 data Asm e x where
   LabelAsm  :: SourcePos -> Label                                 -> Asm C O
