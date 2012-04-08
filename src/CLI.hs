@@ -25,7 +25,7 @@ data CompilerOpts
                    -- immediately quits and provides usage
                    -- information.
                    , optMode :: OptFlags
-                   -- ^ Whether to turn on (dangerous) optimizations
+                   -- ^ Which optimizations to use.
                    }
       deriving (Show)
 
@@ -65,11 +65,18 @@ optNone = OptFlags False False False False False False
 options :: [OptDescr (CompilerOpts -> CompilerOpts)]
 options =
     [ Option ['o']  ["out"]     (ReqArg outfile' "FILE")    "output FILE"
-    , Option ['t']  ["target"]  (ReqArg target' "TARGET")   "set target type"
-    , Option []     ["debug"]   (NoArg debug')              "enables debug mode"
-    , Option []     ["compat"]  (NoArg compat')             "enables compatibility mode with 6.035 output spec"
-    , Option ['h']  ["help"]    (NoArg help')               "prints this usage information"
-    , Option []     ["opt"]     (OptArg optimize' "OPTIMIZATION")           "enables (dangerous) optimizations"
+    , Option ['t']  ["target"]  (ReqArg target' "TARGET")   "Set target type"
+    , Option ['d']     ["debug"]   (NoArg debug')              "Enables debug mode"
+    , Option ['c']     ["compat"]  (NoArg compat')             "Enables compatibility mode with 6.035 output spec"
+    , Option ['h']  ["help"]    (NoArg help')               "Prints this usage information"
+    , Option ['O']     ["opt"]     (ReqArg optimize' "OPTIMIZATION") ("Enables optimizations:\n" ++
+                                                                      "\t all : Enables ALL optimizations\n" ++
+                                                                      "\tnone : Disables ALL optimizations\n" ++
+                                                                      "\t cse : Constant Subexpression Elimination\n" ++
+                                                                      "\t  cp : Copy Propagation\n" ++
+                                                                      "\t  dc : Dead Code Elimination\n" ++
+                                                                      "\tflat : Flatten Optimization\n" ++
+                                                                      "\t  ra : Register Allocation")
     ]
     where outfile' s opts = opts { outputFile = Just s }
           target' t opts = opts { target = targetOpt t }
@@ -91,20 +98,17 @@ targetOpt s
         "assembly" -> TargetCodeGen
         _ -> TargetDefault
 
-optOpt :: CompilerOpts -> Maybe String -> OptFlags
-optOpt opts s  
+optOpt :: CompilerOpts -> String -> OptFlags
+optOpt opts s 
   = case s of
-         Nothing -> oFlags
-         Just m -> 
-           case m of
-             "all" -> optAll
-             "cse" -> oFlags { optCSE = True }
-             "cp" -> oFlags { optCP = True }
-             "dc" -> oFlags { optDC = True }  
-             "be" -> oFlags { optBE = True }
-             "flatten" -> oFlags { optFlat = True }
-             "ra" -> oFlags { optRA = True }
-             "none" -> optNone
+    "all" -> optAll
+    "cse" -> oFlags { optCSE = True }
+    "cp" -> oFlags { optCP = True }
+    "dc" -> oFlags { optDC = True }  
+    "be" -> oFlags { optBE = True }
+    "flat" -> oFlags { optFlat = True }
+    "ra" -> oFlags { optRA = True }
+    "none" -> optNone
     where oFlags = optMode opts 
 
 -- | Takes an argument list and gives a 'CompilerOpts'.  If there's a
