@@ -3,7 +3,7 @@ module Dataflow where
 
 import Dataflow.ConstProp
 import Dataflow.DeadCode
---import Dataflow.CSE
+import Dataflow.CSE
 import Dataflow.BlockElim
 import Dataflow.Flatten
 
@@ -68,6 +68,7 @@ performDataflowAnalysis midir
          midir <- performBwdPass blockElimPass midir
 --         midir <- performBwdPass deadCodePass midir
          midir <- performFwdPass flattenPass midir ()
+         midir <- performCSEPass midir
          return midir
 
 performFwdPass :: (FwdPass m MidIR ConstFact) -> MidIRRepr -> a -> RM MidIRRepr
@@ -81,8 +82,6 @@ performFwdPadd pass midir eFact
     where graph = midIRGraph midir
           mlabels = (map methodEntry $ midIRMethods midir)
 
-
-
 performBwdPass :: (BwdPass m MidIR ConstFact) -> MidIRRepr -> RM MidIRRepr 
 performBwdPass pass midir
     = do (graph', factBase, _) <- analyzeAndRewriteBwd 
@@ -91,6 +90,19 @@ performBwdPass pass midir
                                   graph
                                   mapEmpty
          return $ midir { midIRGraph = graph' }
+    where graph = midIRGraph midir 
+          mlabels = (map methodEntry $ midIRMethods midir)
+
+performCSEPass :: MidIRRepr -> RM MidIRRepr 
+performCSEPass midir 
+    = do nonTemps <- getVariables midir
+         let nonTemps' = S.unions $ mapElems nonTemps
+         (graph', factBase, _) <- analyzeAndRewriteFwd
+                                  (csePass nonTemps')
+                                  (JustC mlabels)
+                                  graph
+                                  (mapFromList (map (\l -> (l, emptyExprFact) ) mlabels))
+         return $ midir { midIRGraph = graph'}
     where graph = midIRGraph midir 
           mlabels = (map methodEntry $ midIRMethods midir)
 
@@ -121,6 +133,15 @@ flattenPass = FwdPass
               { fp_lattice = nullLattice
               , fp_transfer = nullTransfer
               , fp_rewrite = flattenRewrite } 
+
+
+csePass :: (CheckpointMonad m, FuelMonad m, UniqueNameMonad m) 
+           => S.Set VarName -> FwdPass m MidIRInst ExprFact
+csePass nonTemps = FwdPass 
+                   { fp_lattice = exprLattice
+                   , fp_transfer = exprAvailable nonTemps
+                   , fp_rewrite = cseRewrite nonTemps }
+
 
 
 ---

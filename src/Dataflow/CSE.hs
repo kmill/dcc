@@ -26,7 +26,8 @@ exprLattice = DataflowLattice { fact_name = "Global CSE Lattice"
                                       Nothing -> Nothing 
                             ch = changeIf (Map.size j /= Map.size oldMap)
 
-
+emptyExprFact :: ExprFact 
+emptyExprFact = fact_bot exprLattice
 
 exprAvailable :: S.Set VarName -> FwdTransfer MidIRInst ExprFact 
 exprAvailable nonTemps = mkFTransfer ft 
