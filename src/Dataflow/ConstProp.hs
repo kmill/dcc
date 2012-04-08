@@ -2,6 +2,7 @@
 
 module Dataflow.ConstProp where
 
+import Dataflow.OptSupport
 import Control.Monad
 import qualified Data.Map as Map
 
@@ -102,79 +103,3 @@ simplify = deepFwdRw simp
       unOp OpNeg = negate 
       unOp OpNot = boolToInt . not . intToBool
 
-
-type MaybeChange a = a -> Maybe a 
-mapVE :: (VarName -> Maybe MidIRExpr) -> MaybeChange MidIRExpr
-mapEE :: MaybeChange MidIRExpr -> MaybeChange MidIRExpr
-mapEN :: MaybeChange MidIRExpr -> MaybeChange (Node e x) 
-mapVN :: (VarName -> Maybe MidIRExpr) -> MaybeChange (Node e x)
-
-mapVN = mapEN . mapEE . mapVE
-
-mapVE f (Var _ v) = f v 
-mapVE _ _ = Nothing
-
-mapEE f e@(Lit _ _) = f e 
-mapEE f e@(Var _ _) = f e 
-mapEE f e@(LitLabel _ _) = f e 
-mapEE f e@(Load pos expr) = 
-    case mapEE f expr of 
-      Just expr' -> Just $ fromMaybe e' (f e')
-                      where e' = Load pos expr'
-      Nothing -> f e 
-mapEE f e@(UnOp pos op expr) = 
-    case mapEE f expr of 
-      Nothing -> f e
-      Just expr' -> Just $ fromMaybe e' (f e')
-          where e' = UnOp pos op expr'
-mapEE f e@(BinOp pos op e1 e2) = 
-    case (mapEE f e1, mapEE f e2) of 
-      (Nothing, Nothing) -> f e 
-      (e1', e2') -> Just $ fromMaybe e' (f e')
-          where e' = BinOp pos op (fromMaybe e1 e1') (fromMaybe e2 e2')
-mapEE f e@(Cond pos exc ext exf) =
-    case (mapEE f exc, mapEE f ext, mapEE f exf) of
-      (Nothing, Nothing, Nothing) -> f e
-      (exc', ext', exf') -> Just $ fromMaybe e' (f e')
-          where e' = Cond pos (fromMaybe exc exc')
-                     (fromMaybe ext ext') (fromMaybe exf exf')
-
-mapEN _ (Label _ _) = Nothing 
-mapEN _ (Enter _ _ _) = Nothing 
-mapEN f (Store pos var expr) = liftM (Store pos var) $ f expr
-mapEN f (IndStore pos e1 e2) = 
-    case (f e1, f e2) of 
-        (Nothing, Nothing) -> Nothing 
-        (e1', e2') -> Just $ IndStore pos (fromMaybe e1 e1') (fromMaybe e2 e2')
-mapEN f (Call pos var str es) = 
-    if all isNothing es' then Nothing 
-    else Just $ Call pos var str (map (uncurry fromMaybe) (zip es es'))
-        where es' = map f es
-mapEN f (Callout pos var str es) = 
-    if all isNothing es' then Nothing 
-    else Just $ Callout pos var str (map (uncurry fromMaybe) (zip es es'))
-        where es' = map f es
-mapEN _ (Branch _ _) = Nothing 
-mapEN f (CondBranch pos expr tl fl) =
-    case f expr of 
-      Nothing -> Nothing 
-      Just expr' -> Just $ CondBranch pos expr' tl fl
-mapEN f (Return pos maybeexpr) =
-    case liftM f maybeexpr of 
-      Nothing -> Nothing 
-      Just Nothing -> Nothing 
-      Just expr' -> Just $ Return pos expr'
-mapEN _ (Fail _)  = Nothing
-    
-
-insnToG :: Node e x -> Graph Node e x  
-insnToG n@(Label _ _) = mkFirst n
-insnToG n@(Enter _ _ _) = mkFirst n
-insnToG n@(Store _ _ _) = mkMiddle n 
-insnToG n@(IndStore _ _ _) = mkMiddle n 
-insnToG n@(Call _ _ _ _) = mkMiddle n 
-insnToG n@(Callout _ _ _ _) = mkMiddle n 
-insnToG n@(Branch _ _) = mkLast n 
-insnToG n@(CondBranch _ _ _ _) = mkLast n 
-insnToG n@(Return _ _) = mkLast n 
-insnToG n@(Fail _) = mkLast n 

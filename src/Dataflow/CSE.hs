@@ -1,6 +1,7 @@
 {-# LANGUAGE RankNTypes, ScopedTypeVariables, GADTs, TypeFamilies #-}
 module Dataflow.CSE where 
 
+import Dataflow.OptSupport
 import Compiler.Hoopl
 import IR2
 import qualified Data.Map as Map
@@ -34,10 +35,7 @@ exprAvailable nonTemps = mkFTransfer ft
       ft (Label _ _) f = f
       ft (Enter _ _ _) f = f
       ft (Store _ x expr) f = handleAssign x expr f
-      ft (CondStore _ x _ _ _) f = invalidateExprsWith x f
       ft (IndStore _ _ _) f = destroyLoads f
-      ft (Spill _ _) f = f
-      ft (Reload _ _) f = f
       ft (Call _ x _ _) f = invalidateExprsWith x f
       ft (Callout _ x _ _) f = invalidateExprsWith x f 
       ft (Branch _ l) f = mapSingleton l f
@@ -68,11 +66,34 @@ exprAvailable nonTemps = mkFTransfer ft
                 f k v = if containsLoad k 
                         then Nothing
                         else Just v
+-- Rewrite function: 
+
+cseRewrite :: forall m. (FuelMonad m, UniqueNameMonad m) => S.Set VarName -> FwdRewrite m MidIRInst ExprFact 
+cseRewrite nonTemps = mkFRewrite cse 
+    where 
+      cse :: MidIRInst e x -> ExprFact -> m (Maybe (Graph MidIRInst e x))
+      cse (Store _ x (Var _ v)) f
+          | isTemp nonTemps v = return Nothing 
+      cse (Store pos x expr) f 
+          = case lookupExpr expr f of 
+              Just varName -> return $ Just $ insnToG $ Store pos x (Var pos varName)
+              Nothing -> do tempName <- genUniqueName "cse"
+                            let tempAssign = insnToG $ Store pos (MV tempName) expr
+                                varAssign = insnToG $ Store pos x (Var pos (MV tempName)) 
+                                newGraph = tempAssign <*> varAssign 
+                            return $ Just newGraph
+      cse _ f = return Nothing
+
+
+lookupExpr :: MidIRExpr -> ExprFact -> Maybe VarName 
+lookupExpr expr Bot = Nothing 
+lookupExpr expr (PElem factMap) = Map.lookup expr factMap
 
 containsLoad :: MidIRExpr -> Bool 
 containsLoad (Load _ _) = True 
 containsLoad (UnOp _ _ expr) = containsLoad expr
 containsLoad (BinOp _ _ expr1 expr2) = (containsLoad expr1) || (containsLoad expr2)
+containsLoad (Cond _ expr1 expr2 expr3) = (containsLoad expr1) || (containsLoad expr2) || (containsLoad expr3)
 containsLoad _ = False
 
 containsVar :: VarName -> MidIRExpr -> Bool 
@@ -80,6 +101,7 @@ containsVar x (Var _ v) = x == v
 containsVar x (Load _ expr) = containsVar x expr
 containsVar x (UnOp _ _ expr) = containsVar x expr 
 containsVar x (BinOp _ _ expr1 expr2) = (containsVar x expr1) || (containsVar x expr2) 
+containsVar x (Cond _ expr1 expr2 expr3) = (containsVar x expr1) || (containsVar x expr2) || (containsVar x expr3)
 containsVar _ _ = False
 
 isTemp :: S.Set VarName -> VarName -> Bool 

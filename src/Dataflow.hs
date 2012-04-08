@@ -139,3 +139,4 @@ flattenPass = FwdPass
               { fp_lattice = nullLattice
               , fp_transfer = nullTransfer
               , fp_rewrite = flattenRewrite } 
+

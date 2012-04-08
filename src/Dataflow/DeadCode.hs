@@ -4,6 +4,7 @@ module Dataflow.DeadCode where
 
 import qualified Data.Set as S
 
+import Dataflow.OptSupport
 import Compiler.Hoopl 
 import IR2
 import Data.Maybe
@@ -50,26 +51,3 @@ deadAsstElim = mkBRewrite d
           | not (x `S.member` live) = return $ Just emptyGraph
       d _ _  = return Nothing
 
-
-fold_EE :: (a -> MidIRExpr -> a) -> a -> MidIRExpr -> a 
-fold_EN :: (a -> MidIRExpr -> a) -> a -> MidIRInst e x -> a 
-
-fold_EE f z e@(Lit _ _) = f z e 
-fold_EE f z e@(Var _ _) = f z e
-fold_EE f z e@(LitLabel _ _) = f z e 
-fold_EE f z e@(Load _ expr) = f (f z expr) e 
-fold_EE f z e@(UnOp _ _ expr) = f (f z expr) e
-fold_EE f z e@(BinOp _ _ expr1 expr2) = f (f (f z expr2) expr1) e
-fold_EE f z e@(Cond _ expr1 expr2 expr3) = f (f (f (f z expr3) expr2) expr1) e
-
-fold_EN _ z (Label _ _) = z
-fold_EN _ z (Enter _ _ _) = z
-fold_EN f z (Store _ _ expr) = f z expr 
-fold_EN f z (IndStore _ expr1 expr2) = f (f z expr2) expr1
-fold_EN f z (Call _ _ _ es) = foldl f z es 
-fold_EN f z (Callout _ _ _ es) = foldl f z es 
-fold_EN _ z (Branch _ _) = z
-fold_EN f z (CondBranch _ expr _ _) = f z expr 
-fold_EN _ z (Return _ Nothing) = z
-fold_EN f z (Return _ (Just expr)) = f z expr
-fold_EN _ z (Fail _) = z
