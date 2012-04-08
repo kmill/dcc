@@ -51,11 +51,11 @@ main = do args <- getArgs
             _ -> error "No such target"
 
 
-doScanFile :: CompilerOpts -> String -> String -> Either String v
+doScanFile :: CompilerOpts -> String -> String -> Either String [Token]
 doScanFile opts ifname input
   = case runScanner opts ifname input of
     Left err -> Left (reportErr (lines input) err)
-    Right v -> Right v
+    Right v2 -> Right v2
     
 --doParseFile :: CompilerOpts -> String -> String -> Either String i -> Either String v
 --doCheckFile :: CompilerOpts -> String -> String -> Either String i -> Either String v
@@ -68,13 +68,13 @@ doScanFile opts ifname input
 doParseFile :: CompilerOpts -> String -> String -> IO ()
 doParseFile opts ifname input
     = case runScanner opts ifname input of
-        Left err -> do reportErr (lines input) err
+        Left err -> do putStrLn $ reportErr (lines input) err
                        exitWith $ ExitFailure 1
         Right v ->
             case getErrors v of
               [] -> case runDParser opts ifname v of
                       Left err ->
-                          do reportErr (lines input) err
+                          do putStrLn $ reportErr (lines input) err
                              exitWith $ ExitFailure 2
                       Right r ->
                           do unless (compatMode opts) $ print r
@@ -89,13 +89,13 @@ doParseFile opts ifname input
 doCheckFile :: CompilerOpts -> String -> String -> IO ()
 doCheckFile opts ifname input
     = case runScanner opts ifname input of
-        Left err -> do reportErr (lines input) err
+        Left err -> do putStrLn $ reportErr (lines input) err
                        exitWith $ ExitFailure 1
         Right v ->
             case getErrors v of
               [] -> case runDParser opts ifname v of
                       Left err ->
-                          do reportErr (lines input) err
+                          do putStrLn $ reportErr (lines input) err
                              exitWith $ ExitFailure 2
                       Right r ->
                           case doSemanticCheck r of
@@ -117,13 +117,13 @@ doCheckFile opts ifname input
 doMidIRFile :: CompilerOpts -> String -> String -> IO ()
 doMidIRFile opts ifname input 
     = case runScanner opts ifname input of
-        Left err -> do reportErr (lines input) err
+        Left err -> do putStrLn $ reportErr (lines input) err
                        exitWith $ ExitFailure 1
         Right v ->
             case getErrors v of
               [] -> case runDParser opts ifname v of
                       Left err ->
-                          do reportErr (lines input) err
+                          do putStrLn $ reportErr (lines input) err
                              exitWith $ ExitFailure 2
                       Right r ->
                           case doSemanticCheck r of
@@ -149,13 +149,13 @@ doMidIRFile opts ifname input
 doLowIRFile :: CompilerOpts -> String -> String -> IO ()
 doLowIRFile opts ifname input 
     = case runScanner opts ifname input of
-        Left err -> do reportErr (lines input) err
+        Left err -> do putStrLn $ reportErr (lines input) err
                        exitWith $ ExitFailure 1
         Right v ->
             case getErrors v of
               [] -> case runDParser opts ifname v of
                       Left err ->
-                          do reportErr (lines input) err
+                          do putStrLn $ reportErr (lines input) err
                              exitWith $ ExitFailure 2
                       Right r ->
                           case doSemanticCheck r of
@@ -185,13 +185,13 @@ doLowIRFile opts ifname input
 doGenerateCode :: CompilerOpts -> String -> String -> IO ()
 doGenerateCode opts ifname input 
     = case runScanner opts ifname input of
-        Left err -> do reportErr (lines input) err
+        Left err -> do putStrLn $ reportErr (lines input) err
                        exitWith $ ExitFailure 1
         Right v ->
             case getErrors v of
               [] -> case runDParser opts ifname v of
                       Left err ->
-                          do reportErr (lines input) err
+                          do putStrLn $ reportErr (lines input) err
                              exitWith $ ExitFailure 2
                       Right r ->
                           case doSemanticCheck r of
