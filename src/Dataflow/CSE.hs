@@ -1,90 +1,86 @@
-
+{-# LANGUAGE RankNTypes, ScopedTypeVariables, GADTs, TypeFamilies #-}
 module Dataflow.CSE where 
 
 import Compiler.Hoopl
 import IR2
-
--- | I'm going to be sticking an existing graph into this whole thing
-
--- | 1. Need to define a fact type (map of available expressions?)
--- | This is also a lattice. So I'll need to be careful about defining top and bottom as well.
-
--- | 2. Need to define a transfer function 
-
--- | 3. Need to define a rewrite rule
-
--- | Looks like the nodes are the Inst v e x type
-
--- | Can look directly at the constant propagation examples to get this working. 
+import qualified Data.Map as Map
+import qualified Data.Set as S
 
 
--- | Use analyzeAndRewriteFwdBody to actually rewrite the graph once everything is well defined
+type ExprFact = WithBot (Map.Map MidIRExpr VarName)
+exprLattice :: DataflowLattice ExprFact 
+exprLattice = DataflowLattice { fact_name = "Global CSE Lattice"
+                              , fact_bot = Bot
+                              , fact_join = intersectMaps }
+    where intersectMaps _ (OldFact old) (NewFact new) 
+              = case (old, new) of 
+                  (Bot, new') -> (SomeChange, new') 
+                  (old', Bot) -> (NoChange, old') 
+                  (PElem oldMap, PElem newMap) -> (ch, PElem j)
+                      where j = Map.mapMaybeWithKey f oldMap
+                            f k v = case Map.lookup k newMap of 
+                                      Just v' -> if v == v' 
+                                                 then Just v 
+                                                 else Nothing
+                                      Nothing -> Nothing 
+                            ch = changeIf (Map.size j /= Map.size oldMap)
 
 
--- | Constant Propagation Example Code to Draw from
 
-type LitVal = (SourcePos, Int64)
-
--- Type and definition of the lattice
--- Need to figure out what "Var" Corresponds to 
-type ConstFact = Map.Map VarName (WithTop LitVal)
-constLattice :: DataflowLattice ConstFact
-constLattice = DataFlowLattice { fact_bot = Map.empty 
-                               , fact_join = joinMaps (extendJoinDomain constFactAdd) }
-    where constFactAdd _ (OldFact old) (NewFact new) = if new == old then (NoChange, PElem new)
-                                                       else (SomeChange, Top)
-
-initFact :: [VarName] -> ConstFact 
-initFact vars = Map.fromList $ [(v, Top) | v <- vars]
-
--- Analysis: variable equals a literal constant
-varHasLit :: FwdTransfer MidIRInst ConstFact
-varHasLit = mkFTransfer ft
-    where
-      ft :: MidIRInst e x -> ConstFact -> Fact x ConstFact
-      ft (Label _) f = f
-      ft (Store _ x (Lit pos k)) f = Map.insert x (PElem (pos, k)) f
-      ft (Store _ x _) f = Map.insert x Top f
-      ft (CondStore _ x _ _)  f = Map.insert x Top f 
-      ft (IndStore _ _ _) f = f
-      ft (Spill _ _ x) f = Map.insert x Top f
-      ft (UnSpill _ _ _) f = f
-      ft (Call _ _ _ _) f = f
-      ft (Callout _ _ _ _) f = f
-      ft (Branch _ l) f = mapSingleton l f
-      ft (CondBranch _ (Var pos x) tl fl) f 
-          = mkFactBase constLattice [ (tl, Map.insert x (PElem (pos, -1)) f)
-                                    , (fl, Map.insert x (PElem (pos, 0)) f) ]
-      ft (CondBranch _ _ tl fl) f 
-          = mkFactBase constLattice [ (tl, f)
-                                    , (fl, f) ]
-      ft (Return _ _) f = mapEmpty
-      ft (Fail _) f = mapSingleton l f
-
--- Rewrite function: replace constant variables
-constProp :: forall m. FuelMonad m => FwdRewrite m MidIRInst ConstFact
-constProp = mkFRewrite cp 
+exprAvailable :: S.Set VarName -> FwdTransfer MidIRInst ExprFact 
+exprAvailable nonTemps = mkFTransfer ft 
     where 
-      cp :: MidIRInst e x -> ConstFact -> m (Maybe (Graph MidIRInst e x))
-      cp node f 
-             = return $ liftM insnToG $ mapVN (lookup f) node
-      mapVN :: (VarName -> Maybe Expr) -> MaybeChange (Node e x) 
-      mapVN = mapEN . mapEE . mapVE
+      ft :: MidIRInst e x -> ExprFact -> Fact x ExprFact 
+      ft (Label _ _) f = f
+      ft (Enter _ _ _) f = f
+      ft (Store _ x expr) f = handleAssign x expr f
+      ft (CondStore _ x _ _ _) f = invalidateExprsWith x f
+      ft (IndStore _ _ _) f = destroyLoads f
+      ft (Spill _ _) f = f
+      ft (Reload _ _) f = f
+      ft (Call _ x _ _) f = invalidateExprsWith x f
+      ft (Callout _ x _ _) f = invalidateExprsWith x f 
+      ft (Branch _ l) f = mapSingleton l f
+      ft (CondBranch _ _ tl fl) f 
+          = mkFactBase exprLattice [ (tl, f) 
+                                   , (fl, f) ]
+      ft (Return _ _) f = mapEmpty 
+      ft (Fail _) f = mapEmpty 
+      handleAssign :: VarName -> MidIRExpr -> ExprFact -> ExprFact
+      handleAssign x expr f = if isTemp nonTemps x 
+                              then newFact 
+                              else invalidateExprsWith x f 
+          where newFact = PElem newMap 
+                newMap = case f of 
+                           Bot -> Map.insert expr x Map.empty 
+                           PElem oldMap -> Map.insert expr x oldMap
+      invalidateExprsWith :: VarName -> ExprFact -> ExprFact
+      invalidateExprsWith _ Bot = Bot 
+      invalidateExprsWith x (PElem oldMap) = PElem newMap 
+          where newMap = Map.mapMaybeWithKey f oldMap 
+                f k v = if containsVar x k
+                        then Nothing
+                        else Just v 
+      destroyLoads :: ExprFact -> ExprFact 
+      destroyLoads Bot = Bot 
+      destroyLoads (PElem oldMap) = PElem newMap
+          where newMap = Map.mapMaybeWithKey f oldMap
+                f k v = if containsLoad k 
+                        then Nothing
+                        else Just v
 
-      lookup :: ConstFact -> VarName -> Maybe Expr
-      lookup f x = case Map.lookup x f of 
-                     Just (PElem (pos, v)) -> Just $ Lit pos v
-                     _ -> Nothing
+containsLoad :: MidIRExpr -> Bool 
+containsLoad (Load _ _) = True 
+containsLoad (UnOp _ _ expr) = containsLoad expr
+containsLoad (BinOp _ _ expr1 expr2) = (containsLoad expr1) || (containsLoad expr2)
+containsLoad _ = False
 
+containsVar :: VarName -> MidIRExpr -> Bool 
+containsVar x (Var _ v) = x == v
+containsVar x (Load _ expr) = containsVar x expr
+containsVar x (UnOp _ _ expr) = containsVar x expr 
+containsVar x (BinOp _ _ expr1 expr2) = (containsVar x expr1) || (containsVar x expr2) 
+containsVar _ _ = False
 
-type Node = MidIRInst 
-type MaybeChange a = a -> Maybe a 
-mapVE :: (VarName -> Maybe Expr) -> MaybeChange Expr
-mapEE :: MaybeChange Expr -> MaybeChange Expr
-mapEN :: MaybeChange Expr -> MaybeChange (Node e x) 
-mapVN :: (VarName -> Maybe Expr) -> MaybeChange (Node e x)
-
-mapVN = mapEN . mapEE . mapVE
-
-mapVE f (VarName v) = f v 
-mapVE _ _ = 
+isTemp :: S.Set VarName -> VarName -> Bool 
+isTemp nonTemps v = not $ S.member v nonTemps
