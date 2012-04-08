@@ -70,13 +70,13 @@ performDataflowAnalysis opts midir = do
   -- midir <- if optCopyProp opts 
   --          then performCopyPropPass midir 
   --          else return midir
-  midir <- if optDeadCode opts 
+  midir <- if optDeadCode opts
            then performDeadCodePass midir 
            else return midir
-  midir <- if optBlockElim opts 
+  midir <- if optBlockElim opts && False
            then performBlockElimPass midir 
            else return midir
-  midir <- if optFlat opts 
+  midir <- if optFlat opts
            then performFlattenPass midir 
            else return midir
   midir <- if optCommonSubElim opts 
