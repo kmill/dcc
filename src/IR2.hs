@@ -105,6 +105,8 @@ data Expr v = Lit SourcePos Int64
             | Load SourcePos (Expr v)
             | UnOp SourcePos UnOp (Expr v)
             | BinOp SourcePos BinOp (Expr v) (Expr v)
+            -- | a ? b : c, evaluates both b and c
+            | Cond SourcePos (Expr v) (Expr v) (Expr v)
               deriving (Eq, Ord)
 
 
@@ -122,6 +124,7 @@ mapE f (LitLabel pos l) = LitLabel pos l
 mapE f (Load pos exp) = Load pos (mapE f exp)
 mapE f (UnOp pos op exp) = UnOp pos op (mapE f exp)
 mapE f (BinOp pos op exp1 exp2) = BinOp pos op (mapE f exp1) (mapE f exp2)
+mapE f (Cond pos expc exp1 exp2) = Cond pos (mapE f expc) (mapE f exp1) (mapE f exp2)
 
 ---
 --- Instructions
@@ -132,13 +135,7 @@ data Inst v e x where
     Label      :: SourcePos -> Label                           -> Inst v C O
     Enter      :: SourcePos -> Label -> [v]                    -> Inst v C O
     Store      :: SourcePos -> v -> Expr v                     -> Inst v O O
-    -- | Semantics of (CondStore _ dest cond texp fexp) are
-    -- dest := cond ? texp : fexp, with both texp and fexp
-    -- being evaluated.
-    CondStore  :: SourcePos -> v -> Expr v -> Expr v -> Expr v -> Inst v O O
     IndStore   :: SourcePos -> Expr v -> Expr v                -> Inst v O O
-    Spill      :: SourcePos -> v                               -> Inst v O O
-    Reload     :: SourcePos -> v                               -> Inst v O O
     Call       :: SourcePos -> v -> String -> [Expr v]         -> Inst v O O
     Callout    :: SourcePos -> v -> String -> [Expr v]         -> Inst v O O
     Branch     :: SourcePos -> Label                           -> Inst v O C
@@ -160,10 +157,7 @@ mapI :: (v1 -> v2) -> Inst v1 e x -> Inst v2 e x
 mapI f (Label pos l) = Label pos l
 mapI f (Enter pos l args) = Enter pos l (map f args)
 mapI f (Store pos d exp) = Store pos (f d) (mapE f exp)
-mapI f (CondStore pos d cexp texp fexp) = CondStore pos (f d) (mapE f cexp) (mapE f texp) (mapE f fexp)
 mapI f (IndStore pos d s) = IndStore pos (mapE f d) (mapE f s)
-mapI f (Spill pos v) = Spill pos (f v)
-mapI f (Reload pos v) = Reload pos (f v)
 mapI f (Call pos d name args) = Call pos (f d) name (map (mapE f) args)
 mapI f (Callout pos d name args) = Callout pos (f d) name (map (mapE f) args)
 mapI f (Branch pos l) = Branch pos l
@@ -184,6 +178,10 @@ instance Show v => Show (Expr v) where
     showsPrec p (UnOp pos op expr) = showParen (p>0) (shows op . showString " " . showsPrec 1 expr)
     showsPrec p (BinOp pos op ex1 ex2)
         = showParen (p>0) (showsPrec 1 ex1 . showString " " . shows op . showString " " . showsPrec 1 ex2)
+    showsPrec p (Cond pos exc ex1 ex2)
+        = showParen (p>0) (showsPrec 1 exc
+                           . showString " ? " . showsPrec 1 ex1
+                           . showString " : " . showsPrec 1 ex2)
 
 instance Show UnOp where
     show OpNeg = "negate"
@@ -212,18 +210,9 @@ instance Show v => Show (Inst v e x) where
     show (Store pos var expr)
         = printf "%s := %s  {%s};"
           (show var) (show expr) (showPos pos)
-    show (CondStore pos var cond texpr fexp)
-        = printf "%s := %s ? %s : %s  {%s};"
-          (show var) (show cond) (show texpr) (show fexp) (showPos pos)
     show (IndStore pos dest expr)
         = printf "*(%s) := %s  {%s};"
           (show dest) (show expr) (showPos pos)
-    show (Spill pos var)
-        = printf "spill %s  {%s};"
-          (show var) (showPos pos)
-    show (Reload pos var)
-        = printf "reload %s  {%s};"
-          (show var) (showPos pos)
     show (Call pos dest name args)
         = printf "%s := call %s (%s)  {%s};"
           (show dest) name (intercalate ", " $ map show args) (showPos pos)

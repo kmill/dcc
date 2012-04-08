@@ -26,10 +26,7 @@ liveness = mkBTransfer live
           live (Label _ _) f = f 
           live n@(Enter _ _ args) f = addUses (f S.\\ (S.fromList args)) n
           live n@(Store _ x _) f = addUses (S.delete x f) n 
-          live n@(CondStore _ x _ _ _) f = addUses (S.delete x f) n 
           live n@(IndStore _ _ _) f = f
-          live n@(Spill _ x) f = addUses f n 
-          live n@(Reload _ x) f = addUses (S.delete x f) n 
           live n@(Call _ x _ _) f = addUses (S.delete x f) n
           live n@(Callout _ x _ _) f = addUses (S.delete x f) n 
           live n@(Branch _ l) f = addUses (fact f l) n 
@@ -51,10 +48,6 @@ deadAsstElim = mkBRewrite d
       d :: MidIRInst e x -> Fact x Live -> m (Maybe (Graph MidIRInst e x))
       d (Store _ x _) live 
           | not (x `S.member` live) = return $ Just emptyGraph
-      d (CondStore _ x _ _ _) live 
-          | not (x `S.member` live) = return $ Just emptyGraph
-      d (Reload _ x) live 
-          | not (x `S.member` live) = return $ Just emptyGraph
       d _ _  = return Nothing
 
 
@@ -67,14 +60,12 @@ fold_EE f z e@(LitLabel _ _) = f z e
 fold_EE f z e@(Load _ expr) = f (f z expr) e 
 fold_EE f z e@(UnOp _ _ expr) = f (f z expr) e
 fold_EE f z e@(BinOp _ _ expr1 expr2) = f (f (f z expr2) expr1) e
+fold_EE f z e@(Cond _ expr1 expr2 expr3) = f (f (f (f z expr3) expr2) expr1) e
 
 fold_EN _ z (Label _ _) = z
 fold_EN _ z (Enter _ _ _) = z
 fold_EN f z (Store _ _ expr) = f z expr 
-fold_EN f z (CondStore _ _ expr1 expr2 expr3) = f (f (f z expr3) expr2) expr1
 fold_EN f z (IndStore _ expr1 expr2) = f (f z expr2) expr1
-fold_EN _ z (Spill _ _) = z
-fold_EN _ z (Reload _ _) = z
 fold_EN f z (Call _ _ _ es) = foldl f z es 
 fold_EN f z (Callout _ _ _ es) = foldl f z es 
 fold_EN _ z (Branch _ _) = z

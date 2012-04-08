@@ -27,10 +27,7 @@ nullTransfer = mkFTransfer ft
       ft Label{} f = f
       ft Enter{} f = f
       ft Store{} f = f
-      ft CondStore{} f = f
       ft IndStore{} f = f
-      ft Spill{} f = f
-      ft Reload{} f = f
       ft Call{} f = f
       ft Callout{} f = f
 
@@ -62,22 +59,12 @@ flattenRewrite = mkFRewrite fl
       fl (Label _ _) f = return Nothing
       fl (Enter _ _ _) f = return Nothing
       fl (Store pos v e) f = flattenExpr e (\e' -> Store pos v e')
-      fl (CondStore pos v cexp texp fexp) f
-          | nonTrivial fexp = withTmp pos fexp
-                              (\fexp' -> CondStore pos v cexp texp fexp')
-          | nonTrivial texp = withTmp pos texp
-                              (\texp' -> CondStore pos v cexp texp' fexp)
-          | nonTrivial cexp = withTmp pos cexp
-                              (\cexp' -> CondStore pos v cexp' texp fexp)
-          | otherwise = return Nothing
       fl (IndStore pos dest src) f
           | nonTrivial dest = withTmp pos dest
                               (\dest' -> IndStore pos dest' src)
           | nonTrivial src = withTmp pos src
                              (\src' -> IndStore pos dest src')
           | otherwise = return Nothing
-      fl (Spill _ _) f = return Nothing
-      fl (Reload _ _) f = return Nothing
       fl (Call pos dest name args) f
           = doCall args []
             where doCall [] _ = return Nothing
@@ -120,4 +107,13 @@ flattenExpr (BinOp pos op e1 e2) f
 flattenExpr (Load pos e) f
     | nonTrivial e = withTmp pos e (\e' -> f $ Load pos e')
     | otherwise = return Nothing
+flattenExpr (Cond pos cexp texp fexp) f
+    | nonTrivial cexp = withTmp pos fexp
+                        (\fexp' -> f $ Cond pos cexp texp fexp')
+    | nonTrivial texp = withTmp pos texp
+                        (\texp' -> f $ Cond pos cexp texp' fexp)
+    | nonTrivial cexp = withTmp pos cexp
+                        (\cexp' -> f $ Cond pos cexp' texp fexp)
+    | otherwise = return Nothing
+
 flattenExpr _ _ = return Nothing

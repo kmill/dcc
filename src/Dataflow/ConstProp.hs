@@ -40,12 +40,7 @@ varHasLit = mkFTransfer ft
       ft (Enter _ _ args) f = Map.fromList (map (\a -> (a, Top)) args)
       ft (Store _ x (Lit pos k)) f = Map.insert x (PElem (pos, k)) f
       ft (Store _ x _) f = Map.insert x Top f
-      ft (CondStore _ x _ (Lit pos xtrue) (Lit _ xfalse)) f
-          | xtrue == xfalse  = Map.insert x (PElem (pos, xtrue)) f
-      ft (CondStore _ x _ _ _) f = Map.insert x Top f
       ft (IndStore _ _ _) f = f
-      ft (Spill _ _) f = f
-      ft (Reload _ _) f = f
       ft (Call _ _ _ _) f = f
       ft (Callout _ _ _ _) f = f
       ft (Branch _ l) f = mapSingleton l f
@@ -79,8 +74,6 @@ simplify = deepFwdRw simp
       s_node :: Node e x -> Maybe (Node e x)
       s_node (CondBranch pos (Lit _ x) tl fl) 
           = Just $ Branch pos (if intToBool x then tl else fl)
-      s_node (CondStore pos dest (Lit _ x) tl fl)
-          = Just $ Store pos dest (if intToBool x then tl else fl)
       s_node n = (mapEN . mapEE) s_exp n 
       s_exp (BinOp pos OpDiv expr (Lit _ 0)) 
           = Nothing
@@ -90,6 +83,10 @@ simplify = deepFwdRw simp
           = Just $ Lit pos $ (binOp op) x1 x2
       s_exp (UnOp pos op (Lit _ x))
           = Just $ Lit pos $ (unOp op) x
+      s_exp (Cond pos (Lit _ x) expt expf)
+          = Just $ (if intToBool x then expt else expf)
+      s_exp (Cond pos _ expt expf)
+          | expt == expf  = Just expt
       s_exp _ = Nothing
       binOp OpAdd = (+)
       binOp OpSub = (-)
@@ -135,22 +132,20 @@ mapEE f e@(BinOp pos op e1 e2) =
       (Nothing, Nothing) -> f e 
       (e1', e2') -> Just $ fromMaybe e' (f e')
           where e' = BinOp pos op (fromMaybe e1 e1') (fromMaybe e2 e2')
+mapEE f e@(Cond pos exc ext exf) =
+    case (mapEE f exc, mapEE f ext, mapEE f exf) of
+      (Nothing, Nothing, Nothing) -> f e
+      (exc', ext', exf') -> Just $ fromMaybe e' (f e')
+          where e' = Cond pos (fromMaybe exc exc')
+                     (fromMaybe ext ext') (fromMaybe exf exf')
 
 mapEN _ (Label _ _) = Nothing 
 mapEN _ (Enter _ _ _) = Nothing 
 mapEN f (Store pos var expr) = liftM (Store pos var) $ f expr
-mapEN f (CondStore pos var e1 etrue efalse) =
-    case (f e1, f etrue, f efalse) of 
-        (Nothing, Nothing, Nothing) -> Nothing
-        (e1', etrue', efalse')
-            -> Just $ CondStore pos var (fromMaybe e1 e1')
-                                   (fromMaybe etrue etrue') (fromMaybe efalse efalse')
 mapEN f (IndStore pos e1 e2) = 
     case (f e1, f e2) of 
         (Nothing, Nothing) -> Nothing 
         (e1', e2') -> Just $ IndStore pos (fromMaybe e1 e1') (fromMaybe e2 e2')
-mapEN _ (Spill _ _) = Nothing 
-mapEN _ (Reload _ _) = Nothing 
 mapEN f (Call pos var str es) = 
     if all isNothing es' then Nothing 
     else Just $ Call pos var str (map (uncurry fromMaybe) (zip es es'))
@@ -176,10 +171,7 @@ insnToG :: Node e x -> Graph Node e x
 insnToG n@(Label _ _) = mkFirst n
 insnToG n@(Enter _ _ _) = mkFirst n
 insnToG n@(Store _ _ _) = mkMiddle n 
-insnToG n@(CondStore _ _ _ _ _) = mkMiddle n 
 insnToG n@(IndStore _ _ _) = mkMiddle n 
-insnToG n@(Spill _ _) = mkMiddle n 
-insnToG n@(Reload _ _) = mkMiddle n 
 insnToG n@(Call _ _ _ _) = mkMiddle n 
 insnToG n@(Callout _ _ _ _) = mkMiddle n 
 insnToG n@(Branch _ _) = mkLast n 
