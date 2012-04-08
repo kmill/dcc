@@ -1,3 +1,5 @@
+{-# LANGUAGE RankNTypes, GADTs, TypeFamilies #-}
+
 module Assembly2 where
 
 import IR2
@@ -10,6 +12,7 @@ import Data.Int
 data Reg = MReg X86Reg -- ^ a real machine register
          | SReg Int -- ^ a symbolic register
 data Imm8 = Imm8 Int8
+data Imm16 = Imm16 Int16
 data Imm32 = Imm32 Int32 -- ^ a 32-bit sign-extended literal
            | Imm32BlockLabel Label Int32 -- ^ a label to a block with a displacement
            | Imm32Label String Int32 -- ^ a label with a displacement
@@ -22,11 +25,28 @@ data MemAddr = MemAddr
     , displace :: Imm32
     , indexReg :: Maybe RegName
     , scalar :: Scalar }
-data RorM = Reg Reg
-          | Mem MemAddr
 data Flag = FlagZ | FlagNZ
           | FlagL | FlagLE | Flag GE | Flag G
           | FlagE | FlagNE
+
+data OperIRM = IRM_I Imm32
+            | IRM_R Reg
+            | IRM_M MemAddr
+data OperIR = IR_I Imm32
+           | IR_R Reg
+data OperRM = RM_R Reg
+           | RM_M MemAddr
+
+instance Show OperIRM where
+    show (IRM_I imm) = show imm
+    show (IRM_R reg) = show reg
+    show (IRM_M addr) = show addr
+instance Show OperIR where
+    show (IR_I imm) = show imm
+    show (IR_R reg) = show reg
+instance Show OperRM where
+    show (RM_R reg) = show reg
+    show (RM_M mem) = show mem
 
 -- | Can the 64-bit immediate be represented as a 32-bit immediate?
 -- We assume all labels fit comfortably in 32-bit registers.
@@ -47,6 +67,8 @@ to32Imm (Imm64Label s x) = Imm32Label s $ fromIntegral x
 
 checkIfScalar :: Int64 -> Bool
 checkIfScalar x = x `elem` [1,2,4,8]
+
+intToScalar :: Int64 -> Scalar
 intToScalar 1 = SOne
 intToScalar 2 = STwo
 intToScalar 4 = SFour
@@ -59,6 +81,8 @@ instance Show Reg where
 
 instance Show Imm8 where
     show (Imm8 x) = show x
+instance Show Imm16 where
+    show (Imm16 x) = show x
 instance Show Imm32 where
     show (Imm32 x) = show x
     show (Imm32BlockLabel l d)
@@ -113,6 +137,9 @@ instance Show Flag where
 --  imm64 is a 64-bit immediate
 --  rel32 is 32-bit immediate relative to RIP
 
+-- srcOpers = irm, ir, i_64, rm
+-- dstOpers = r, m
+
 -- moves
 --  movq imm32/r64/m64, r64
 --  movq imm32/r64, m64
@@ -128,7 +155,7 @@ instance Show Flag where
 --  enter $x, $0
 --  leave
 --  call rel32  (normal call)
---  call r/m64  (indirect call)
+--  call r64/m64  (indirect call)
 --  ret
 --  ret imm16 (pop this many bytes from stack)
 
@@ -153,46 +180,81 @@ instance Show Flag where
 --  incq r64/m64
 --  decq r64/m64
 --
---  imulq r/m64  (%rdx:%rax <- %rax * r/m64)
---  imulq r/m64, r64  (r64 <- r64 * r/m64)
---  imulq imm32, r/m64, r64  (r64 <- imm32 * r/m64)
+--  imulq r64/m64  (%rdx:%rax <- %rax * r/m64)
+--  imulq r64/m64, r64  (r64 <- r64 * r/m64)
+--  imulq imm32, r64/m64, r64  (r64 <- imm32 * r/m64)
 --
---  idivq r/m64  (rem=%rdx,quot=%rax <- %rdx:%rax / r/m64)
+--  idivq r64/m64  (rem=%rdx,quot=%rax <- %rdx:%rax / r/m64)
 --
---  shlq imm8, r/m64
---  shrq imm8, r/m64  (n.b. unsigned)
---  sarq imm8, r/m64  (n.b. signed)
+--  shlq imm8, r64/m64
+--  shrq imm8, r64/m64  (n.b. unsigned)
+--  sarq imm8, r64/m64  (n.b. signed)
 --
---  cmpq imm32/r64, r/m64
+--  cmpq imm32/r64, r64/m64
+--
+--  negq r64/m64
 
 -- look at cmpxchg?
 
+data ALUOp = Add | Sub | Xor
+instance Show ALUOp where
+    show Add = "add"
+    show Sub = "sub"
+    show Xor = "xor"
 
 data Asm e x where
   Label     :: SourcePos -> Label                                 -> Asm C O
-  Mov
-  AddReg    :: SourcePos -> Reg -> 
-  AddAsm    :: SourcePos -> MemLoc -> RegLoc RegName              -> Asm O O
-  SubAsm    :: SourcePos -> MemLoc -> RegLoc RegName              -> Asm O O
-  MulAsm    :: SourcePos -> MemLoc -> RegLoc RegName              -> Asm O O
-  DivAsm    :: SourcePos -> MemLoc                                -> Asm O O
-  ModAsm    :: SourcePos -> MemLoc -> RegLoc RegName              -> Asm O O
-  CmpAsm    :: SourcePos -> MemLoc -> RegLoc RegName              -> Asm O O
-  MovAsm    :: SourcePos -> MemLoc -> RegLoc RegName              -> Asm O O
-  NegAsm    :: SourcePos -> MemLoc -> RegLoc RegName              -> Asm O O
-  XorAsm    :: SourcePos -> MemLoc -> RegLoc RegName              -> Asm O O
-  ShlAsm    :: SourcePos -> MemLoc -> RegLoc RegName              -> Asm O O
-  ShrAsm    :: SourcePos -> MemLoc -> RegLoc RegName              -> Asm O O  
-  CMovAsm   :: SourcePos -> CmpSInstr -> MemLoc -> RegLoc RegName -> Asm O O
-  StoreAsm  :: SourcePos -> MemLoc -> MemLoc                      -> Asm O O
-  LoadAsm   :: SourcePos -> MemLoc -> MemLoc                      -> Asm O O
-  JmpAsm    :: SourcePos -> Label                                 -> Asm O O
-  NopAsm    :: SourcePos                                          -> Asm O O
-  CJmpAsm   :: SourcePos -> CmpSInstr -> Label -> Label           -> Asm O C
-  RetAsm    :: SourcePos                                          -> Asm O C
+
+  Spill :: SourcePos -> Reg -> String -> Asm O O
+  Reload :: SourcePos -> String -> Reg -> Asm O O
+
+  MovIRMtoR :: SourcePos -> OperIRM -> Reg -> Asm O O
+  MovIRtoM  :: SourcePos -> OperIR -> MemAddr -> Asm O O
+  Mov64toR  :: SourcePos -> Imm64 -> Reg -> Asm O O
+
+  CMovRMtoR :: SourcePos -> Flag -> OperRM -> Reg -> Asm O O
+
+  Enter :: SourcePos -> Int -> Asm C O
+  Leave :: SourcePos -> Asm O O
+
+  Call :: SourcePos -> OperIRM -> Asm O O
+  Ret :: SourcePos -> Asm O C
+  RetPop :: SourcePos -> Imm16 -> Asm O C
+
+  Lea :: SourcePos -> MemAddr -> Reg -> Asm O O
+
+  Push :: SourcePos -> OperIRM -> Asm O O
+  Pop :: SourcePos -> OperRM -> Asm O O
+
+  Jmp :: SourcePos -> Imm32 -> Asm O C
+  JCond :: SourcePos -> Flag -> Imm32 -> Asm O C
+
+  ALU_IRMtoR :: SourcePos -> ALUOp -> OperIRM -> Reg -> Asm O O
+  ALU_IRtoM :: SourcePos -> ALUOp -> OperIR -> MemAddr -> Asm O O
+  Cmp :: SourcePos -> OperIR -> OperRM -> Asm O O
+
+  Inc :: SourcePos -> OperRM -> Asm O O
+  Dec :: SourcePos -> OperRM -> Asm O O
+
+  Neg :: SourcePos -> OperRM -> Asm O O
+
+  IMulRAX :: SourcePos -> OperRM -> Asm O O
+  IMulRM :: SourcePos -> OperRM -> Reg -> Asm O O
+  IMulImm :: SourcePos -> Imm32 -> OperRM -> Reg -> Asm O O
+
+  IDiv :: SourcePos -> OperRM -> Asm O O
+
+  -- shift left/right
+  Shl :: SourcePos -> Imm8 -> OperRM -> Asm O O
+  Shr :: SourcePos -> Imm8 -> OperRM -> Asm O O
+  -- shift arithmetic right (beware, different from idiv!)
+  Sar :: SourcePos -> Imm8 -> OperRM -> Asm O O
+
+  Nop :: SourcePos -> Asm O O
   
 instance NonLocal Asm where
-  entryLavel (Label _ lbl) = lbl
+  entryLabel (Label _ lbl) = lbl
+  successors (Jmp _ 
   successors (CJmpAsm _ tr fa) = [tr, fa]
   successors (RetAsm _) = []
 
