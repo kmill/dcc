@@ -12,8 +12,12 @@ instance Show RegName where
   show (FReg reg) = show reg
   show (SymReg val) = "#Where goes Reg " ++ (show val)
 
-data ConstLoc = Label
-              | Int64
+data ConstLoc = CLabel Label
+              | CInt Int64
+
+instance Show ConstLoc where
+  show (CLabel lab) = lab
+  show (CInt it) = show it
 
 data MemLoc = MemConst Int64
             | LabelLoc Label
