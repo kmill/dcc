@@ -51,16 +51,17 @@ data TargetFlag = TargetScan -- ^ Given by @scan@.
                 | TargetDefault -- ^ The default value if no target is given.
                   deriving (Show)
 
-data OptFlags = OptFlags { optCSE :: Bool
-                         , optCP :: Bool
-                         , optDC :: Bool
-                         , optBE :: Bool 
+data OptFlags = OptFlags { optCommonSubElim :: Bool
+                         , optConstProp :: Bool
+                         , optCopyProp :: Bool
+                         , optDeadCode :: Bool
+                         , optBlockElim :: Bool 
                          , optFlat :: Bool 
                          , optRA :: Bool }
               deriving (Show)
 
-optAll = OptFlags True True True True True True
-optNone = OptFlags False False False False False False
+optAll = OptFlags True True True True True True True
+optNone = OptFlags False False False False False False False
 
 options :: [OptDescr (CompilerOpts -> CompilerOpts)]
 options =
@@ -70,13 +71,15 @@ options =
     , Option ['c']     ["compat"]  (NoArg compat')             "Enables compatibility mode with 6.035 output spec"
     , Option ['h']  ["help"]    (NoArg help')               "Prints this usage information"
     , Option ['O']     ["opt"]     (ReqArg optimize' "OPTIMIZATION") ("Enables optimizations:\n" ++
-                                                                      "\t all : Enables ALL optimizations\n" ++
-                                                                      "\tnone : Disables ALL optimizations\n" ++
-                                                                      "\t cse : Constant Subexpression Elimination\n" ++
-                                                                      "\t  cp : Copy Propagation\n" ++
-                                                                      "\t  dc : Dead Code Elimination\n" ++
-                                                                      "\tflat : Flatten Optimization\n" ++
-                                                                      "\t  ra : Register Allocation")
+                                                                      "\t      all : Enables ALL optimizations\n" ++
+                                                                      "\t     none : Disables ALL optimizations\n" ++
+                                                                      "\t      cse : Constant Subexpression Elimination\n" ++
+                                                                      "\t copyprop : Copy Propagation\n" ++
+                                                                      "\tconstprop : Constant Propagation\n" ++
+                                                                      "\t deadcode : Dead Code Elimination\n" ++
+                                                                      "\tblockelim : Block Elimination\n" ++
+                                                                      "\t     flat : Flatten Optimization\n" ++
+                                                                      "\t       ra : Register Allocation")
     ]
     where outfile' s opts = opts { outputFile = Just s }
           target' t opts = opts { target = targetOpt t }
@@ -102,10 +105,11 @@ optOpt :: CompilerOpts -> String -> OptFlags
 optOpt opts s 
   = case s of
     "all" -> optAll
-    "cse" -> oFlags { optCSE = True }
-    "cp" -> oFlags { optCP = True }
-    "dc" -> oFlags { optDC = True }  
-    "be" -> oFlags { optBE = True }
+    "cse" -> oFlags { optCommonSubElim = True }
+    "constprop" -> oFlags { optConstProp = True }
+    "copyprop" -> oFlags { optCopyProp = True }
+    "deadcode" -> oFlags { optDeadCode = True }  
+    "blockelim" -> oFlags { optBlockElim = True }
     "flat" -> oFlags { optFlat = True }
     "ra" -> oFlags { optRA = True }
     "none" -> optNone
