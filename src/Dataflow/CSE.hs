@@ -53,7 +53,7 @@ exprAvailable nonTemps = mkFTransfer trace_ft
                               then trace "Totally a temp" newFact 
                               else trace "Not a temp" (case expr of  
                                                          (Var pos varName) 
-                                                             | isTemp nonTemps varName -> PElem $ Map.insert (Var pos x) varName lastMap
+                                                             | isTemp nonTemps varName -> invalidateExprsWith x f
                                                          _ -> f) 
           where newFact = PElem newMap 
                 newMap = Map.insert expr x lastMap
