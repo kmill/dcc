@@ -60,25 +60,37 @@ instance FuelMonadT StupidFuelMonadT where
 
 ---
 
+
 performDataflowAnalysis :: MidIRRepr -> RM MidIRRepr 
 performDataflowAnalysis midir 
-    = do midir <- performConstPropPass midir
-         midir <- performDeadCodePass midir
-         midir <- performBlockElimPass midir
---         midir <- performDeadCodePass midir
-         midir <- performFlattenPass midir
+    = do midir <- performFwdPass constPropPass midir emptyFact
+         midir <- performBwdPass deadCodePass midir S.empty
+         midir <- performBwdPass blockElimPass midir Nothing
+--         midir <- performBwdPass deadCodePass midir
+         midir <- performFwdPass flattenPass midir ()
          midir <- performCSEPass midir
          return midir
 
-performConstPropPass :: MidIRRepr -> RM MidIRRepr 
-performConstPropPass midir 
-    = do (graph', factBase, _) <- analyzeAndRewriteFwd
-                                  constPropPass
+performFwdPass :: (FwdPass (StupidFuelMonadT GM) MidIRInst a) -> MidIRRepr -> a -> RM MidIRRepr
+performFwdPass pass midir eFact
+  = do (graph', factBase, _) <- analyzeAndRewriteFwd
+                                pass
+                                (JustC mlabels)
+                                graph
+                                (mapFromList (map (\l -> (l, eFact) ) mlabels))
+       return $ midir { midIRGraph = graph' }
+    where graph = midIRGraph midir
+          mlabels = (map methodEntry $ midIRMethods midir)
+
+performBwdPass :: (BwdPass (StupidFuelMonadT GM) MidIRInst a) -> MidIRRepr -> a -> RM MidIRRepr 
+performBwdPass pass midir eFact
+    = do (graph', factBase, _) <- analyzeAndRewriteBwd 
+                                  pass
                                   (JustC mlabels)
                                   graph
-                                  (mapFromList (map (\l -> (l, emptyFact) ) mlabels))
-         return $ midir { midIRGraph = graph'}
-    where graph = midIRGraph midir
+                                  (mapFromList (map (\l -> (l, eFact) ) mlabels))
+         return $ midir { midIRGraph = graph' }
+    where graph = midIRGraph midir 
           mlabels = (map methodEntry $ midIRMethods midir)
 
 performCSEPass :: MidIRRepr -> RM MidIRRepr 
@@ -94,43 +106,6 @@ performCSEPass midir
     where graph = midIRGraph midir 
           mlabels = (map methodEntry $ midIRMethods midir)
 
-performFlattenPass :: MidIRRepr -> RM MidIRRepr 
-performFlattenPass midir 
-    = do (graph', factBase, _) <- analyzeAndRewriteFwd
-                                  flattenPass
-                                  (JustC mlabels)
-                                  graph
-                                  (mapFromList (map (\l -> (l,()) ) mlabels))
-         return $ midir { midIRGraph = graph' }
-    where graph = midIRGraph midir
-          mlabels = (map methodEntry $ midIRMethods midir)
-
-
-performDeadCodePass :: MidIRRepr -> RM MidIRRepr 
-performDeadCodePass midir 
-    = do (graph', factBase, _) <- analyzeAndRewriteBwd 
-                                  deadCodePass
-                                  (JustC mlabels)
-                                  graph
-                                  mapEmpty
-         return $ midir { midIRGraph = graph' }
-    where graph = midIRGraph midir 
-          mlabels = (map methodEntry $ midIRMethods midir)
-
-performBlockElimPass :: MidIRRepr -> RM MidIRRepr
-performBlockElimPass midir
-  = do (graph', factBase, _) <- analyzeAndRewriteBwd
-                                blockElimPass
-                                (JustC mlabels)
-                                graph
-                                mapEmpty
-       return $ midir { midIRGraph = graph' }
-    where graph = midIRGraph midir
-          mlabels = (map methodEntry $ midIRMethods midir)
-
-
-
-      
 -- (trace (map (show . entryLabel) (forwardBlockList mlabels body)) body)
 
 constPropPass :: (CheckpointMonad m, FuelMonad m) => FwdPass m MidIRInst ConstFact 
