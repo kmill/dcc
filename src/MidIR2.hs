@@ -48,7 +48,7 @@ instance UniqueMonad MidM where
     freshUnique = lift freshUnique
 
 newLocalEnvEntry :: String -> IREnv -> MidM (VarName, IREnv)
-newLocalEnvEntry s env = do s' <- lift $ genUniqueName "local"
+newLocalEnvEntry s env = do s' <- lift $ genUniqueName ("local_" ++ s)
                             return (MV s', (s,(False, MV s')):env)
 newLocalEnvEntries :: [String] -> IREnv -> MidM ([VarName], IREnv)
 newLocalEnvEntries [] env = return ([], env)
