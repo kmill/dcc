@@ -53,7 +53,7 @@ exprAvailable nonTemps = mkFTransfer trace_ft
                               else trace "Not a temp" (case expr of  
                                                          (Var pos varName) 
                                                              | isTemp nonTemps varName -> PElem $ Map.insert (Var pos x) varName lastMap
-                                                         _ -> f)
+                                                         _ -> f) 
           where newFact = PElem newMap 
                 newMap = Map.insert expr x lastMap
                 lastMap = case f of
@@ -82,7 +82,7 @@ cseRewrite nonTemps = deepFwdRw cse
       cse (Store _ x (Var _ v)) f
           | isTemp nonTemps v = return Nothing 
       cse (Store pos x expr) f 
-          | isTemp nonTemps x
+          | not $ isTemp nonTemps x
           = case lookupExpr expr f of 
               Just varName -> return $ Just $ insnToG $ Store pos x (Var pos varName)
               Nothing -> do tempName <- genUniqueName "cse"

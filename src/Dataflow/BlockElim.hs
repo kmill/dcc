@@ -20,6 +20,7 @@ lastLabelLattice = DataflowLattice { fact_name = "Last Labels"
 
 --fromJust is fine due to Branches in the original nodes being Just
 
+lastLabelness :: BwdTransfer MidIRInst LastLabel
 lastLabelness = mkBTransfer f
   where f :: MidIRInst e x -> Fact x LastLabel -> LastLabel
         f (Branch _ l) k = 
@@ -33,19 +34,21 @@ lastLabelness = mkBTransfer f
 
 --Special case of fromJust for Branch, since it could be removed in the previous transfer.
 lastLabelElim :: forall m . FuelMonad m => BwdRewrite m MidIRInst LastLabel
-lastLabelElim = mkBRewrite ll
+lastLabelElim = deepBwdRw ll
   where
     ll :: MidIRInst e x -> Fact x LastLabel -> m (Maybe (Graph MidIRInst e x))
     ll (Branch p l) f = 
       return $ case lookupFact l f of
           Nothing -> Nothing
           Just mm -> mm >>= (Just . mkLast . (Branch p))
-    ll (CondBranch p ce tl fl) f =
-      return $ do tl' <- fun tl
-                  fl' <- fun fl
-                  guard $ [tl', fl'] /= [tl, fl]
-                  return $ mkLast $ CondBranch p ce tl' fl'
-      where
-        fun :: Label -> Maybe Label
-        fun l = fromJust (lookupFact l f) `mplus` (Just l)
+    ll (CondBranch p ce tl fl) f
+        | tl == fl = return $ Just $ mkLast $ Branch p tl
+        | otherwise =
+            return $ do tl' <- fun tl
+                        fl' <- fun fl
+                        guard $ [tl', fl'] /= [tl, fl]
+                        Just $ mkLast $ CondBranch p ce tl' fl'
+        where
+          fun :: Label -> Maybe Label
+          fun l = fromJust (lookupFact l f) `mplus` (Just l)
     ll _ f = return Nothing
