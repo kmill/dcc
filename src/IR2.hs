@@ -1,10 +1,11 @@
-{-# LANGUAGE GADTs, RankNTypes, TypeSynonymInstances #-}
+{-# LANGUAGE GADTs, RankNTypes, TypeSynonymInstances, TypeFamilies #-}
 
 module IR2 where
 
 import Text.ParserCombinators.Parsec.Pos (newPos, SourcePos)
 
 import Compiler.Hoopl
+import Compiler.Hoopl.Checkpoint(CheckpointMonad(..))
 import Data.Int
 import Data.List
 import Data.Maybe
@@ -23,10 +24,33 @@ intToBool :: Int64 -> Bool
 intToBool = (/= 0) 
 
 -- | This is the type of the monad for working with graphs in Hoopl.
-type GM = SimpleUniqueMonad
+newtype GM a = GM { runGM' :: [Unique] -> [Int] -> ([Unique], [Int], a) }
+
+instance Monad GM where
+    return x = GM $ \u v -> (u, v, x)
+    ma >>= f = GM $ \u v -> let (u', v', a) = runGM' ma u v
+                            in runGM' (f a) u' v'
+
+genUniqueName :: String -> GM String
+genUniqueName prefix = GM $ \u v ->
+                       case v of
+                         (v:vs) -> (u, vs, "@" ++ prefix ++ "_" ++ show v)
+                         _ -> error "GM ran out of unique names! :-("
+
+instance UniqueMonad GM where
+    freshUnique = GM $ \u v ->
+                  case u of
+                    (u:us) -> (us, v, u)
+                    _ -> error "GM ran out of Uniques! :-("
+
+instance CheckpointMonad GM where
+    type Checkpoint GM = ([Unique], [Int])
+    checkpoint = GM $ \u v -> (u, v, (u, v))
+    restart (u, v) = GM $ \_ _ -> (u, v, ())
 
 runGM :: GM a -> a
-runGM = runSimpleUniqueMonad
+runGM g = a
+    where (_, _, a) = runGM' g (map intToUnique [1..]) [1..]
 
 instance Functor GM where
     fmap f ma = do a <- ma

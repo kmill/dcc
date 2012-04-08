@@ -34,8 +34,7 @@ generateMidIR prgm = programToMidIR prgm
 type IREnv = [(String, (Bool, VarName))] -- (name, (is_field, mangled_name))
 
 data MidIRState = MidIRState
-    { genVarId :: Int
-    , genStrId :: Int
+    { genStrId :: Int
     , genStrPrefix :: String
     , stringMap :: [(String, SourcePos, String)]
     }
@@ -49,9 +48,7 @@ instance UniqueMonad MidM where
     freshUnique = lift freshUnique
 
 newLocalEnvEntry :: String -> IREnv -> MidM (VarName, IREnv)
-newLocalEnvEntry s env = do st <- get
-                            let s' = "local_" ++ show (genVarId st) ++ "_" ++ s
-                            put (st { genVarId = 1 + genVarId st } )
+newLocalEnvEntry s env = do s' <- lift $ genUniqueName "local"
                             return (MV s', (s,(False, MV s')):env)
 newLocalEnvEntries :: [String] -> IREnv -> MidM ([VarName], IREnv)
 newLocalEnvEntries [] env = return ([], env)
@@ -61,9 +58,8 @@ newLocalEnvEntries (s:ss) env
          return (s:ss', env'')
 
 genTmpVar :: MidM VarName
-genTmpVar = do s <- get
-               put $ s { genVarId = 1 + genVarId s }
-               return $ MV $ "temp_" ++ (show $ genVarId s)
+genTmpVar = do s' <- lift $ genUniqueName "temp"
+               return $ MV s'
 
 genStr :: SourcePos -> String -> MidM String
 genStr pos str
@@ -107,8 +103,7 @@ programToMidIR (HDProgram _ _ fields methods)
                          HPlainVar e pos tok -> (tokenString tok, "field_" ++ tokenString tok)
                          HArrayVar e pos tok l -> (tokenString tok, "field_" ++ tokenString tok))
           initstate = MidIRState
-              { genVarId = 0
-              , genStrId = 0
+              { genStrId = 0
               , genStrPrefix = error "method should set this"
               , stringMap = [] }
           domethods = runStateT (mapM (methodToMidIR initenv) methods) initstate
