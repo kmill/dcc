@@ -4,7 +4,7 @@ module Dataflow.DeadCode where
 
 import qualified Data.Set as S
 
---import Dataflow.OptSupport
+import Dataflow.OptSupport
 import Compiler.Hoopl 
 import IR2
 import Data.Maybe
