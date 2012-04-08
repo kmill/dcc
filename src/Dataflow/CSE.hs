@@ -33,7 +33,7 @@ exprAvailable nonTemps = mkFTransfer ft
       ft :: MidIRInst e x -> ExprFact -> Fact x ExprFact 
       ft (Label _ _) f = f
       ft (Enter _ _ _) f = f
-      ft (Store _ x expr) f = handleAssign x f
+      ft (Store _ x expr) f = handleAssign x expr f
       ft (CondStore _ x _ _ _) f = invalidateExprsWith x f
       ft (IndStore _ _ _) f = destroyLoads f
       ft (Spill _ _) f = f
@@ -46,8 +46,14 @@ exprAvailable nonTemps = mkFTransfer ft
                                    , (fl, f) ]
       ft (Return _ _) f = mapEmpty 
       ft (Fail _) f = mapEmpty 
-      handleAssign :: VarName -> ExprFact -> ExprFact
-      handleAssign x f = error "Not Implemented yet :-{"
+      handleAssign :: VarName -> MidIRExpr -> ExprFact -> ExprFact
+      handleAssign x expr f = if isTemp nonTemps x 
+                              then newFact 
+                              else invalidateExprsWith x f 
+          where newFact = PElem newMap 
+                newMap = case f of 
+                           Bot -> Map.insert expr x Map.empty 
+                           PElem oldMap -> Map.insert expr x oldMap
       invalidateExprsWith :: VarName -> ExprFact -> ExprFact
       invalidateExprsWith _ Bot = Bot 
       invalidateExprsWith x (PElem oldMap) = PElem newMap 
