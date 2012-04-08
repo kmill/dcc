@@ -68,7 +68,7 @@ performDataflowAnalysis midir
          midir <- performBwdPass blockElimPass midir Nothing
 --         midir <- performBwdPass deadCodePass midir
          midir <- performFwdPass flattenPass midir ()
-         midir <- performCSEPass midir
+         --midir <- performCSEPass midir
          return midir
 
 performFwdPass :: (FwdPass (StupidFuelMonadT GM) MidIRInst a) -> MidIRRepr -> a -> RM MidIRRepr
