@@ -3,6 +3,7 @@ module Dataflow where
 
 import Dataflow.ConstProp
 import Dataflow.DeadCode
+import Dataflow.CSE
 
 import Control.Monad.Trans
 
