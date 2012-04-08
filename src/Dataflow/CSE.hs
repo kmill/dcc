@@ -57,6 +57,7 @@ exprAvailable nonTemps = mkFTransfer trace_ft
                                                          _ -> f) 
           where newFact = PElem newMap 
                 newMap = Map.insert expr x lastMap
+                lastMap :: Map.Map MidIRExpr VarName
                 lastMap = case f of
                             Bot -> Map.empty
                             PElem oldMap -> oldMap
