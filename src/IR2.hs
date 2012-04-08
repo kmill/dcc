@@ -60,11 +60,10 @@ instance Functor GM where
 --- IRs
 ---
 
-data VarName = MV String | MReg X86Reg deriving (Eq, Ord)
+data VarName = MV String deriving (Eq, Ord)
 
 instance Show VarName where
     show (MV s) = s
-    show (MReg r) = show r
     
 varToLabel :: SourcePos -> VarName -> Expr VarName
 varToLabel pos (MV s) = LitLabel pos s
@@ -76,18 +75,8 @@ data MidIRRepr = MidIRRepr
     , midIRGraph :: Graph MidIRInst C C }
 data MidIRField = MidIRField SourcePos String (Maybe Int64)
 
-data LowIRRepr = LowIRRepr
-    { lowIRFields :: [LowIRField]
-    , lowIRStrings :: [(String, SourcePos, String)]
-    , lowIRMethods :: [Method]
-    , lowIRGraph :: Graph LowIRInst C C }
-data LowIRField = LowIRField SourcePos String Int64
-
 type MidIRInst = Inst VarName
-type LowIRInst = Inst Reg
-
 type MidIRExpr = Expr VarName
-type LowIRExpr = Expr Reg
 
 ---
 --- Methods
@@ -136,7 +125,7 @@ mapE f (BinOp pos op exp1 exp2) = BinOp pos op (mapE f exp1) (mapE f exp2)
 -- | 'v' is type of variables. Confused?  Look at Show (Inst v e x).
 data Inst v e x where
     Label      :: SourcePos -> Label                           -> Inst v C O
-    Enter      :: SourcePos -> Label -> Int                    -> Inst v C O
+    Enter      :: SourcePos -> Label -> [v]                    -> Inst v C O
     Store      :: SourcePos -> v -> Expr v                     -> Inst v O O
     -- | Semantics of (CondStore _ dest cond texp fexp) are
     -- dest := cond ? texp : fexp, with both texp and fexp
@@ -164,7 +153,7 @@ instance NonLocal (Inst v) where
 -- | applies a function which replaces variables
 mapI :: (v1 -> v2) -> Inst v1 e x -> Inst v2 e x
 mapI f (Label pos l) = Label pos l
-mapI f (Enter pos l nargs) = Enter pos l nargs
+mapI f (Enter pos l args) = Enter pos l (map f args)
 mapI f (Store pos d exp) = Store pos (f d) (mapE f exp)
 mapI f (CondStore pos d cexp texp fexp) = CondStore pos (f d) (mapE f cexp) (mapE f texp) (mapE f fexp)
 mapI f (IndStore pos d s) = IndStore pos (mapE f d) (mapE f s)
@@ -176,57 +165,6 @@ mapI f (Branch pos l) = Branch pos l
 mapI f (CondBranch pos cexp lt lf) = CondBranch pos (mapE f cexp) lt lf
 mapI f (Return pos mexp) = Return pos (mexp >>= Just . (mapE f))
 mapI f (Fail pos) = Fail pos
-
----
---- Registers
----
-
--- | This is the order of arguments in registers for the ABI.
--- 'Nothing' represents that the argument comes from the stack.
-argOrder :: [Maybe X86Reg]
-argOrder = (map Just [RDI, RSI, RDX, RCX, R8, R9]) ++ nothings
-    where nothings = Nothing:nothings
-
-argStackDepth :: [Int]
-argStackDepth = [no, no, no, no, no, no] ++ [16, 16+8..]
-    where no = error "argStackDepth for non-stack-arg :-("
-
--- | Gives a midir expression for getting any particular argument.
-argExprs :: SourcePos -> [Expr VarName]
-argExprs pos = (map (Var pos . MReg) [RDI, RSI, RDX, RCX, R8, R9])
-               ++ (map (\d -> Load pos (BinOp pos OpAdd (Lit pos d) (Var pos (MReg RBP))))
-                   [16, 16+8..])
-
-callerSaved :: [X86Reg]
-callerSaved = [RAX, R10, R11]
-
-calleeSaved :: [X86Reg]
-calleeSaved = [RBP, RBX, R12, R13, R14, R15] -- should RBP be in this?
-
-data X86Reg = RAX -- temp reg, return value
-            | RBX -- callee-saved
-            | RCX -- 4th arg
-            | RDX -- 3rd arg
-            | RSP -- stack pointer
-            | RBP -- base pointer (callee-saved)
-            | RSI -- 2nd argument
-            | RDI -- 1st argument
-            | R8 -- 5th argument
-            | R9 -- 6th argument
-            | R10 -- temporary
-            | R11 -- temporary
-            | R12 -- callee-saved
-            | R13 -- callee-saved
-            | R14 -- callee-saved
-            | R15 -- callee-saved
-              deriving (Eq, Ord)
-
-data Reg = RReg X86Reg
-         | SReg Int
-           deriving (Eq, Ord)
-instance Show Reg where
-    show (RReg r) = show r
-    show (SReg i) = "%s" ++ show i
 
 
 ------------------------------------------------------------
@@ -264,8 +202,8 @@ instance Show v => Show (Inst v e x) where
         = printf "%s:  {%s};"
           (show lbl) (showPos pos)
     show (Enter pos lbl args)
-        = printf "%s: enter (%s args)  {%s};"
-          (show lbl) (show args) (showPos pos)
+        = printf "%s: enter (%s)  {%s};"
+          (show lbl) (intercalate ", " (map show args)) (showPos pos)
     show (Store pos var expr)
         = printf "%s := %s  {%s};"
           (show var) (show expr) (showPos pos)
@@ -304,25 +242,6 @@ instance Show Method where
     show (Method pos name entry)
         = "method " ++ name
           ++ " goto " ++ show entry
-
-instance Show X86Reg where
-    show RAX = "%rax"
-    show RBX = "%rbx"
-    show RCX = "%rcx"
-    show RDX = "%rdx"
-    show RSP = "%rsp"
-    show RBP = "%rbp"
-    show RSI = "%rsi"
-    show RDI = "%rdi"
-    show R8 = "%r8"
-    show R9 = "%r9"
-    show R10 = "%r10"
-    show R11 = "%r11"
-    show R12 = "%r12"
-    show R13 = "%r13"
-    show R14 = "%r14"
-    show R15 = "%r15"
-
 
 instance Show MidIRRepr where
     show (MidIRRepr fields strs methods graph)

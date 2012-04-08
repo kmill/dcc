@@ -4,6 +4,7 @@ module Dataflow where
 import Dataflow.ConstProp
 import Dataflow.DeadCode
 import Dataflow.CSE
+import Dataflow.BlockElim
 
 import Control.Monad.Trans
 
@@ -51,7 +52,9 @@ instance Monad m => FuelMonad (StupidFuelMonadT m) where
 performDataflowAnalysis :: MidIRRepr -> RM MidIRRepr 
 performDataflowAnalysis midir 
     = do midir <- performConstPropPass midir
-         midir <- performDeadCodePass midir 
+         midir <- performDeadCodePass midir
+         midir <- performBlockElimPass midir
+         midir <- performDeadCodePass midir
          return midir
 
 performConstPropPass :: MidIRRepr -> RM MidIRRepr 
@@ -76,6 +79,17 @@ performDeadCodePass midir
     where graph = midIRGraph midir 
           mlabels = (map methodEntry $ midIRMethods midir)
 
+performBlockElimPass :: MidIRRepr -> RM MidIRRepr
+performBlockElimPass midir
+  = do (graph', factBase, _) <- analyzeAndRewriteBwd
+                                blockElimPass
+                                (JustC mlabels)
+                                graph
+                                mapEmpty
+       return $ midir { midIRGraph = graph' }
+    where graph = midIRGraph midir
+          mlabels = (map methodEntry $ midIRMethods midir)
+
       
 -- (trace (map (show . entryLabel) (forwardBlockList mlabels body)) body)
 
@@ -91,3 +105,9 @@ deadCodePass = BwdPass
                { bp_lattice = liveLattice
                , bp_transfer = liveness
                , bp_rewrite = deadAsstElim }
+               
+blockElimPass :: (CheckpointMonad m, FuelMonad m) => BwdPass m MidIRInst LastLabel
+blockElimPass = BwdPass
+                { bp_lattice = lastLabelLattice
+                , bp_transfer = lastLabelness
+                , bp_rewrite = lastLabelElim }
