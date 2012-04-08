@@ -3,16 +3,19 @@ module Dataflow where
 
 import Dataflow.ConstProp
 import Dataflow.DeadCode
-import Dataflow.CSE
+--import Dataflow.CSE
 import Dataflow.BlockElim
 import Dataflow.Flatten
 
 import Control.Monad.Trans
 
+import qualified Data.Set as S
+
 import Compiler.Hoopl
 import Compiler.Hoopl.Fuel
 import IR2 
 import Debug.Trace
+import Data.Maybe
 
 type RM = StupidFuelMonadT GM
 
@@ -139,3 +142,56 @@ flattenPass = FwdPass
               { fp_lattice = nullLattice
               , fp_transfer = nullTransfer
               , fp_rewrite = flattenRewrite } 
+
+
+
+---
+--- Get used variables
+---
+
+getVariables :: MidIRRepr -> RM (FactBase (S.Set VarName))
+getVariables midir 
+    = do (_, factBase, _) <- analyzeAndRewriteBwd 
+                             getVariablesPass
+                             (JustC mlabels)
+                             graph
+                             mapEmpty
+         return $ factBase
+    where graph = midIRGraph midir 
+          mlabels = (map methodEntry $ midIRMethods midir)
+
+
+getVariablesPass :: (CheckpointMonad m, FuelMonad m)
+                    => BwdPass m MidIRInst (S.Set VarName)
+getVariablesPass = BwdPass
+                   { bp_lattice = getVarsLattice
+                   , bp_transfer = getVarsTransfer
+                   , bp_rewrite = noBwdRewrite }
+    where
+      getVarsLattice :: DataflowLattice (S.Set VarName)
+      getVarsLattice = DataflowLattice
+                       { fact_name = "used variables"
+                       , fact_bot = S.empty
+                       , fact_join = add
+                       }
+          where add _ (OldFact old) (NewFact new) = (ch, j)
+                    where j = new `S.union` old
+                          ch = changeIf $ S.size j > S.size old
+
+      getVarsTransfer :: BwdTransfer MidIRInst (S.Set VarName)
+      getVarsTransfer = mkBTransfer used
+          where
+            used :: MidIRInst e x -> Fact x (S.Set VarName) -> S.Set VarName
+            used Label{} f = f
+            used (Enter _ _ args) f = f `S.union` (S.fromList args)
+            used (Store _ x _) f = S.insert x f
+            used IndStore{} f = f
+            used (Call _ x _ _) f = S.insert x f
+            used (Callout _ x _ _) f = S.insert x f
+            used (Branch _ l) f = fact f l
+            used (CondBranch _ _ tl fl) f = fact f tl `S.union` fact f fl
+            used Return{} f = fact_bot getVarsLattice
+            used Fail{} f = fact_bot getVarsLattice
+
+            fact :: FactBase (S.Set VarName) -> Label -> S.Set VarName
+            fact f l = fromMaybe S.empty $ lookupFact l f 
