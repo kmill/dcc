@@ -87,11 +87,14 @@ data Expr v = Lit SourcePos Int64
             | Load SourcePos (Expr v)
             | UnOp SourcePos UnOp (Expr v)
             | BinOp SourcePos BinOp (Expr v) (Expr v)
+              deriving (Eq, Ord)
 
 
 data UnOp = OpNeg | OpNot
+            deriving (Eq, Ord)
 data BinOp = OpAdd | OpSub | OpMul | OpDiv | OpMod
            | CmpLT | CmpGT | CmpLTE | CmpGTE | CmpEQ | CmpNEQ
+             deriving (Eq, Ord)
 
 -- | applies a function which replaces variables
 mapE :: (v1 -> v2) -> Expr v1 -> Expr v2
