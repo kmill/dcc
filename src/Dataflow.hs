@@ -3,7 +3,7 @@ module Dataflow where
 
 import Dataflow.ConstProp
 import Dataflow.DeadCode
---import Dataflow.CSE
+import Dataflow.CSE
 import Dataflow.BlockElim
 import Dataflow.Flatten
 
@@ -67,6 +67,7 @@ performDataflowAnalysis midir
          midir <- performBlockElimPass midir
 --         midir <- performDeadCodePass midir
          midir <- performFlattenPass midir
+         midir <- performCSEPass midir
          return midir
 
 performConstPropPass :: MidIRRepr -> RM MidIRRepr 
@@ -78,6 +79,19 @@ performConstPropPass midir
                                   (mapFromList (map (\l -> (l, emptyFact) ) mlabels))
          return $ midir { midIRGraph = graph'}
     where graph = midIRGraph midir
+          mlabels = (map methodEntry $ midIRMethods midir)
+
+performCSEPass :: MidIRRepr -> RM MidIRRepr 
+performCSEPass midir 
+    = do nonTemps <- getVariables midir
+         let nonTemps' = S.unions $ mapElems nonTemps
+         (graph', factBase, _) <- analyzeAndRewriteFwd
+                                  (csePass nonTemps')
+                                  (JustC mlabels)
+                                  graph
+                                  (mapFromList (map (\l -> (l, emptyExprFact) ) mlabels))
+         return $ midir { midIRGraph = graph'}
+    where graph = midIRGraph midir 
           mlabels = (map methodEntry $ midIRMethods midir)
 
 performFlattenPass :: MidIRRepr -> RM MidIRRepr 
@@ -114,6 +128,8 @@ performBlockElimPass midir
     where graph = midIRGraph midir
           mlabels = (map methodEntry $ midIRMethods midir)
 
+
+
       
 -- (trace (map (show . entryLabel) (forwardBlockList mlabels body)) body)
 
@@ -142,6 +158,15 @@ flattenPass = FwdPass
               { fp_lattice = nullLattice
               , fp_transfer = nullTransfer
               , fp_rewrite = flattenRewrite } 
+
+
+csePass :: (CheckpointMonad m, FuelMonad m, UniqueNameMonad m) 
+           => S.Set VarName -> FwdPass m MidIRInst ExprFact
+csePass nonTemps = FwdPass 
+                   { fp_lattice = exprLattice
+                   , fp_transfer = exprAvailable nonTemps
+                   , fp_rewrite = cseRewrite nonTemps }
+
 
 
 ---
