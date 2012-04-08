@@ -22,6 +22,7 @@ import MidIR
 import LowIR
 import RegisterAllocator
 import Assembly
+import Assembly2
 import Dataflow
 import Compiler.Hoopl.Fuel
 

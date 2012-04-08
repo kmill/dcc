@@ -2,12 +2,14 @@
 
 module Assembly2 where
 
-import IR2
+import Compiler.Hoopl
+--import IR2
 import qualified Data.Map as Map
 import Data.Graphs
 import Data.List
-import AST(SourcePos)
+import AST(SourcePos, showPos)
 import Data.Int
+import Text.Printf
 
 data Reg = MReg X86Reg -- ^ a real machine register
          | SReg Int -- ^ a symbolic register
@@ -21,12 +23,12 @@ data Imm64 = Imm64 Int64
            | Imm64Label String Int64
 data Scalar = SOne | STwo | SFour | SEight
 data MemAddr = MemAddr
-    { baseReg :: Maybe RegName
+    { baseReg :: Maybe Reg
     , displace :: Imm32
-    , indexReg :: Maybe RegName
+    , indexReg :: Maybe Reg
     , scalar :: Scalar }
 data Flag = FlagZ | FlagNZ
-          | FlagL | FlagLE | Flag GE | Flag G
+          | FlagL | FlagLE | FlagGE | FlagG
           | FlagE | FlagNE
 
 data OperIRM = IRM_I Imm32
@@ -38,11 +40,11 @@ data OperRM = RM_R Reg
            | RM_M MemAddr
 
 instance Show OperIRM where
-    show (IRM_I imm) = show imm
+    show (IRM_I imm) = "$" ++ show imm
     show (IRM_R reg) = show reg
     show (IRM_M addr) = show addr
 instance Show OperIR where
-    show (IR_I imm) = show imm
+    show (IR_I imm) = "$" ++ show imm
     show (IR_R reg) = show reg
 instance Show OperRM where
     show (RM_R reg) = show reg
@@ -62,7 +64,7 @@ checkIf32able imm
 -- immediates.
 to32Imm :: Imm64 -> Imm32
 to32Imm (Imm64 x) = Imm32 $ fromIntegral x
-to32Imm (Imm64Block l x) = Imm32Block l $ fromIntegral x
+to32Imm (Imm64BlockLabel l x) = Imm32BlockLabel l $ fromIntegral x
 to32Imm (Imm64Label s x) = Imm32Label s $ fromIntegral x
 
 checkIfScalar :: Int64 -> Bool
@@ -85,16 +87,20 @@ instance Show Imm16 where
     show (Imm16 x) = show x
 instance Show Imm32 where
     show (Imm32 x) = show x
+    show (Imm32BlockLabel l 0) = show l
     show (Imm32BlockLabel l d)
         = "(" ++ show l ++ " + " ++ show d ++ ")"
+    show (Imm32Label s 0) = s
     show (Imm32Label s d)
-        = "(" ++ show s ++ " + " ++ show d ++ ")"
+        = "(" ++ s ++ " + " ++ show d ++ ")"
 instance Show Imm64 where
     show (Imm64 x) = show x
+    show (Imm64BlockLabel l 0) = show l
     show (Imm64BlockLabel l d)
         = "(" ++ show l ++ " + " ++ show d ++ ")"
+    show (Imm64Label s 0) = s
     show (Imm64Label s d)
-        = "(" ++ show s ++ " + " ++ show d ++ ")"
+        = "(" ++ s ++ " + " ++ show d ++ ")"
 instance Show Scalar where
     show SOne = error "shouldn't try to display scalar of one"
     show STwo = "2"
@@ -109,13 +115,13 @@ instance Show MemAddr where
     show (MemAddr Nothing lit (Just index) SOne)
         = show lit ++ "(, " ++ show index ++ ")"
     show (MemAddr Nothing lit (Just index) s)
-        = show lit ++ "(, " ++ show index ++ ", " ++ show s")"
+        = show lit ++ "(, " ++ show index ++ ", " ++ show s ++ ")"
     show (MemAddr (Just base) lit (Just index) SOne)
         = show lit ++ "(" ++ show base ++ ", "
           ++ show index ++ ")"
     show (MemAddr (Just base) lit (Just index) s)
         = show lit ++ "(" ++ show base ++ ", "
-          ++ show index ++ ", " ++ show s ")"
+          ++ show index ++ ", " ++ show s ++ ")"
 
 instance Show Flag where
     show FlagZ = "z"
@@ -203,7 +209,7 @@ instance Show ALUOp where
     show Xor = "xor"
 
 data Asm e x where
-  Label     :: SourcePos -> Label                                 -> Asm C O
+  Label     :: SourcePos -> Label -> Asm C O
 
   Spill :: SourcePos -> Reg -> String -> Asm O O
   Reload :: SourcePos -> String -> Reg -> Asm O O
@@ -214,12 +220,13 @@ data Asm e x where
 
   CMovRMtoR :: SourcePos -> Flag -> OperRM -> Reg -> Asm O O
 
-  Enter :: SourcePos -> Int -> Asm C O
+  Enter :: SourcePos -> Label -> Int -> Asm C O
   Leave :: SourcePos -> Asm O O
 
   Call :: SourcePos -> OperIRM -> Asm O O
   Ret :: SourcePos -> Asm O C
   RetPop :: SourcePos -> Imm16 -> Asm O C
+  ExitFail :: SourcePos -> Asm O C
 
   Lea :: SourcePos -> MemAddr -> Reg -> Asm O O
 
@@ -227,7 +234,8 @@ data Asm e x where
   Pop :: SourcePos -> OperRM -> Asm O O
 
   Jmp :: SourcePos -> Imm32 -> Asm O C
-  JCond :: SourcePos -> Flag -> Imm32 -> Asm O C
+  -- | label is if false (the "fall-through")
+  JCond :: SourcePos -> Flag -> Imm32 -> Label -> Asm O C
 
   ALU_IRMtoR :: SourcePos -> ALUOp -> OperIRM -> Reg -> Asm O O
   ALU_IRtoM :: SourcePos -> ALUOp -> OperIR -> MemAddr -> Asm O O
@@ -254,37 +262,82 @@ data Asm e x where
   
 instance NonLocal Asm where
   entryLabel (Label _ lbl) = lbl
-  successors (Jmp _ 
-  successors (CJmpAsm _ tr fa) = [tr, fa]
-  successors (RetAsm _) = []
+  entryLabel (Enter _ lbl _) = lbl
+  successors (Jmp _ (Imm32BlockLabel l 0)) = [l]
+  successors (Jmp _ _) = []
+  successors (JCond _ _ (Imm32BlockLabel tr 0) fa) = [tr, fa]
+  successors (JCond _ _ _ fa) = [fa]
+  successors (Ret _) = []
+  successors (RetPop _ _) = []
+  successors (ExitFail _) = []
 
-instance Show Asm where
-  show (LabelAsm _ l) = l ++ ":"
-  show (AddAsm _ op1 op2) = binOp "addq" op1 op2
-  show (SubAsm _ op1 op2) = binOp "subq" op1 op2
-  show (MulAsm _ op1 op2) = binOp "imulq" op1 op2
-  show (DivAsm _ op1)     = uniOp "idivq" op1 
-  show (ModAsm _ op1 op2) = binOp "modq" op1 op2
-  show (CmpAsm _ op1 op2) = binOp "addq" op1 op2
-  show (MovAsm _ op1 op2) = binOp "addq" op1 op2
-  show (NegAsm _ op1 op2) = binOp "addq" op1 op2
-  show (XorAsm _ op1 op2) = binOp "addq" op1 op2
-  show (ShlAsm _ op1 op2) = binOp "addq" op1 op2
-  show (ShrAsm _ op1 op2) = binOp "addq" op1 op2
-  show (CMovAsm _ csi op1 op2) = binOp ("cmov" ++ (show csi)) op1 op2
-  show (StoreAsm _ op1 op2) = binOp "movq" op1 op2
-  show (LoadAsm _ op1 op2) = binOp "movq" op1 op2
-  show (JmpAsm _ op1) = uniOp "jmp" op1
-  show (CJmpAsm _ csi op1 op2) = binOp ("j" ++ (show csi)) op1 op2
-  show (RetAsm _) = "return"
-  show (NopAsm _) = "nop"
+showNullOp :: String -> SourcePos -> String
+showNullOp opcode pos = printf "%s  # %s"
+                        opcode (showPos pos)
+showUnOp :: Show a => String -> SourcePos -> a -> String
+showUnOp opcode pos a = printf "%s %s  # %s"
+                        opcode (show a) (showPos pos)
+showBinOp :: (Show a, Show b) => String -> SourcePos -> a -> b -> String
+showBinOp opcode pos a b = printf "%s %s, %s  # %s"
+                           opcode (show a) (show b) (showPos pos)
 
-binOp :: String -> MemLoc -> MemLoc -> String
-binOp op o1 o2 = op ++ " " ++ (show o1) ++ " " ++ (show o2)
+instance Show (Asm e x) where
+  show (Label pos l)
+      = printf "%s:  # %s"
+        (show l) (showPos pos)
+  show (Spill pos reg sname)
+      = printf "SPILL %s, %s  # %s"
+        (show reg) (show sname) (showPos pos)
+  show (Reload pos reg sname)
+      = printf "RELOAD %s, %s  # %s"
+        (show sname) (show reg) (showPos pos)
+  show (MovIRMtoR pos a b) = showBinOp "movq" pos a b
+  show (MovIRtoM pos a b) = showBinOp "movq" pos a b
+  show (Mov64toR pos a b) = showBinOp "movq" pos a b
 
-uniOp :: String -> MemLoc -> String
-uniOp op o1 = op ++ " " ++ (show o1)
+  show (CMovRMtoR pos flag a b) = showBinOp opcode pos a b
+            where opcode = "cmov" ++ show flag ++ "q"
 
+  show (Enter pos lbl st) = printf "%s: enter $%d, $0  # %s"
+                            (show lbl) st (showPos pos)
+  show (Leave pos) = showNullOp "leave" pos
+
+  show (Call pos func) = showUnOp "call" pos func
+  show (Ret pos) = showNullOp "ret" pos
+  show (RetPop pos num) = showUnOp "ret" pos num
+  show (ExitFail pos) = showNullOp "ret" pos
+
+  show (Lea pos mem reg) = showBinOp "leaq" pos mem reg
+
+  show (Push pos oper) = showUnOp "pushq" pos oper
+  show (Pop pos oper) = showUnOp "popq" pos oper
+
+
+  show (Jmp pos oper) = showUnOp "jmp" pos oper
+  show (JCond pos flag oper fallthrough)
+      = (showUnOp opcode pos oper) ++ " falls to " ++ show fallthrough
+      where opcode = "j" ++ show flag
+
+  show (ALU_IRMtoR pos op a b) = showBinOp ((show op) ++ "q") pos a b
+  show (ALU_IRtoM pos op a b) = showBinOp ((show op) ++ "q") pos a b
+  show (Cmp pos a b) = showBinOp "cmpq" pos a b
+
+  show (Inc pos oper) = showUnOp "incq" pos oper
+  show (Dec pos oper) = showUnOp "decq" pos oper
+  show (Neg pos oper) = showUnOp "negq" pos oper
+
+  show (IMulRAX pos oper) = showUnOp "imulq" pos oper
+  show (IMulRM pos a b) = showBinOp "imulq" pos a b
+  show (IMulImm pos a b c) = printf "imulq %s, %s, %s  # %s"
+                             (show a) (show b) (show c) (showPos pos)
+
+  show (IDiv pos oper) = showUnOp "idivq" pos oper
+
+  show (Shl pos a b) = showBinOp "shlq" pos a b
+  show (Shr pos a b) = showBinOp "shrq" pos a b
+  show (Sar pos a b) = showBinOp "sarq" pos a b
+
+  show (Nop pos) = showNullOp "nop" pos
 
 ---
 --- Registers
@@ -300,11 +353,11 @@ argStackDepth :: [Int]
 argStackDepth = [no, no, no, no, no, no] ++ [16, 16+8..]
     where no = error "argStackDepth for non-stack-arg :-("
 
--- | Gives a midir expression for getting any particular argument.
-argExprs :: SourcePos -> [Expr VarName]
-argExprs pos = (map (Var pos . MReg) [RDI, RSI, RDX, RCX, R8, R9])
-               ++ (map (\d -> Load pos (BinOp pos OpAdd (Lit pos d) (Var pos (MReg RBP))))
-                   [16, 16+8..])
+---- | Gives a midir expression for getting any particular argument.
+--argExprs :: SourcePos -> [Expr VarName]
+--argExprs pos = (map (Var pos . MReg) [RDI, RSI, RDX, RCX, R8, R9])
+--               ++ (map (\d -> Load pos (BinOp pos OpAdd (Lit pos d) (Var pos (MReg RBP))))
+--                   [16, 16+8..])
 
 callerSaved :: [X86Reg]
 callerSaved = [RAX, R10, R11]
@@ -329,13 +382,6 @@ data X86Reg = RAX -- temp reg, return value
             | R14 -- callee-saved
             | R15 -- callee-saved
               deriving (Eq, Ord)
-
-data Reg = RReg X86Reg
-         | SReg Int
-           deriving (Eq, Ord)
-instance Show Reg where
-    show (RReg r) = show r
-    show (SReg i) = "%s" ++ show i
 
 instance Show X86Reg where
     show RAX = "%rax"

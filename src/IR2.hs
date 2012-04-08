@@ -12,6 +12,7 @@ import Data.Maybe
 import Text.Printf
 import Text.Regex
 import AST (PP, SourcePos, showPos)
+import Data.Ord
 
 bTrue, bFalse :: Int64
 bTrue = -1 -- i.e. all 1's
@@ -107,7 +108,72 @@ data Expr v = Lit SourcePos Int64
             | BinOp SourcePos BinOp (Expr v) (Expr v)
             -- | a ? b : c, evaluates both b and c
             | Cond SourcePos (Expr v) (Expr v) (Expr v)
-              deriving (Eq, Ord)
+
+instance Eq v => Eq (Expr v) where
+    (Lit _ i1) == (Lit _ i2)  = i1 == i2
+    (Var _ v1) == (Var _ v2)  = v1 == v2
+    (LitLabel _ s1) == (LitLabel _ s2)  = s1 == s2
+    (Load _ e1) == (Load _ e2)  = e1 == e2
+    (UnOp _ op1 e1) == (UnOp _ op2 e2)
+        = (op1, e1) == (op2, e2)
+    (BinOp _ op1 a1 b1) == (BinOp _ op2 a2 b2)
+        = (op1, a1, b1) == (op2, a2, b2)
+    (Cond _ a1 b1 c1) == (Cond _ a2 b2 c2)
+        = (a1, b1, c1) == (a2, b2, c2)
+    _ == _ = False
+
+instance Ord v => Ord (Expr v) where
+    compare (Lit _ i1) (Lit _ i2) = compare i1 i2
+    compare (Var _ v1) (Var _ v2) = compare v1 v2
+    compare (LitLabel _ s1) (LitLabel _ s2)
+        = compare s1 s2
+    compare (Load _ e1) (Load _ e2) = compare e1 e2
+    compare (UnOp _ op1 e1) (UnOp _ op2 e2)
+        = compare (op1, e1) (op2, e2)
+    compare (BinOp _ op1 a1 b1) (BinOp _ op2 a2 b2)
+        = compare (op1, a1, b1) (op2, a2, b2)
+    compare (Cond _ a1 b1 c1) (Cond _ a2 b2 c2)
+        = compare (a1, b1, c1) (a2, b2, c2)
+    compare Lit{} _ = LT
+    compare Var{} Lit{} = GT
+    compare Var{} _ = LT
+    compare LitLabel{} x
+        = case x of
+            Lit{} -> GT
+            Var{} -> GT
+            _ -> LT
+    compare Load{} x
+        = case x of
+            Lit{} -> GT
+            Var{} -> GT
+            LitLabel{} -> GT
+            _ -> LT
+    compare UnOp{} x
+        = case x of
+            Lit{} -> GT
+            Var{} -> GT
+            LitLabel{} -> GT
+            Load{} -> GT
+            _ -> LT
+    compare BinOp{} x
+        = case x of
+            Lit{} -> GT
+            Var{} -> GT
+            LitLabel{} -> GT
+            Load{} -> GT
+            UnOp{} -> GT
+            _ -> LT
+    compare Cond{} x
+        = case x of
+            Lit{} -> GT
+            Var{} -> GT
+            LitLabel{} -> GT
+            Load{} -> GT
+            UnOp{} -> GT
+            BinOp{} -> GT
+            _ -> LT
+
+
 
 
 data UnOp = OpNeg | OpNot
