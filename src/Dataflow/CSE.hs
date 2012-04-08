@@ -6,7 +6,7 @@ import Compiler.Hoopl
 import IR2
 import qualified Data.Map as Map
 import qualified Data.Set as S
-import Debug.Trace
+
 
 type ExprFact = WithBot (Map.Map MidIRExpr VarName)
 exprLattice :: DataflowLattice ExprFact 
@@ -31,14 +31,12 @@ emptyExprFact :: ExprFact
 emptyExprFact = fact_bot exprLattice
 
 exprAvailable :: S.Set VarName -> FwdTransfer MidIRInst ExprFact 
-exprAvailable nonTemps = mkFTransfer trace_ft 
-    where 
-      trace_ft :: MidIRInst e x -> ExprFact -> Fact x ExprFact 
-      trace_ft node f = trace (show f) (ft node f)
+exprAvailable nonTemps = mkFTransfer ft 
+    where
       ft :: MidIRInst e x -> ExprFact -> Fact x ExprFact 
       ft (Label _ _) f = f
       ft (Enter _ _ args) f = foldl (flip invalidateExprsWith) f args
-      ft (Store _ x expr) f = trace "Handlin that assign" (handleAssign x expr f)
+      ft (Store _ x expr) f = handleAssign x expr f
       ft (IndStore _ _ _) f = destroyLoads f
       ft (Call _ x _ _) f = invalidateExprsWith x f
       ft (Callout _ x _ _) f = invalidateExprsWith x f 
@@ -50,11 +48,11 @@ exprAvailable nonTemps = mkFTransfer trace_ft
       ft (Fail _) f = mapEmpty 
       handleAssign :: VarName -> MidIRExpr -> ExprFact -> ExprFact
       handleAssign x expr f = if isTemp nonTemps x 
-                              then trace "Totally a temp" newFact 
-                              else trace "Not a temp" (case expr of  
-                                                         (Var pos varName) 
-                                                             | isTemp nonTemps varName -> invalidateExprsWith x f
-                                                         _ -> f) 
+                              then newFact 
+                              else case expr of  
+                                     (Var pos varName) 
+                                         | isTemp nonTemps varName -> invalidateExprsWith x f
+                                     _ -> f
           where newFact = PElem newMap 
                 newMap = Map.insert expr x lastMap
                 lastMap :: Map.Map MidIRExpr VarName
