@@ -15,8 +15,8 @@ exprLattice = DataflowLattice { fact_name = "Global CSE Lattice"
                               , fact_join = intersectMaps }
     where intersectMaps _ (OldFact old) (NewFact new) 
               = case (old, new) of 
-                  (Bot, new') -> (SomeChange, new') 
                   (old', Bot) -> (NoChange, old') 
+                  (Bot, new') -> (SomeChange, new') 
                   (PElem oldMap, PElem newMap) -> (ch, PElem j)
                       where j = Map.mapMaybeWithKey f oldMap
                             f k v = case Map.lookup k newMap of 
@@ -34,7 +34,7 @@ exprAvailable nonTemps = mkFTransfer ft
     where 
       ft :: MidIRInst e x -> ExprFact -> Fact x ExprFact 
       ft (Label _ _) f = f
-      ft (Enter _ _ _) f = f
+      ft (Enter _ _ args) f = foldl (flip invalidateExprsWith) f args
       ft (Store _ x expr) f = handleAssign x expr f
       ft (IndStore _ _ _) f = destroyLoads f
       ft (Call _ x _ _) f = invalidateExprsWith x f
@@ -48,11 +48,15 @@ exprAvailable nonTemps = mkFTransfer ft
       handleAssign :: VarName -> MidIRExpr -> ExprFact -> ExprFact
       handleAssign x expr f = if isTemp nonTemps x 
                               then newFact 
-                              else invalidateExprsWith x f 
+                              else case expr of  
+                                     (Var pos varName) 
+                                         | isTemp nonTemps varName -> PElem $ Map.insert (Var pos x) varName lastMap
+                                     _ -> f
           where newFact = PElem newMap 
-                newMap = case f of 
-                           Bot -> Map.insert expr x Map.empty 
-                           PElem oldMap -> Map.insert expr x oldMap
+                newMap = Map.insert expr x lastMap
+                lastMap = case f of
+                            Bot -> Map.empty
+                            PElem oldMap -> oldMap
       invalidateExprsWith :: VarName -> ExprFact -> ExprFact
       invalidateExprsWith _ Bot = Bot 
       invalidateExprsWith x (PElem oldMap) = PElem newMap 
@@ -70,12 +74,13 @@ exprAvailable nonTemps = mkFTransfer ft
 -- Rewrite function: 
 
 cseRewrite :: forall m. (FuelMonad m, UniqueNameMonad m) => S.Set VarName -> FwdRewrite m MidIRInst ExprFact 
-cseRewrite nonTemps = mkFRewrite cse 
+cseRewrite nonTemps = deepFwdRw cse 
     where 
       cse :: MidIRInst e x -> ExprFact -> m (Maybe (Graph MidIRInst e x))
       cse (Store _ x (Var _ v)) f
           | isTemp nonTemps v = return Nothing 
       cse (Store pos x expr) f 
+          | isTemp nonTemps x
           = case lookupExpr expr f of 
               Just varName -> return $ Just $ insnToG $ Store pos x (Var pos varName)
               Nothing -> do tempName <- genUniqueName "cse"
