@@ -39,7 +39,9 @@ main = do args <- getArgs
                      Just fname -> readFile fname
                      Nothing -> getContents -- of stdin
           case target opts of
-            TargetScan -> doScanFile opts ifname input
+            TargetScan -> case doScanFile opts ifname input of
+              Left err -> putStrLn err
+              Right v -> printScannerResult v
             TargetParse -> doParseFile opts ifname input
             TargetInter -> doCheckFile opts ifname input
             TargetMidIR -> doMidIRFile opts ifname input
@@ -49,29 +51,18 @@ main = do args <- getArgs
             _ -> error "No such target"
 
 
--- | This function formats an error so it has a nifty carat under
--- where the error occured.
-reportErr :: [String] -- ^ The lines from the source file
-          -> ParseError -- ^ The parse error to format
-          -> IO ()
-reportErr ls err
-    = do putStrLn $ show (errorPos err) ++ ":"
-         putStrLn line
-         putStr errptr
-         putStrLn $ showErrorMessages "or" "unknown parse error"
-                      "expecting" "unexpected" "end of input"
-                      (errorMessages err)
-    where line = ls !! (sourceLine pos - 1)
-          errptr = replicate (sourceColumn pos - 1) ' '
-                   ++ "^"
-          pos = errorPos err
-
--- | Perfoms the actions for the @scan@ target.
-doScanFile :: CompilerOpts -> String -> String -> IO ()
+doScanFile :: CompilerOpts -> String -> String -> Either String v
 doScanFile opts ifname input
-    = case runScanner opts ifname input of
-        Left err -> reportErr (lines input) err
-        Right v -> printScannerResult v
+  = case runScanner opts ifname input of
+    Left err -> Left (reportErr (lines input) err)
+    Right v -> Right v
+    
+--doParseFile :: CompilerOpts -> String -> String -> Either String i -> Either String v
+--doCheckFile :: CompilerOpts -> String -> String -> Either String i -> Either String v
+--doMidIRFile :: CompilerOpts -> String -> String -> Either String i -> Either String v
+--doLowIRFile :: CompilerOpts -> String -> String -> Either String i -> Either String v
+--doGenerateCode :: CompilerOpts -> String -> String -> Either String i -> Either String v
+
 
 -- | Perfoms the actions for the @parse@ target.
 doParseFile :: CompilerOpts -> String -> String -> IO ()
@@ -227,6 +218,23 @@ doGenerateCode opts ifname input
     where getErrors = filter isTokenError
           isTokenError (TokenError {}) = True
           isTokenError _ = False
+
+-- | This function formats an error so it has a nifty carat under
+-- where the error occured.
+reportErr :: [String] -- ^ The lines from the source file
+          -> ParseError -- ^ The parse error to format
+          -> String
+reportErr ls err
+     = show (errorPos err) ++ ":" ++ "\n"
+       ++ line ++ "\n"
+       ++  errptr
+       ++  (showErrorMessages "or" "unknown parse error"
+                      "expecting" "unexpected" "end of input"
+                      (errorMessages err)) ++ "\n"
+    where line = ls !! (sourceLine pos - 1)
+          errptr = replicate (sourceColumn pos - 1) ' '
+                   ++ "^"
+          pos = errorPos err
 
 showSemError :: [String] -> UnifierData DUType -> SemError -> String
 showSemError ls ud (SemUnificationError uerr)
