@@ -37,7 +37,7 @@ defaultOptions
                    , debugMode = False
                    , compatMode = False
                    , helpMode = False
-                   , optMode = optAll
+                   , optMode = optAllD
                    }
 
 -- | This type represents the possible actions to do with the input
@@ -51,7 +51,8 @@ data TargetFlag = TargetScan -- ^ Given by @scan@.
                 | TargetDefault -- ^ The default value if no target is given.
                   deriving (Show)
 
-data OptFlags = OptFlags { optCommonSubElim :: Bool
+data OptFlags = OptFlags { touched :: Bool
+                         , optCommonSubElim :: Bool
                          , optConstProp :: Bool
                          , optCopyProp :: Bool
                          , optDeadCode :: Bool
@@ -60,8 +61,9 @@ data OptFlags = OptFlags { optCommonSubElim :: Bool
                          , optRA :: Bool }
               deriving (Show)
 
-optAll = OptFlags True True True True True True True
-optNone = OptFlags False False False False False False False
+optAllD = OptFlags True True True True True True True True
+optAll = OptFlags False True True True True True True True
+optNone = OptFlags False False False False False False False False
 
 options :: [OptDescr (CompilerOpts -> CompilerOpts)]
 options =
@@ -114,7 +116,9 @@ optOpt opts s
     "ra" -> oFlags { optRA = True }
     "none" -> optNone
     _ -> oFlags
-    where oFlags = optMode opts 
+    where oFlags = case touched $ optMode opts of 
+            True -> optNone
+            False -> optMode opts
 
 -- | Takes an argument list and gives a 'CompilerOpts'.  If there's a
 -- parse error or help request, this function uses 'System.Exit' to
