@@ -18,16 +18,17 @@ lastLabelLattice = DataflowLattice { fact_name = "Last Labels"
   where add _ (OldFact o) (NewFact n) = (c, n)
           where c = changeIf (o /= n)
 
---fromJust is fine due to Branches in the original nodes being Just
-
 lastLabelness :: BwdTransfer MidIRInst LastLabel
 lastLabelness = mkBTransfer f
   where f :: MidIRInst e x -> Fact x LastLabel -> LastLabel
         f (Branch _ l) k = 
-          case fromJust (lookupFact l k) of
+          case lookupFact l k of
+            Just l' -> l' `mplus` Just l
             Nothing -> Just l
-            m -> m
-        f (Label _ l) k = k
+        f (Label _ l) (Just l')
+            | l == l'  = Nothing
+            | otherwise = Just l'
+        f (Label _ l) Nothing = Nothing
         f (Enter _ l _) k = Nothing
         
         f _ k = Nothing
