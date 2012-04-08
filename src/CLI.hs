@@ -113,6 +113,7 @@ optOpt opts s
     "flat" -> oFlags { optFlat = True }
     "ra" -> oFlags { optRA = True }
     "none" -> optNone
+    _ -> oFlags
     where oFlags = optMode opts 
 
 -- | Takes an argument list and gives a 'CompilerOpts'.  If there's a
