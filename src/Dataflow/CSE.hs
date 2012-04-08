@@ -13,7 +13,8 @@ exprLattice :: DataflowLattice ExprFact
 exprLattice = DataflowLattice { fact_name = "Global CSE Lattice"
                               , fact_bot = Bot
                               , fact_join = intersectMaps }
-    where intersectMaps _ (OldFact old) (NewFact new) 
+    where intersectMaps :: Label -> OldFact ExprFact -> NewFact ExprFact -> (ChangeFlag, ExprFact)
+          intersectMaps _ (OldFact old) (NewFact new) 
               = case (old, new) of 
                   (old', Bot) -> (NoChange, old') 
                   (Bot, new') -> (SomeChange, new') 
