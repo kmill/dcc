@@ -1,9 +1,10 @@
-{-# LANGUAGE RankNTypes, ScopedTypeVariables, GADTs, TypeFamilies  #-}
+{-# LANGUAGE RankNTypes, ScopedTypeVariables, GADTs, TypeFamilies, TypeSynonymInstances #-}
 module Dataflow where 
 
 import Dataflow.ConstProp
 import Dataflow.DeadCode
 import Dataflow.BlockElim
+import Dataflow.Flatten
 
 import Control.Monad.Trans
 
@@ -12,10 +13,11 @@ import Compiler.Hoopl.Fuel
 import IR2 
 import Debug.Trace
 
-type RM = CheckingFuelMonad GM
+type RM = StupidFuelMonadT GM
 
 
-
+instance UniqueNameMonad RM where
+    genUniqueName = lift . genUniqueName
 
 -- Silly Exercise
 
@@ -46,6 +48,12 @@ instance Monad m => FuelMonad (StupidFuelMonadT m) where
     getFuel = StupidFuelMonadT (\fuel -> return (fuel, fuel))
     setFuel f = StupidFuelMonadT (\fuel -> return (f, ()))
 
+instance FuelMonadT StupidFuelMonadT where
+  runWithFuel fuel m = evalStupidFuelMonad m fuel
+  liftFuel = lift
+--  liftFuel m = FM $ \f -> do { a <- m; return (a, f) }
+
+
 ---
 
 performDataflowAnalysis :: MidIRRepr -> RM MidIRRepr 
@@ -53,7 +61,8 @@ performDataflowAnalysis midir
     = do midir <- performConstPropPass midir
          midir <- performDeadCodePass midir
          midir <- performBlockElimPass midir
-         midir <- performDeadCodePass midir
+--         midir <- performDeadCodePass midir
+         midir <- performFlattenPass midir
          return midir
 
 performConstPropPass :: MidIRRepr -> RM MidIRRepr 
@@ -66,6 +75,18 @@ performConstPropPass midir
          return $ midir { midIRGraph = graph'}
     where graph = midIRGraph midir
           mlabels = (map methodEntry $ midIRMethods midir)
+
+performFlattenPass :: MidIRRepr -> RM MidIRRepr 
+performFlattenPass midir 
+    = do (graph', factBase, _) <- analyzeAndRewriteFwd
+                                  flattenPass
+                                  (JustC mlabels)
+                                  graph
+                                  (mapFromList (map (\l -> (l,()) ) mlabels))
+         return $ midir { midIRGraph = graph' }
+    where graph = midIRGraph midir
+          mlabels = (map methodEntry $ midIRMethods midir)
+
 
 performDeadCodePass :: MidIRRepr -> RM MidIRRepr 
 performDeadCodePass midir 
@@ -110,3 +131,10 @@ blockElimPass = BwdPass
                 { bp_lattice = lastLabelLattice
                 , bp_transfer = lastLabelness
                 , bp_rewrite = lastLabelElim }
+
+flattenPass :: (CheckpointMonad m, FuelMonad m, UniqueNameMonad m)
+               => FwdPass m MidIRInst ()
+flattenPass = FwdPass
+              { fp_lattice = nullLattice
+              , fp_transfer = nullTransfer
+              , fp_rewrite = flattenRewrite } 
