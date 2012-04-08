@@ -116,9 +116,9 @@ methodToMidIR env (HMethodDecl _ pos typ tok args st)
          (args', env') <- newLocalEnvEntries [tokenString t | (HMethodArg _ _ t) <- args] env
          graph <- statementToMidIR env' no no st
          startl <- freshLabel
-         let graph' = mkFirst (Enter (tokenPos tok) startl (length args))
-                      <*> mkMiddles (map (uncurry $ Store pos)
-                                     (zip args' (argExprs pos)))
+         let graph' = mkFirst (Enter (tokenPos tok) startl args')
+--                      <*> mkMiddles (map (uncurry $ Store pos)
+--                                     (zip args' (argExprs pos)))
                       <*> graph
                       <*> mkLast (Return (tokenPos tok) defret)
          return (Method (tokenPos tok) name startl, graph')
@@ -371,13 +371,15 @@ expressionToMidIR env (HExprMethod _ _ call)
         HNormalMethod _ pos tok exprs ->
             do (gexs, exs) <- unzip `fmap` (mapM (expressionToMidIR env) exprs)
                let g' = catGraphs gexs -- args in right-to-left order
-               return $ ( g' <*> (mkMiddle $ Call pos (MReg RAX) (tokenString tok) exs)
-                        , Var pos (MReg RAX) )
+               temp <- genTmpVar
+               return $ ( g' <*> (mkMiddle $ Call pos temp (tokenString tok) exs)
+                        , Var pos temp)
         HCalloutMethod _ pos tok args ->
             do (gexs, exs) <- unzip `fmap` (mapM evalArg args)
                let g' = catGraphs gexs -- args in right-to-left order
-               return $ ( g' <*> (mkMiddle $ Callout pos (MReg RAX) (tokenString tok) exs)
-                        , Var pos (MReg RAX) )
+               temp <- genTmpVar
+               return $ ( g' <*> (mkMiddle $ Callout pos temp (tokenString tok) exs)
+                        , Var pos temp )
             where evalArg (HCArgString _ s)
                       = (\e -> (GNil, LitLabel pos e)) `fmap` genStr pos (tokenString s)
                   evalArg (HCArgExpr _ ex)

@@ -24,7 +24,7 @@ liveness :: BwdTransfer MidIRInst Live
 liveness = mkBTransfer live 
     where live :: MidIRInst e x -> Fact x Live -> Live
           live (Label _ _) f = f 
-          live (Enter _ _ _) f = f 
+          live n@(Enter _ _ args) f = addUses (f S.\\ (S.fromList args)) n
           live n@(Store _ x _) f = addUses (S.delete x f) n 
           live n@(CondStore _ x _ _ _) f = addUses (S.delete x f) n 
           live n@(IndStore _ _ _) f = f

@@ -37,7 +37,7 @@ varHasLit = mkFTransfer ft
     where
       ft :: MidIRInst e x -> ConstFact -> Fact x ConstFact
       ft (Label _ _) f = f
-      ft (Enter _ _ _) f = f
+      ft (Enter _ _ args) f = Map.fromList (map (\a -> (a, Top)) args)
       ft (Store _ x (Lit pos k)) f = Map.insert x (PElem (pos, k)) f
       ft (Store _ x _) f = Map.insert x Top f
       ft (CondStore _ x _ (Lit pos xtrue) (Lit _ xfalse)) f
