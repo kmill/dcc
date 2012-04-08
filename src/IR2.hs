@@ -11,7 +11,7 @@ import Data.List
 import Data.Maybe
 import Text.Printf
 import Text.Regex
-import AST (PP, showPos)
+import AST (PP, SourcePos, showPos)
 
 bTrue, bFalse :: Int64
 bTrue = -1 -- i.e. all 1's
@@ -26,16 +26,21 @@ intToBool = (/= 0)
 -- | This is the type of the monad for working with graphs in Hoopl.
 newtype GM a = GM { runGM' :: [Unique] -> [Int] -> ([Unique], [Int], a) }
 
+class Monad m => UniqueNameMonad m where
+    -- | Argument is a prefix to the unique name
+    genUniqueName :: String -> m String
+
 instance Monad GM where
     return x = GM $ \u v -> (u, v, x)
     ma >>= f = GM $ \u v -> let (u', v', a) = runGM' ma u v
                             in runGM' (f a) u' v'
 
-genUniqueName :: String -> GM String
-genUniqueName prefix = GM $ \u v ->
-                       case v of
-                         (v:vs) -> (u, vs, "@" ++ prefix ++ "_" ++ show v)
-                         _ -> error "GM ran out of unique names! :-("
+instance UniqueNameMonad GM where
+    genUniqueName prefix
+        = GM $ \u v ->
+          case v of
+            (v:vs) -> (u, vs, "@" ++ prefix ++ "_" ++ show v)
+            _ -> error "GM ran out of unique names! :-("
 
 instance UniqueMonad GM where
     freshUnique = GM $ \u v ->
