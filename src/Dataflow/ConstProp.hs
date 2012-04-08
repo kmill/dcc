@@ -42,8 +42,8 @@ varHasLit = mkFTransfer ft
       ft (Store _ x (Lit pos k)) f = Map.insert x (PElem (pos, k)) f
       ft (Store _ x _) f = Map.insert x Top f
       ft (IndStore _ _ _) f = f
-      ft (Call _ _ _ _) f = f
-      ft (Callout _ _ _ _) f = f
+      ft (Call _ x _ _) f = Map.insert x Top f
+      ft (Callout _ x _ _) f = Map.insert x Top f 
       ft (Branch _ l) f = mapSingleton l f
       ft (CondBranch _ (Var pos x) tl fl) f 
           = mkFactBase constLattice [ (tl, Map.insert x (PElem (pos, bTrue)) f)
