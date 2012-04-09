@@ -46,6 +46,7 @@ data TargetFlag = TargetScan -- ^ Given by @scan@.
                 | TargetParse -- ^ Given by @parse@.
                 | TargetInter -- ^ Given by @inter@.
                 | TargetMidIR -- ^ Given by @midir@.
+                | TargetMidIRC -- ^ Given by @midirc@
                 | TargetLowIR -- ^ Given by @lowir@.
                 | TargetCodeGen -- ^ Given by @codegen@.
                 | TargetDefault -- ^ The default value if no target is given.
@@ -98,6 +99,7 @@ targetOpt s
         "parse" -> TargetParse
         "inter" -> TargetInter
         "midir" -> TargetMidIR
+        "midirc" -> TargetMidIRC
         "lowir" -> TargetLowIR
         "codegen" -> TargetCodeGen
         "assembly" -> TargetCodeGen

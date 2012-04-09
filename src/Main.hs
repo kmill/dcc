@@ -46,6 +46,7 @@ main = do args <- getArgs
           dprogram <- return $ doParseFile opts ifname input tokens
           ast <- return $ doCheckFile opts ifname input dprogram
           midir <- return $ doMidIRFile opts ifname input ast
+          midirc <- return $ doMidIRFile opts ifname input ast
           lowir <- return $ doLowIRFile opts ifname input midir
           outFile <- return $ case outputFile opts of
             Just fn -> fn
@@ -67,6 +68,10 @@ main = do args <- getArgs
               Left err -> do (putStrLn err)
                              exitWith $ ExitFailure 1
               Right midir -> putStrLn $ IR2.midIRToGraphViz midir
+            TargetMidIRC -> case midir of
+              Left err -> do (putStrLn err)
+                             exitWith $ ExitFailure 1
+              Right midir -> putStrLn $ IR2.midIRToC midir
             TargetLowIR -> case lowir of
               Left err -> do (putStrLn err)
                              exitWith $ ExitFailure 1
@@ -114,7 +119,7 @@ doCheckFile opts ifname input r
           Left ("Semantic errors:\n" ++ "\n" ++ (intercalate "\n" [(showSemError (lines input) udata e) | e <- errors]))
         Right x -> Right (makeHybridAST v)
         
--- | Performs the actions for the @midir@ target.
+-- | Performs the actions for the @midir@ and @c@ target.
 doMidIRFile :: CompilerOpts -> String -> String -> Either String (HDProgram Int) -> Either String (IR2.MidIRRepr)
 doMidIRFile opts ifname input ast
   = case ast of
@@ -123,7 +128,7 @@ doMidIRFile opts ifname input ast
                                   mir <- runWithFuel 2222222 $ (performDataflowAnalysis (optMode opts) mir)
                                   return mir
                   in Right (IR2.runGM mmidir)
-                    
+
 
 doLowIRFile :: CompilerOpts -> String -> String -> Either String IR2.MidIRRepr -> Either String (CodeGenerate2.LowIRRepr)
 doLowIRFile opts ifname input midir
