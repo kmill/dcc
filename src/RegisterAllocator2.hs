@@ -14,10 +14,11 @@ import Control.Monad.State
 import Compiler.Hoopl
 import Data.Maybe
 import AST (SourcePos, noPosition)
+import Debug.Trace
 
 regAlloc :: LowIRRepr -> I.GM LowIRRepr
 regAlloc (LowIRRepr fields strs meths graph)
-    = do graph'' <- evalStupidFuelMonad (doRewrite mlabels graph') 22222222
+    = do graph'' <- evalStupidFuelMonad (collectSpill mlabels graph') 22222222
          return $ LowIRRepr fields strs meths graph''
       where GMany _ body _ = graph
             graph' = foldl (|*><*|) emptyClosedGraph bodies
@@ -35,23 +36,28 @@ regAlloc (LowIRRepr fields strs meths graph)
                             JustC x' -> x'
             mlabels = map I.methodEntry meths
 
-doRewrite :: [Label] -> Graph A.Asm C C -> RM (Graph A.Asm C C)
-doRewrite mlabels graph
-    = do (g, _, _) <- analyzeAndRewriteBwd 
-                      replaceSpillPass
+collectSpill :: [Label] -> Graph A.Asm C C -> RM (Graph A.Asm C C)
+collectSpill mlabels graph
+    = do (_, f, _) <- analyzeAndRewriteBwd
+                      collectSpillPass
                       (JustC mlabels)
                       graph
                       mapEmpty
+         (g, _, _) <- analyzeAndRewriteFwd
+                      (rewriteSpillPass f)
+                      (JustC mlabels)
+                      graph
+                      f
          return g
 
 
 
-replaceSpillPass :: (CheckpointMonad m, FuelMonad m)
+collectSpillPass :: (CheckpointMonad m, FuelMonad m)
                     => BwdPass m A.Asm (S.Set String)
-replaceSpillPass = BwdPass
+collectSpillPass = BwdPass
                    { bp_lattice = getSpillLattice
                    , bp_transfer = getSpillTransfer
-                   , bp_rewrite = rewriteSpill }
+                   , bp_rewrite = noBwdRewrite }
     where
       getSpillLattice :: DataflowLattice (S.Set String)
       getSpillLattice = DataflowLattice
@@ -79,31 +85,53 @@ replaceSpillPass = BwdPass
                          ((fromMaybe S.empty) . (flip lookupFact f))
                          (successors x)
 
-      rewriteSpill :: forall m . FuelMonad m =>
-                      BwdRewrite m A.Asm (S.Set String)
-      rewriteSpill = mkBRewrite d
-          where 
-            d :: A.Asm e x -> Fact x (S.Set String) -> m (Maybe (Graph A.Asm e x))
-            d (A.Spill pos reg s) f
-                = return $ Just $ mkMiddle $ A.mov pos reg mem
-                  where offset = negate (8 + 8 * (fromJust $ elemIndex s f'))
-                        f' = S.toAscList (S.insert s f)
-                        mem = A.MemAddr (Just $ A.MReg A.RBP)
-                              (A.Imm32 $ fromIntegral offset)
-                              Nothing A.SOne
-            d (A.Reload pos s reg) f
-                = return $ Just $ mkMiddle $ A.mov pos mem reg
-                  where offset = negate (8 + 8 * (fromJust $ elemIndex s f'))
-                        f' = S.toAscList (S.insert s f)
-                        mem = A.MemAddr (Just $ A.MReg A.RBP)
-                              (A.Imm32 $ fromIntegral offset)
-                              Nothing A.SOne
-            d (A.Enter pos l x) f = if x' == x
-                                    then return Nothing
-                                    else return $ Just $ mkFirst $
-                                         A.Enter pos l x'
-                where x' = fromIntegral $ 8 * (S.size f)
-            d _ f = return Nothing
+rewriteSpillPass :: (CheckpointMonad m, FuelMonad m) =>
+                    FactBase (S.Set String) -> FwdPass m Asm (S.Set String)
+rewriteSpillPass fb = FwdPass 
+                      { fp_lattice = noLattice
+                      , fp_transfer = sTransfer
+                      , fp_rewrite = rewriteSpill }
+    where noLattice :: DataflowLattice (S.Set String)
+          noLattice = DataflowLattice
+                      { fact_name = "simple replicate"
+                      , fact_bot = S.empty
+                      , fact_join = add }
+              where add _ (OldFact old) (NewFact new) = (ch, j)
+                        where j = S.union new old
+                              ch = changeIf $ S.size j > S.size old
+          sTransfer :: FwdTransfer Asm (S.Set String)
+          sTransfer = mkFTransfer3 g g' g''
+              where 
+                g :: Asm C O -> S.Set String -> S.Set String
+                g (Enter p l _) _ = fromMaybe S.empty (lookupFact l fb)
+                g e f = f
+                g' e f = f
+                g'' e f = mkFactBase noLattice $ zip (successors e) (repeat f)
+
+          rewriteSpill :: forall m. FuelMonad m => FwdRewrite m Asm (S.Set String)
+          rewriteSpill = mkFRewrite d
+              where 
+                d :: Asm e x -> S.Set String -> m (Maybe (Graph Asm e x))
+                d (A.Spill pos reg s) f
+                    = return $ Just $ mkMiddle $ A.mov pos reg mem
+                      where offset = negate (8 + 8 * (fromJust $ elemIndex s f'))
+                            f' = S.toAscList (S.insert s f)
+                            mem = A.MemAddr (Just $ A.MReg A.RBP)
+                                  (A.Imm32 $ fromIntegral offset)
+                                  Nothing A.SOne
+                d (A.Reload pos s reg) f
+                    = return $ Just $ mkMiddle $ A.mov pos mem reg
+                      where offset = negate (8 + 8 * (fromJust $ elemIndex s f'))
+                            f' = S.toAscList (S.insert s f)
+                            mem = A.MemAddr (Just $ A.MReg A.RBP)
+                                  (A.Imm32 $ fromIntegral offset)
+                                  Nothing A.SOne
+                d (A.Enter pos l x) f = if x' == x
+                                        then return Nothing
+                                        else return $ Just $ mkFirst $
+                                             A.Enter pos l x'
+                    where x' = fromIntegral $ 8 * (S.size f)
+                d _ f = return Nothing
 
 
 
