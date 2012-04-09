@@ -323,7 +323,8 @@ instance Show (Asm e x) where
   show (RetPop pos returns num)
       = showUnOp "ret" pos num
         ++ (if not returns then " (void)" else "")
-  show (ExitFail pos) = showNullOp "ret" pos
+  show (ExitFail pos)
+      = showNullOp "movq $1, %rdi\nmovq $1, %rax\ncall exit" pos
 
   show (Lea pos mem reg) = showBinOp "leaq" pos mem reg
 

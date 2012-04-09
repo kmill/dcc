@@ -11,19 +11,21 @@ import AST(noPosition, SourcePos, showPos)
 import Control.Monad
 import Data.Maybe
 import Data.List
+import Data.Int
 
 type GM = I.GM
 
 data LowIRRepr = LowIRRepr
-    { lowIRFields :: [I.MidIRField]
+    { lowIRFields :: [LowIRField]
     , lowIRStrings :: [(String, SourcePos, String)]
     , lowIRMethods :: [I.Method]
     , lowIRGraph :: Graph A.Asm C C }
+data LowIRField = LowIRField SourcePos String Int64
 
 toAss :: I.MidIRRepr -> GM LowIRRepr
 toAss (I.MidIRRepr fields strs meths graph)
     = do graph' <- mgraph'
-         return $ LowIRRepr fields strs meths graph'
+         return $ LowIRRepr (map toLowField fields) strs meths graph'
     where GMany _ body _ = graph
           mgraph' = do graphs' <- mapM f (mapElems body)
                        return $ foldl (|*><*|) emptyClosedGraph graphs'
@@ -39,6 +41,10 @@ toAss (I.MidIRRepr fields strs meths graph)
                           JustC e' -> e'
                     x = case mx of
                           JustC x' -> x'
+          toLowField (I.MidIRField pos name Nothing)
+              = LowIRField pos name 8
+          toLowField (I.MidIRField pos name (Just len))
+              = LowIRField pos name (8 * len)
           
 
 -- | CGM is "Code Gen Monad"
@@ -112,7 +118,7 @@ instToAsm (I.Branch pos l)
     = return $ mkLast $ A.Jmp pos (A.Imm32BlockLabel l 0)
 instToAsm (I.CondBranch pos cexp tl fl)
     = do (g, flag) <- expToFlag cexp
-         return $ mkLast $ A.JCond pos flag (A.Imm32BlockLabel tl 0) fl
+         return $ g <*> (mkLast $ A.JCond pos flag (A.Imm32BlockLabel tl 0) fl)
 instToAsm (I.Return pos Nothing)
     = return $ genPopRegs pos A.calleeSaved
                <*> (mkLast $ A.Ret pos False)
@@ -344,8 +350,8 @@ lowIRToGraphViz m = "digraph name {\n"
     where showMethod (I.Method pos name entry)
               = name ++ " [shape=doubleoctagon,label="++show name++"];\n"
                 ++ name ++ " -> " ++ show entry ++ ";\n"
-          showField (I.MidIRField pos name msize)
-              = "{" ++ name ++ "|" ++ fromMaybe "val" (msize >>= return . show) ++ "}"
+          showField (LowIRField pos name size)
+              = "{" ++ name ++ "|" ++ show size ++ "}"
           showFields fields = "_fields_ [shape=record,label=\"fields|{"
                               ++ intercalate "|" (map showField fields)
                               ++ "}\"];\n"
