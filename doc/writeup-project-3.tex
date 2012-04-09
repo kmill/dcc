@@ -1,0 +1,47 @@
+\documentclass[11pt]{article} 
+
+\usepackage{amsmath, amsfonts, amssymb, amsthm}
+\usepackage{fullpage}
+
+\title{6.035 Project 3}
+\author{Kyle Miller, Alec Thomson, Patrick Hulin, Steven Valdez}
+\begin{document} 
+\maketitle
+
+
+\section {Overview} 
+
+The purpose of this project was to add a series of dataflow optimizations to the unoptimized code generator produced at the end of the last project. 
+
+We chose to make use of The Higher-Order Optimization Library (Hoopl) for Haskell. This library provides fixed-point functions to interleave dataflow transfer functions and rewrite functions. Both forward and backward analysis are supported by Hoopl. We briefly explain the design and implementation of Hoopl in Section~\ref{sec:hoopl}
+
+To use Hoopl to perform dataflow analysis optimizations, we first had to dramatically modify both the Mid IR and Low IR used for unoptimized code generation. The changes to the IR are documented in Section~\ref{sec:changes}. 
+
+Once the IR supported Hoopl, we were able to implement several dataflow optimizations with Hoopl, including Constant Propagation (Section~\ref{sec:constprop}), Dead Code Elimination (Section~\ref{sec:deadcode}), Global Common Subexpression Elimination (Section~\ref{sec:cse}), and Global Copy Propagation (Section
+
+\section {Division of Work} 
+\label{sec:division} 
+
+\section {Hoopl}
+\label{sec:hoopl} 
+
+\section {Changes to IR to Accomodate Hoopl}
+\label{sec:changes} 
+
+\section {Constant Propagation} 
+\label{sec:constprop}
+
+\section {Dead Code Elimination} 
+\label{sec:deadcode}
+
+\section {Global Common Subexpression Elimination} 
+\label{sec:cse}
+
+\section {Global Copy Propagation}
+\label{copyprop}
+
+
+
+
+
+\end{document}
