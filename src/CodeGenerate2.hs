@@ -102,21 +102,21 @@ instToAsm (I.IndStore pos dexp sexp)
 instToAsm (I.Call pos d name args)
     = do (gs, vars) <- unzip `fmap` mapM expToIRM args
          return $ catGraphs gs
-                    <*> genSetArgs pos vars
                     <*> genPushRegs pos A.callerSaved
+                    <*> genSetArgs pos vars
                     <*> mkMiddle (A.Call pos (length args) (A.Imm32Label name 0))
-                    <*> genPopRegs pos A.callerSaved
                     <*> genResetSP pos args
+                    <*> genPopRegs pos A.callerSaved
                     <*> mkMiddle (A.mov pos (A.MReg A.RAX) (A.SReg $ show d))
 instToAsm (I.Callout pos d name args)
     = do (gs, vars) <- unzip `fmap` mapM expToIRM args
          return $ catGraphs gs
-                    <*> genSetArgs pos vars
                     <*> genPushRegs pos A.callerSaved
+                    <*> genSetArgs pos vars
                     <*> mkMiddle (A.mov pos (A.Imm32 0) (A.MReg A.RAX))
                     <*> mkMiddle (A.Callout pos (length args) (A.Imm32Label name 0))
-                    <*> genPopRegs pos A.callerSaved
                     <*> genResetSP pos args
+                    <*> genPopRegs pos A.callerSaved
                     <*> mkMiddle (A.mov pos (A.MReg A.RAX) (A.SReg $ show d))
 instToAsm (I.Branch pos l)
     = return $ mkLast $ A.Jmp pos (A.Imm32BlockLabel l 0)
@@ -220,14 +220,21 @@ expToR e = foldl1 mplus rules
                    return ( g
                             <*> mkMiddle (A.mov pos m dr)
                           , dr )
-              , do I.UnOp pos op exp <- withNode e
-                   guard $ op `elem` [I.OpNeg, I.OpNot]
-                             -- Since true=-1, neg and not are the same.
+              , do I.UnOp pos I.OpNeg exp <- withNode e
                    (g, o) <- expToRM exp
                    dr <- genTmpReg
                    return ( g
                             <*> mkMiddle (A.MovIRMtoR pos (rmToIRM o) dr)
                             <*> mkMiddle (A.Neg pos (A.RM_R dr))
+                          , dr )
+              , do I.UnOp pos I.OpNot exp <- withNode e
+                   (g, o) <- expToRM exp
+                   dr <- genTmpReg
+                   return ( g
+                            <*> mkMiddle (A.MovIRMtoR pos (rmToIRM o) dr)
+                            <*> mkMiddle (A.ALU_IRMtoR pos A.Xor
+                                               (A.IRM_I $ A.Imm32 (-1))
+                                               dr)
                           , dr )
               , do I.BinOp pos op expa expb <- withNode e
                    guard $ op `elem` [I.OpAdd, I.OpSub]
