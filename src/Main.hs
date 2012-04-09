@@ -75,11 +75,13 @@ main = do args <- getArgs
             TargetDefault -> case lowir of
               Left err -> do (putStrLn err)
                              exitWith $ ExitFailure 1
-              Right lir -> writeFile outFile (unlines $ CodeGenerate2.lowIRToAsm lir)--do putStrLn $ intercalate "\n" (CodeGenerate2.lowIRToAsm lir)                              
+              Right lir -> do writeFile outFile (unlines $ CodeGenerate2.lowIRToAsm lir)
+                              if debugMode opts then putStrLn $ intercalate "\n" (CodeGenerate2.lowIRToAsm lir) else return ()                              
             TargetCodeGen -> case lowir of 
               Left err -> do (putStrLn err)
                              exitWith $ ExitFailure 1
-              Right lir -> writeFile outFile (unlines $ CodeGenerate2.lowIRToAsm lir)--do putStrLn $ intercalate "\n" (CodeGenerate2.lowIRToAsm lir)                              
+              Right lir -> do writeFile outFile (unlines $ CodeGenerate2.lowIRToAsm lir)
+                              if debugMode opts then putStrLn $ intercalate "\n" (CodeGenerate2.lowIRToAsm lir) else return ()               
             _ -> error "No such target"
             
 -- | Perfoms the actions for the @scan@ target.
