@@ -26,9 +26,9 @@ toAss (I.MidIRRepr fields strs meths graph)
           mgraph' = do graphs' <- mapM f (mapElems body)
                        return $ foldl (|*><*|) emptyClosedGraph graphs'
           f :: Block I.MidIRInst C C -> GM (Graph A.Asm C C)
-          f block = do e' <- runCGM $ instToAsm e
-                       inner' <- mapM (runCGM . instToAsm) inner
-                       x' <- runCGM $ instToAsm x
+          f block = do e' <- toAsm e
+                       inner' <- mapM toAsm inner
+                       x' <- toAsm x
                        return $ e' <*> catGraphs inner' <*> x'
               where (me, inner, mx) = blockToNodeList block
                     e :: I.MidIRInst C O
@@ -43,7 +43,10 @@ toAss (I.MidIRRepr fields strs meths graph)
               = LowIRField pos name (8 * len)
 
           mlabels = map I.methodEntry meths
-
+          toAsm e = do as <- rCGM $ instToAsm e
+                       case as of
+                         [] -> error $ "No output for " ++ show e
+                         a:_ -> return a
 
 
 -- | CGM is "Code Gen Monad"
