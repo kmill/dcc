@@ -234,7 +234,7 @@ statementToMidIR env c b (HAssignSt senv pos loc op expr)
                 -- | gets the pointer to var'[i']
                 arrptr i' = (BinOp pos OpAdd
                                        (varToLabel pos var')
-                                       (BinOp pos OpMul (Lit pos 8) (Var pos i')))
+                                       (BinOp pos OpMul (Var pos i') (Lit pos 8)))
             in do (gi, i) <- expressionToMidIR env iexpr
                   i' <- genTmpVar -- temp var for index
                   deadv <- genTmpVar
@@ -242,7 +242,7 @@ statementToMidIR env c b (HAssignSt senv pos loc op expr)
                   errl <- genStr pos $ "Array index out of bounds at " ++ show pos ++ "\n"
                   let ex' = case op of
                               A.Assign -> ex
-                              A.IncAssign -> BinOp pos OpAdd ex (Load pos (arrptr i'))
+                              A.IncAssign -> BinOp pos OpAdd (Load pos (arrptr i')) ex
                               A.DecAssign -> BinOp pos OpSub (Load pos (arrptr i')) ex
                   [checkhighl, okl, faill] <- replicateM 3 freshLabel
                   return $ ((mkMiddle $ Store pos i' i)

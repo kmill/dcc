@@ -28,6 +28,7 @@ import Compiler.Hoopl.Fuel
 import Data.List
 import AST
 import qualified IR
+import qualified CodeGenerate2
 
 import qualified IR2
 import qualified MidIR2
@@ -45,7 +46,7 @@ main = do args <- getArgs
           dprogram <- return $ doParseFile opts ifname input tokens
           ast <- return $ doCheckFile opts ifname input dprogram
           midir <- return $ doMidIRFile opts ifname input ast
---          lowir <- return $ doLowIRFile opts ifname input midir
+          lowir <- return $ doLowIRFile opts ifname input midir
           outFile <- return $ case outputFile opts of
             Just fn -> fn
             Nothing -> replaceExtension ifname ".s"
@@ -62,9 +63,9 @@ main = do args <- getArgs
             TargetMidIR -> case midir of
               Left err -> putStrLn err
               Right midir -> putStrLn $ IR2.midIRToGraphViz midir
-            -- TargetLowIR -> case lowir of
-            --   Left err -> putStrLn err
-            --   Right lir -> putStrLn $ lowIRtoGraphViz lir 
+            TargetLowIR -> case lowir of
+              Left err -> putStrLn err
+              Right lir -> putStrLn $ CodeGenerate2.lowIRToGraphViz lir 
             -- TargetDefault -> case lowir of
             --   Left err -> putStrLn err
             --   Right lir -> writeFile outFile (unlines $ lowIRReprCode lir)
@@ -117,12 +118,12 @@ doMidIRFile opts ifname input ast
                   in Right (IR2.runGM mmidir)
                     
 
--- doLowIRFile :: CompilerOpts -> String -> String -> Either String IR2.MidIRRepr -> Either String x
--- doLowIRFile opts ifname input midir
---     = case midir of                      
---       Left err -> Left err
---       Right m -> let lowirSymb = toLowIR (optMode opts) m 
---                  in destroySymbRegs lowirSymb
+doLowIRFile :: CompilerOpts -> String -> String -> Either String IR2.MidIRRepr -> Either String (CodeGenerate2.LowIRRepr)
+doLowIRFile opts ifname input midir
+    = case midir of                      
+        Left err -> Left err
+        Right m -> let assem = CodeGenerate2.toAss m --(optMode opts) m 
+                   in Right (IR2.runGM assem)
                  
 -- | This function formats an error so it has a nifty carat under
 -- where the error occured.

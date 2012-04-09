@@ -1,4 +1,4 @@
-{-# LANGUAGE RankNTypes, GADTs, TypeFamilies #-}
+{-# LANGUAGE RankNTypes, GADTs, TypeFamilies, MultiParamTypeClasses #-}
 
 module Assembly2 where
 
@@ -12,7 +12,7 @@ import Data.Int
 import Text.Printf
 
 data Reg = MReg X86Reg -- ^ a real machine register
-         | SReg Int -- ^ a symbolic register
+         | SReg String -- ^ a symbolic register
 data Imm8 = Imm8 Int8
 data Imm16 = Imm16 Int16
 data Imm32 = Imm32 Int32 -- ^ a 32-bit sign-extended literal
@@ -39,6 +39,10 @@ data OperIR = IR_I Imm32
 data OperRM = RM_R Reg
            | RM_M MemAddr
 
+rmToIRM :: OperRM -> OperIRM
+rmToIRM (RM_R r) = IRM_R r
+rmToIRM (RM_M m) = IRM_M m
+
 instance Show OperIRM where
     show (IRM_I imm) = "$" ++ show imm
     show (IRM_R reg) = show reg
@@ -50,12 +54,16 @@ instance Show OperRM where
     show (RM_R reg) = show reg
     show (RM_M mem) = show mem
 
+checkIf32Bit :: Int64 -> Bool
+checkIf32Bit x
+    = x >= fromIntegral (minBound :: Int32)
+      && x <= fromIntegral (maxBound :: Int32)
+
 -- | Can the 64-bit immediate be represented as a 32-bit immediate?
 -- We assume all labels fit comfortably in 32-bit registers.
 checkIf32able :: Imm64 -> Bool
 checkIf32able imm
-    = x >= fromIntegral (minBound :: Int32)
-      && x <= fromIntegral (maxBound :: Int32)
+    = checkIf32Bit x
     where x = case imm of
                 Imm64 v -> v
                 Imm64BlockLabel _ v -> v
@@ -79,7 +87,7 @@ intToScalar _ = error "Not a scalar"
 
 instance Show Reg where
     show (MReg reg) = show reg
-    show (SReg i) = "%s" ++ show i
+    show (SReg i) = "%" ++ i
 
 instance Show Imm8 where
     show (Imm8 x) = show x
@@ -223,9 +231,14 @@ data Asm e x where
   Enter :: SourcePos -> Label -> Int -> Asm C O
   Leave :: SourcePos -> Asm O O
 
-  Call :: SourcePos -> OperIRM -> Asm O O
-  Ret :: SourcePos -> Asm O C
-  RetPop :: SourcePos -> Imm16 -> Asm O C
+  -- | Int is the number of arguments (to know which registers are
+  -- used)
+  Call :: SourcePos -> Int -> OperIRM -> Asm O O
+  Callout :: SourcePos -> Int -> OperIRM -> Asm O O
+  -- | The boolean is whether it cares about the return value (so we
+  -- know whether to save RAX for the return)
+  Ret :: SourcePos -> Bool -> Asm O C
+  RetPop :: SourcePos -> Bool -> Imm16 -> Asm O C
   ExitFail :: SourcePos -> Asm O C
 
   Lea :: SourcePos -> MemAddr -> Reg -> Asm O O
@@ -267,8 +280,8 @@ instance NonLocal Asm where
   successors (Jmp _ _) = []
   successors (JCond _ _ (Imm32BlockLabel tr 0) fa) = [tr, fa]
   successors (JCond _ _ _ fa) = [fa]
-  successors (Ret _) = []
-  successors (RetPop _ _) = []
+  successors (Ret _ _) = []
+  successors (RetPop _ _ _) = []
   successors (ExitFail _) = []
 
 showNullOp :: String -> SourcePos -> String
@@ -302,9 +315,14 @@ instance Show (Asm e x) where
                             (show lbl) st (showPos pos)
   show (Leave pos) = showNullOp "leave" pos
 
-  show (Call pos func) = showUnOp "call" pos func
-  show (Ret pos) = showNullOp "ret" pos
-  show (RetPop pos num) = showUnOp "ret" pos num
+  show (Call pos nargs func) = showUnOp "call" pos func
+  show (Callout pos nargs func) = showUnOp "call" pos func
+  show (Ret pos returns)
+      = showNullOp "ret" pos
+        ++ (if not returns then " (void)" else "")
+  show (RetPop pos returns num)
+      = showUnOp "ret" pos num
+        ++ (if not returns then " (void)" else "")
   show (ExitFail pos) = showNullOp "ret" pos
 
   show (Lea pos mem reg) = showBinOp "leaq" pos mem reg
@@ -339,6 +357,16 @@ instance Show (Asm e x) where
 
   show (Nop pos) = showNullOp "nop" pos
 
+class Mnemonic src dst where
+    mov :: SourcePos -> src -> dst -> Asm O O
+
+instance Mnemonic Imm32 Reg where
+    mov p s d = MovIRMtoR p (IRM_I s) d
+instance Mnemonic Reg Reg where
+    mov p s d = MovIRMtoR p (IRM_R s) d
+instance Mnemonic MemAddr Reg where
+    mov p s d = MovIRMtoR p (IRM_M s) d
+
 ---
 --- Registers
 ---
@@ -353,6 +381,11 @@ argStackDepth :: [Int]
 argStackDepth = [no, no, no, no, no, no] ++ [16, 16+8..]
     where no = error "argStackDepth for non-stack-arg :-("
 
+argLocation :: [Either MemAddr Reg]
+argLocation = map (Right . MReg) [RDI, RSI, RDX, RCX, R8, R9]
+              ++ map (Left . makeMem) [16,16+8..]
+    where makeMem d = MemAddr (Just $ MReg RBP) (Imm32 d) Nothing SOne
+
 ---- | Gives a midir expression for getting any particular argument.
 --argExprs :: SourcePos -> [Expr VarName]
 --argExprs pos = (map (Var pos . MReg) [RDI, RSI, RDX, RCX, R8, R9])
@@ -360,7 +393,7 @@ argStackDepth = [no, no, no, no, no, no] ++ [16, 16+8..]
 --                   [16, 16+8..])
 
 callerSaved :: [X86Reg]
-callerSaved = [RAX, R10, R11]
+callerSaved = [R10, R11]
 
 calleeSaved :: [X86Reg]
 calleeSaved = [RBP, RBX, R12, R13, R14, R15] -- should RBP be in this?
