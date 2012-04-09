@@ -241,7 +241,7 @@ expToR e = mcut $ foldl1 mplus rules
                    return ( g
                             <*> mkMiddle (A.MovIRMtoR pos (rmToIRM o) dr)
                             <*> mkMiddle (A.ALU_IRMtoR pos A.Xor
-                                               (A.IRM_I $ A.Imm32 (-1))
+                                               (A.IRM_I $ A.Imm32 (1))
                                                dr)
                           , dr )
               , do I.BinOp pos op expa expb <- withNode e
@@ -367,12 +367,13 @@ lookupLabel (GMany _ g_blocks _) lbl = case mapLookup lbl g_blocks of
   Just x -> x
   Nothing -> error "ERROR"
 
-labelToAsmOut graph lbl = [show a] ++ (map show bs) ++ [show c]
+labelToAsmOut graph lbl = [show a] ++ (map show bs) ++ [show c] ++ (if length children > 0 then [ "jmp " ++ (show $ head $ children) ] else [ "" ]) 
   where f :: (MaybeC C (n C O), [n O O], MaybeC C (n O C))
              -> (n C O, [n O O], n O C)
         f (JustC e, nodes, JustC x) = (e, nodes, x)
         (a, bs, c) = f (blockToNodeList block)
         block = lookupLabel graph lbl
+        children = reverse $ successors block
 
 dfsSearch graph lbl visited = foldl recurseDFS visited (reverse $ successors block)
   where block = lookupLabel graph lbl

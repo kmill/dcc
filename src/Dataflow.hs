@@ -74,7 +74,7 @@ performDataflowAnalysis opts midir = do
   midir <- if optBlockElim opts
            then performBlockElimPass midir 
            else return midir
-  midir <- if optFlat opts
+  midir <- if (optCommonSubElim opts || optFlat opts)
            then performFlattenPass midir 
            else return midir
   midir <- if optCommonSubElim opts
