@@ -43,6 +43,8 @@ toAss (I.MidIRRepr fields strs meths graph)
               = LowIRField pos name (8 * len)
 
           mlabels = map I.methodEntry meths
+
+          toAsm :: forall e x. I.MidIRInst e x -> GM (Graph A.Asm e x)
           toAsm e = do as <- rCGM $ instToAsm e
                        case as of
                          [] -> error $ "No output for " ++ show e
