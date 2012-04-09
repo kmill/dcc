@@ -13,7 +13,8 @@ exprLattice :: DataflowLattice ExprFact
 exprLattice = DataflowLattice { fact_name = "Global CSE Lattice"
                               , fact_bot = Bot
                               , fact_join = intersectMaps }
-    where intersectMaps _ (OldFact old) (NewFact new) 
+    where intersectMaps :: Label -> OldFact ExprFact -> NewFact ExprFact -> (ChangeFlag, ExprFact)
+          intersectMaps _ (OldFact old) (NewFact new) 
               = case (old, new) of 
                   (old', Bot) -> (NoChange, old') 
                   (Bot, new') -> (SomeChange, new') 
@@ -31,7 +32,7 @@ emptyExprFact = fact_bot exprLattice
 
 exprAvailable :: S.Set VarName -> FwdTransfer MidIRInst ExprFact 
 exprAvailable nonTemps = mkFTransfer ft 
-    where 
+    where
       ft :: MidIRInst e x -> ExprFact -> Fact x ExprFact 
       ft (Label _ _) f = f
       ft (Enter _ _ args) f = foldl (flip invalidateExprsWith) f args
@@ -50,10 +51,11 @@ exprAvailable nonTemps = mkFTransfer ft
                               then newFact 
                               else case expr of  
                                      (Var pos varName) 
-                                         | isTemp nonTemps varName -> PElem $ Map.insert (Var pos x) varName lastMap
+                                         | isTemp nonTemps varName -> invalidateExprsWith x f
                                      _ -> f
           where newFact = PElem newMap 
                 newMap = Map.insert expr x lastMap
+                lastMap :: Map.Map MidIRExpr VarName
                 lastMap = case f of
                             Bot -> Map.empty
                             PElem oldMap -> oldMap
@@ -80,7 +82,7 @@ cseRewrite nonTemps = deepFwdRw cse
       cse (Store _ x (Var _ v)) f
           | isTemp nonTemps v = return Nothing 
       cse (Store pos x expr) f 
-          | isTemp nonTemps x
+          | not $ isTemp nonTemps x
           = case lookupExpr expr f of 
               Just varName -> return $ Just $ insnToG $ Store pos x (Var pos varName)
               Nothing -> do tempName <- genUniqueName "cse"
