@@ -71,12 +71,14 @@ main = do args <- getArgs
               Left err -> do (putStrLn err)
                              exitWith $ ExitFailure 1
               Right lir -> putStrLn $ CodeGenerate2.lowIRToGraphViz lir 
-            -- TargetDefault -> case lowir of
-            --   Left err -> putStrLn err
-            --   Right lir -> writeFile outFile (unlines $ lowIRReprCode lir)
-            -- TargetCodeGen -> case lowir of 
-            --   Left err -> putStrLn err
-            --   Right lir -> writeFile outFile (unlines $ lowIRReprCode lir)
+            TargetDefault -> case lowir of
+              Left err -> do (putStrLn err)
+                             exitWith $ ExitFailure 1
+              Right lir -> putStrLn $ CodeGenerate2.lowIRToGraphViz lir 
+            TargetCodeGen -> case lowir of 
+              Left err -> do (putStrLn err)
+                             exitWith $ ExitFailure 1
+              Right lir -> putStrLn $ CodeGenerate2.lowIRToGraphViz lir 
             _ -> error "No such target"
             
 -- | Perfoms the actions for the @scan@ target.
