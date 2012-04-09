@@ -353,7 +353,11 @@ dfsSearch graph lbl visited = foldl recurseDFS visited (reverse $ successors blo
 lowIRToAsm m = [ ".section .data" ]
                ++ (concatMap showField (lowIRFields m))
                ++ (concatMap showString (lowIRStrings m))
-               ++  [ ".globl main" ]
+               ++  [ ".globl magic_main" 
+                   , "magic_main:"
+                   , "call main"
+                   , "movq $0, %rax"
+                   , "ret" ]
                ++ (concatMap (showMethod (lowIRGraph m)) (lowIRMethods m))
   where 
     showField (LowIRField _ name size) = [ name ++ ":"
