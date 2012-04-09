@@ -93,7 +93,7 @@ instToAsm (I.Call pos d name args)
          return $ catGraphs gs
                     <*> genSetArgs pos vars
                     <*> genPushRegs pos A.callerSaved
-                    <*> mkMiddle (A.Call pos (length args) (A.IRM_I $ A.Imm32Label name 0))
+                    <*> mkMiddle (A.Call pos (length args) (A.Imm32Label name 0))
                     <*> genPopRegs pos A.callerSaved
                     <*> genResetSP pos args
                     <*> mkMiddle (A.mov pos (A.MReg A.RAX) (A.SReg $ show d))
@@ -103,7 +103,7 @@ instToAsm (I.Callout pos d name args)
                     <*> genSetArgs pos vars
                     <*> genPushRegs pos A.callerSaved
                     <*> mkMiddle (A.mov pos (A.Imm32 0) (A.MReg A.RAX))
-                    <*> mkMiddle (A.Callout pos (length args) (A.IRM_I $ A.Imm32Label name 0))
+                    <*> mkMiddle (A.Callout pos (length args) (A.Imm32Label name 0))
                     <*> genPopRegs pos A.callerSaved
                     <*> genResetSP pos args
                     <*> mkMiddle (A.mov pos (A.MReg A.RAX) (A.SReg $ show d))
@@ -353,9 +353,9 @@ dfsSearch graph lbl visited = foldl recurseDFS visited (reverse $ successors blo
 lowIRToAsm m = [ ".section .data" ]
                ++ (concatMap showField (lowIRFields m))
                ++ (concatMap showString (lowIRStrings m))
-               ++  [ ".globl magic_main" 
-                   , "magic_main:"
-                   , "call main"
+               ++  [ ".globl main" 
+                   , "main:"
+                   , "call method_main"
                    , "movq $0, %rax"
                    , "ret" ]
                ++ (concatMap (showMethod (lowIRGraph m)) (lowIRMethods m))

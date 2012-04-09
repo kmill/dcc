@@ -241,8 +241,8 @@ data Asm e x where
 
   -- | Int is the number of arguments (to know which registers are
   -- used)
-  Call :: SourcePos -> Int -> OperIRM -> Asm O O
-  Callout :: SourcePos -> Int -> OperIRM -> Asm O O
+  Call :: SourcePos -> Int -> Imm32 -> Asm O O
+  Callout :: SourcePos -> Int -> Imm32 -> Asm O O
   -- | The boolean is whether it cares about the return value (so we
   -- know whether to save RAX for the return)
   Ret :: SourcePos -> Bool -> Asm O C

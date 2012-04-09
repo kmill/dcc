@@ -76,8 +76,8 @@ mapRR f (Mov64toR p i r) = Mov64toR p i (f r)
 mapRR f (CMovRMtoR p fl rm r) = CMovRMtoR p fl (map_RM f rm) (f r)
 mapRR f a@(Enter{}) = a
 mapRR f a@(Leave{}) = a
-mapRR f (Call p i irm) = Call p i (map_IRM f irm)
-mapRR f (Callout p i irm) = Callout p i (map_IRM f irm)
+mapRR f a@(Call{}) = a
+mapRR f a@(Callout{}) = a
 mapRR f a@(Ret{}) = a
 mapRR f a@(RetPop{}) = a
 mapRR f a@(ExitFail{}) = a
@@ -114,9 +114,9 @@ getAliveDead expr
         Enter _ _ i -> (x, x)
                 where x = map MReg (catMaybes $ take i argOrder)
         Leave{} -> emptyAD
-        Call p nargs irm -> getRSrc irm @> (x, [MReg RAX])
+        Call p nargs i -> (x, [MReg RAX])
                 where x = map MReg (catMaybes $ take nargs argOrder)
-        Callout p nargs irm -> getRSrc irm @> (x, [MReg RAX])
+        Callout p nargs i -> (x, [MReg RAX])
                 where x = map MReg (catMaybes $ take nargs argOrder)
         Ret p rets -> (if rets then [MReg RAX] else [], [])
         RetPop p rets num -> (if rets then [MReg RAX] else [], [])
