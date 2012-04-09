@@ -92,10 +92,10 @@ fold_EN :: (a -> MidIRExpr -> a) -> a -> MidIRInst e x -> a
 fold_EE f z e@(Lit _ _) = f z e 
 fold_EE f z e@(Var _ _) = f z e
 fold_EE f z e@(LitLabel _ _) = f z e 
-fold_EE f z e@(Load _ expr) = f (f z expr) e 
-fold_EE f z e@(UnOp _ _ expr) = f (f z expr) e
-fold_EE f z e@(BinOp _ _ expr1 expr2) = f (f (f z expr2) expr1) e
-fold_EE f z e@(Cond _ expr1 expr2 expr3) = f (f (f (f z expr3) expr2) expr1) e
+fold_EE f z e@(Load _ expr) = f (fold_EE f z expr) e 
+fold_EE f z e@(UnOp _ _ expr) = f (fold_EE f z expr) e
+fold_EE f z e@(BinOp _ _ expr1 expr2) = f (fold_EE f (fold_EE f z expr2) expr1) e
+fold_EE f z e@(Cond _ expr1 expr2 expr3) = f (fold_EE f (fold_EE f (fold_EE f z expr3) expr2) expr1) e
 
 fold_EN _ z (Label _ _) = z
 fold_EN _ z (Enter _ _ _) = z
