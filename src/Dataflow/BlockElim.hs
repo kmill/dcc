@@ -52,4 +52,7 @@ lastLabelElim = deepBwdRw ll
         where
           fun :: Label -> Maybe Label
           fun l = fromJust (lookupFact l f) `mplus` (Just l)
+--    ll (Enter p l args) (Just l')
+--        = return $ Just (mkFirst (Enter p l args)
+--                         <*> mkLast (Branch p l'))
     ll _ f = return Nothing

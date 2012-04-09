@@ -21,6 +21,7 @@ import CodeGenerate
 import MidIR
 import LowIR
 import RegisterAllocator
+import RegisterAllocator2
 import Assembly
 import Assembly2
 import Dataflow
@@ -79,11 +80,11 @@ main = do args <- getArgs
             TargetDefault -> case lowir of
               Left err -> do (putStrLn err)
                              exitWith $ ExitFailure 1
-              Right lir -> putStrLn $ CodeGenerate2.lowIRToGraphViz lir 
+              Right lir -> putStrLn $ intercalate "\n" (CodeGenerate2.lowIRToAsm lir)
             TargetCodeGen -> case lowir of 
               Left err -> do (putStrLn err)
                              exitWith $ ExitFailure 1
-              Right lir -> putStrLn $ CodeGenerate2.lowIRToGraphViz lir 
+              Right lir -> putStrLn $ intercalate "\n" (CodeGenerate2.lowIRToAsm lir)
             _ -> error "No such target"
             
 -- | Perfoms the actions for the @scan@ target.
@@ -130,7 +131,7 @@ doMidIRFile opts ifname input ast
                   in Right (IR2.runGM mmidir)
 
 
-doLowIRFile :: CompilerOpts -> String -> String -> Either String IR2.MidIRRepr -> Either String (CodeGenerate2.LowIRRepr)
+doLowIRFile :: CompilerOpts -> String -> String -> Either String IR2.MidIRRepr -> Either String LowIRRepr
 doLowIRFile opts ifname input midir
     = case midir of                      
         Left err -> Left err

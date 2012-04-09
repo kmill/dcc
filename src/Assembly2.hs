@@ -3,13 +3,21 @@
 module Assembly2 where
 
 import Compiler.Hoopl
---import IR2
+import qualified IR2 as I
 import qualified Data.Map as Map
-import Data.Graphs
 import Data.List
 import AST(SourcePos, showPos)
 import Data.Int
 import Text.Printf
+
+-- | The assembly form is our low IR.
+data LowIRRepr = LowIRRepr
+    { lowIRFields :: [LowIRField]
+    , lowIRStrings :: [(String, SourcePos, String)]
+    , lowIRMethods :: [I.Method]
+    , lowIRGraph :: Graph Asm C C }
+data LowIRField = LowIRField SourcePos String Int64
+
 
 data Reg = MReg X86Reg -- ^ a real machine register
          | SReg String -- ^ a symbolic register
@@ -233,8 +241,8 @@ data Asm e x where
 
   -- | Int is the number of arguments (to know which registers are
   -- used)
-  Call :: SourcePos -> Int -> OperIRM -> Asm O O
-  Callout :: SourcePos -> Int -> OperIRM -> Asm O O
+  Call :: SourcePos -> Int -> Imm32 -> Asm O O
+  Callout :: SourcePos -> Int -> Imm32 -> Asm O O
   -- | The boolean is whether it cares about the return value (so we
   -- know whether to save RAX for the return)
   Ret :: SourcePos -> Bool -> Asm O C
@@ -323,7 +331,8 @@ instance Show (Asm e x) where
   show (RetPop pos returns num)
       = showUnOp "ret" pos num
         ++ (if not returns then " (void)" else "")
-  show (ExitFail pos) = showNullOp "ret" pos
+  show (ExitFail pos)
+      = showNullOp "movq $1, %rdi\nmovq $1, %rax\ncall exit" pos
 
   show (Lea pos mem reg) = showBinOp "leaq" pos mem reg
 

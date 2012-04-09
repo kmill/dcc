@@ -68,7 +68,7 @@ performDataflowAnalysis opts midir = do
   midir <- if optConstProp opts 
            then performConstPropPass midir 
            else return midir
-  midir <- if optDeadCode opts
+  midir <- if optDeadCode opts 
            then performDeadCodePass midir 
            else return midir
   midir <- if optBlockElim opts
@@ -80,20 +80,14 @@ performDataflowAnalysis opts midir = do
   midir <- if optCommonSubElim opts
            then performCSEPass midir 
            else return midir
-  midir <- if optCopyProp opts 
+  midir <- if optCopyProp opts
            then performCopyPropPass midir 
            else return midir
-  midir <- if optDeadCode opts 
+  midir <- if optDeadCode opts
            then performDeadCodePass midir
            else return midir
   midir <- if optBlockElim opts
            then performBlockElimPass midir 
-           else return midir
-  midir <- if optFlat opts
-           then performFlattenPass midir 
-           else return midir
-  midir <- if optDeadCode opts 
-           then performDeadCodePass midir
            else return midir
   return midir
 
