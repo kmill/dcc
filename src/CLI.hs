@@ -68,7 +68,12 @@ optNone = OptFlags False False False False False False False False
 options :: [OptDescr (CompilerOpts -> CompilerOpts)]
 options =
     [ Option ['o']  ["out"]     (ReqArg outfile' "FILE")    "output FILE"
-    , Option ['t']  ["target"]  (ReqArg target' "TARGET")   "Set target type"
+    , Option ['t']  ["target"]  (ReqArg target' "TARGET")   ("Set target type:\n" ++
+                                                             "\t   scan : Scans the input file\n" ++
+                                                             "\t  parse : Parses the input file\n" ++
+                                                             "\t  midir : Outputs a graph of the mid IR\n" ++
+                                                             "\t  lowir : Outputs a graph of the low IR\n" ++
+                                                             "\tcodegen : Outputs the compiled assembly code" )
     , Option ['d']     ["debug"]   (NoArg debug')              "Enables debug mode"
     , Option ['c']     ["compat"]  (NoArg compat')             "Enables compatibility mode with 6.035 output spec"
     , Option ['h']  ["help"]    (NoArg help')               "Prints this usage information"
