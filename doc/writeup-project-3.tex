@@ -46,7 +46,8 @@ Constant propagation was one of the easiest dataflow optimizations to implement 
 
 The Dataflow lattice for constant propagation is shown in its entirety below:
 
-{\small\begin{verbatim}
+{\small
+\begin{verbatim}
 type LitVal = (SourcePos, Int64)
 -- Type and definition of the lattice
 type ConstFact = Map.Map VarName (WithTop LitVal)
