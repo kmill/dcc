@@ -91,6 +91,7 @@ dprogram = DProgram <$> getPosition
            <*> many fieldDecl
            <*> many methodDecl
            <* dkeyword "}"
+           <* eof
     where header = dkeyword "class" *> identProgram *> dkeyword "{"
           identProgram = dtoken' (\t -> Identifier == tokenType t
                                         && "Program" == tokenString t)
