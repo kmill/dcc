@@ -130,7 +130,7 @@ rewriteSpillPass fb = FwdPass
                                         then return Nothing
                                         else return $ Just $ mkFirst $
                                              A.Enter pos l x'
-                    where x' = fromIntegral $ 8 * (S.size f)
+                    where x' = fromIntegral $ 8 * (S.size f) + 8
                 d _ f = return Nothing
 
 
