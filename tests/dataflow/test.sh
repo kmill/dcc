@@ -1,7 +1,7 @@
 #!/bin/sh
 
 runcompiler() {
-    ../../dcc --target codegen -o $2 $1
+    ../../dcc --target codegen -O cse -o $2 $1
 }
 
 fail=0
