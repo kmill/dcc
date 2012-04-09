@@ -80,8 +80,7 @@ options =
                                                                       "\tconstprop : Constant Propagation\n" ++
                                                                       "\t deadcode : Dead Code Elimination\n" ++
                                                                       "\tblockelim : Block Elimination\n" ++
-                                                                      "\t     flat : Flatten Optimization\n" ++
-                                                                      "\t       ra : Register Allocation")
+                                                                      "\t     flat : Flatten Optimization\n")
     ]
     where outfile' s opts = opts { outputFile = Just s }
           target' t opts = opts { target = targetOpt t }
