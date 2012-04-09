@@ -3,13 +3,21 @@
 module Assembly2 where
 
 import Compiler.Hoopl
---import IR2
+import qualified IR2 as I
 import qualified Data.Map as Map
-import Data.Graphs
 import Data.List
 import AST(SourcePos, showPos)
 import Data.Int
 import Text.Printf
+
+-- | The assembly form is our low IR.
+data LowIRRepr = LowIRRepr
+    { lowIRFields :: [LowIRField]
+    , lowIRStrings :: [(String, SourcePos, String)]
+    , lowIRMethods :: [I.Method]
+    , lowIRGraph :: Graph Asm C C }
+data LowIRField = LowIRField SourcePos String Int64
+
 
 data Reg = MReg X86Reg -- ^ a real machine register
          | SReg String -- ^ a symbolic register

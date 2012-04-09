@@ -4,7 +4,7 @@ module CodeGenerate2 where
 
 import Compiler.Hoopl
 import qualified Assembly2 as A
-import Assembly2(checkIf32Bit, rmToIRM)
+import Assembly2(checkIf32Bit, rmToIRM, LowIRRepr(..), LowIRField(..))
 import qualified IR2 as I
 import IR2(MidIRExpr, VarName)
 import AST(noPosition, SourcePos, showPos)
@@ -14,13 +14,6 @@ import Data.List
 import Data.Int
 
 type GM = I.GM
-
-data LowIRRepr = LowIRRepr
-    { lowIRFields :: [LowIRField]
-    , lowIRStrings :: [(String, SourcePos, String)]
-    , lowIRMethods :: [I.Method]
-    , lowIRGraph :: Graph A.Asm C C }
-data LowIRField = LowIRField SourcePos String Int64
 
 toAss :: I.MidIRRepr -> GM LowIRRepr
 toAss (I.MidIRRepr fields strs meths graph)
@@ -273,6 +266,7 @@ expToR e = foldl1 mplus rules
                    dr <- genTmpReg
                    return ( ga <*> gb
                             <*> mkMiddle (A.MovIRMtoR pos a (A.MReg A.RAX))
+                            <*> mkMiddle (A.mov pos (A.Imm32 0) (A.MReg A.RDX))
                             <*> mkMiddle (A.IDiv pos b)
                             <*> mkMiddle (A.mov pos (A.MReg A.RAX) dr)
                           , dr )
@@ -282,6 +276,7 @@ expToR e = foldl1 mplus rules
                    dr <- genTmpReg
                    return ( ga <*> gb
                             <*> mkMiddle (A.MovIRMtoR pos a (A.MReg A.RAX))
+                            <*> mkMiddle (A.mov pos (A.Imm32 0) (A.MReg A.RDX))
                             <*> mkMiddle (A.IDiv pos b)
                             <*> mkMiddle (A.mov pos (A.MReg A.RDX) dr)
                           , dr )
