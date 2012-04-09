@@ -409,7 +409,7 @@ callerSaved :: [X86Reg]
 callerSaved = [R10, R11]
 
 calleeSaved :: [X86Reg]
-calleeSaved = [RBP, RBX, R12, R13, R14, R15] -- should RBP be in this?
+calleeSaved = [RBX, R12, R13, R14, R15]
 
 data X86Reg = RAX -- temp reg, return value
             | RBX -- callee-saved

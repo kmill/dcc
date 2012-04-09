@@ -276,8 +276,8 @@ getAliveDead expr
         Pop p rm -> getRDst rm
         Jmp{} -> emptyAD
         JCond{} -> emptyAD
-        ALU_IRMtoR _ _ irm r -> getRSrc irm @> getRDst r
-        ALU_IRtoM _ _ ir m -> getRSrc ir @> getRDst m
+        ALU_IRMtoR _ _ irm r -> getRSrc irm @> getRSrc r @> getRDst r
+        ALU_IRtoM _ _ ir m -> getRSrc ir @> getRSrc r @> getRDst m
         Cmp _ ir rm -> getRSrc ir @> getRSrc rm
         Inc _ rm -> getRSrc rm @> getRDst rm
         Dec _ rm -> getRSrc rm @> getRDst rm
