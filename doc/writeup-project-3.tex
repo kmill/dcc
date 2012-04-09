@@ -468,4 +468,16 @@ copyProp = mkFRewrite cp
 
 The rewrite function for Copy Propagation is almost identical to the initial rewrite for constant propagation. If it encounters a use of a variable that it has a mapping for in its fact, it simply replaces the variable with the original copy. 
 
+\section{Testing}
+We created a small testing system to allow for rapid creation of tests. The syntax is a subset of Decaf, in that the desired output is contained within comments of the program. The Hello World example is shown below.
+
+\begin{verbatim}
+//> Hello, World!
+
+class Program {
+  void main() {
+    callout("printf", "Hello, World!");
+  }
+}
+\end{verbatim}
 \end{document}
