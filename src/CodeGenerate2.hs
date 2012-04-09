@@ -213,7 +213,7 @@ expToR e = foldl1 mplus rules
                    return ( mkMiddle $ A.mov pos (A.Imm32Label s 0) dr
                           , dr )
               , do I.Load pos exp <- withNode e
-                   (g, m) <- expToM exp
+                   (g, m) <- expToMem exp
                    dr <- genTmpReg
                    return ( g
                             <*> mkMiddle (A.mov pos m dr)
