@@ -109,7 +109,7 @@ instToAsm (I.Callout pos d name args)
          return $ catGraphs gs
                     <*> genSetArgs pos vars
                     <*> genPushRegs pos A.callerSaved
-                    <*> mkMiddle (A.mov pos (A.Imm32 1) (A.MReg A.RAX))
+                    <*> mkMiddle (A.mov pos (A.Imm32 0) (A.MReg A.RAX))
                     <*> mkMiddle (A.Callout pos (length args) (A.IRM_I $ A.Imm32Label name 0))
                     <*> genPopRegs pos A.callerSaved
                     <*> genResetSP pos args
@@ -365,7 +365,7 @@ lowIRToAsm m = [ ".section .data" ]
                                          , "\t.skip " ++ (show size) ]
     showString (name, _, str) = [ name ++ ":"
                                 , "\t.asciz " ++ (show str) ]
-    showMethod graph (I.Method pos name entry) = concatMap (labelToAsmOut graph) visited
+    showMethod graph (I.Method pos name entry) = [(show entry) ++ ":"] ++ concatMap (labelToAsmOut graph) visited
       where visited = dfsSearch graph entry [entry]
                                                  
 lowIRToGraphViz m = "digraph name {\n"
