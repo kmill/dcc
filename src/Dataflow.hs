@@ -6,6 +6,7 @@ import Dataflow.DeadCode
 import Dataflow.CSE
 import Dataflow.BlockElim
 import Dataflow.Flatten
+import Dataflow.CopyProp
 
 import Control.Monad.Trans
 
@@ -67,25 +68,28 @@ performDataflowAnalysis opts midir = do
   midir <- if optConstProp opts 
            then performConstPropPass midir 
            else return midir
-  -- midir <- if optCopyProp opts 
-  --          then performCopyPropPass midir 
-  --          else return midir
   midir <- if optDeadCode opts
            then performDeadCodePass midir 
            else return midir
-  midir <- if optBlockElim opts && False
+  midir <- if optBlockElim opts
            then performBlockElimPass midir 
            else return midir
   midir <- if optFlat opts
            then performFlattenPass midir 
            else return midir
-  midir <- if optCommonSubElim opts 
+  midir <- if optCommonSubElim opts
            then performCSEPass midir 
+           else return midir
+  midir <- if optCopyProp opts 
+           then performCopyPropPass midir 
+           else return midir
+  midir <- if optDeadCode opts 
+           then performDeadCodePass midir
            else return midir
   return midir
 
 performConstPropPass midir = performFwdPass constPropPass midir emptyFact
---performCopyPropPass midir = performFwdPass copyPropPass midir emptyFact
+performCopyPropPass midir = performFwdPass copyPropPass midir emptyCopyFact
 performDeadCodePass midir = performBwdPass deadCodePass midir S.empty
 performBlockElimPass midir = performBwdPass blockElimPass midir Nothing
 performFlattenPass midir = performFwdPass flattenPass midir ()
@@ -133,6 +137,11 @@ constPropPass = FwdPass
                 , fp_transfer = varHasLit
                 , fp_rewrite = constProp `thenFwdRw` simplify } 
 
+copyPropPass :: (CheckpointMonad m, FuelMonad m) => FwdPass m MidIRInst CopyFact 
+copyPropPass = FwdPass 
+               { fp_lattice = copyLattice
+               , fp_transfer = varIsCopy
+               , fp_rewrite = copyProp }
 
 deadCodePass :: (CheckpointMonad m, FuelMonad m) => BwdPass m MidIRInst Live
 deadCodePass = BwdPass 
