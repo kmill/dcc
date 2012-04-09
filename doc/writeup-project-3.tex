@@ -15,11 +15,11 @@ The purpose of this project was to add a series of dataflow optimizations to the
 
 We chose to make use of The Higher-Order Optimization Library (Hoopl) for Haskell. This library provides fixed-point functions to interleave dataflow transfer functions and rewrite functions. Both forward and backward analysis are supported by Hoopl. We briefly explain the design and implementation of Hoopl in Section~\ref{sec:hoopl}. To use Hoopl to perform dataflow analysis optimizations, we first had to dramatically modify both the Mid IR and Low IR used for unoptimized code generation. The changes to the IR are documented in Section~\ref{sec:changes}. 
 
-Once the IR supported Hoopl, we were able to implement several dataflow optimizations with Hoopl, including Constant Propagation (Section~\ref{sec:constprop}), Dead Code Elimination (Section~\ref{sec:deadcode}), Unreachable Code Elimination (Section~\ref{sec:deadcode}), Global Common Subexpression Elimination (Section~\ref{sec:cse}), and Global Copy Propagation (Section~\ref{sec:copyprop}). 
+We were able to implement several dataflow optimizations, including Constant Propagation (Section~\ref{sec:constprop}), Dead Code Elimination (Section~\ref{sec:deadcode}), Unreachable Code Elimination (Section~\ref{sec:deadcode}), Global Common Subexpression Elimination (Section~\ref{sec:cse}), and Global Copy Propagation (Section~\ref{sec:copyprop}). 
 \section {Division of Work} 
 \label{sec:division} 
 
-The work was divided as follows: Kyle Miller rewrote the both the Mid and Low IR to be more compatible with Hoopl and x86 assembly respectively. Kyle also helped design several optimizations. Alec Thomson used Hoopl to write dataflow optimizations for Constant Propagation, Dead Code Elimination, Global Constant Subexpression Elimination, and Global Copy Propagation. Steven Valdez refactored the Command Line Interface, Main.hs file, and helped implement Unreachable Code Elimination. Patrick Hulin created a testing framework that consisted of many automatic shell scripts and a function to produce valid C code from our IR for additional redundancy checks. 
+The work was divided as follows: Kyle Miller rewrote the both the Mid and Low IR to be more compatible with Hoopl and x86 assembly, respectively. Kyle also helped design several optimizations. Alec Thomson used Hoopl to write dataflow optimizations for Constant Propagation, Dead Code Elimination, Global Constant Subexpression Elimination, and Global Copy Propagation. Steven Valdez refactored the Command Line Interface, Main.hs file, and helped implement Unreachable Code Elimination. Patrick Hulin created a testing framework that consisted of many automatic shell scripts and a function to produce valid C code from our IR for additional redundancy checks. 
 
 \section {Hoopl}
 \label{sec:hoopl} 
@@ -33,9 +33,23 @@ In our case, the node type provided to all of our Hoopl functions is type MidIRI
 
 
 \section {Changes to IR to Accomodate Hoopl}
-\label{sec:changes} 
+\label{sec:changes}
 
-To use Hoopl with our compiler, we had to alter the Mid IR substantially. 
+We redesigned the IRs so that Hoopl would be able to perform
+fixed-point computations on our control-flow graphs.  We also designed
+an IR for manipulating control-flow graphs of x86 assembly (instead of
+manipulating raw strings as we had been doing in the code generator
+previously).
+
+This involved rebuilding the AST to MidIR conversion and the code
+generator.  Our new code generator is a rule-based system.  To support
+the code generation, we extended the flat expressions to tree
+expresions.  This lets the code generator detect when different
+addressing modes available to the x86 are being used.
+
+Needless to say, this took a great amount of time, which is
+unsurprising considering that this was essentially doing the last
+project over agin.
 
 \section {Constant Propagation} 
 \label{sec:constprop}
