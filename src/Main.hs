@@ -133,7 +133,7 @@ doLowIRFile opts ifname input midir
     = case midir of                      
         Left err -> Left err
         Right m -> let assem = do a <- CodeGenerate2.toAss m
-                                  a <- RegisterAllocator2.regAlloc a
+                                  a <- if debugMode opts then RegisterAllocator2.regAlloc a else return a
                                   return a
                    in Right (IR2.runGM assem)
                  
