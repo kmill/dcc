@@ -355,7 +355,7 @@ instance Show (Asm e x) where
 
   show (IMulRAX pos oper) = showUnOp "imulq" pos oper
   show (IMulRM pos a b) = showBinOp "imulq" pos a b
-  show (IMulImm pos a b c) = printf "imulq %s, %s, %s  # %s"
+  show (IMulImm pos a b c) = printf "imulq $%s, %s, %s  # %s"
                              (show a) (show b) (show c) (showPos pos)
 
   show (IDiv pos oper) = showUnOp "idivq" pos oper
