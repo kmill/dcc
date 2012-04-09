@@ -325,6 +325,14 @@ expToMem e = mcut $ foldl1 mplus rules
       rules = [ do I.LitLabel pos s <- withNode e
                    return ( GNil
                           , A.MemAddr Nothing (A.Imm32Label s 0) Nothing A.SOne )
+              , do I.BinOp pos I.OpAdd expa expb <- withNode e
+                   (gb, b) <- expToI expb
+                   (ga, a) <- expToR expa
+                   return (ga <*> gb, A.MemAddr (Just a) b Nothing A.SOne)
+              , do I.BinOp pos I.OpAdd expa expb <- withNode e
+                   (gb, b) <- expToR expb
+                   (ga, a) <- expToR expa
+                   return (ga <*> gb, A.MemAddr (Just a) (A.Imm32 0) (Just b) A.SOne)
               , do (g, r) <- expToR e
                    return (g, A.MemAddr (Just r) (A.Imm32 0) Nothing A.SOne)
               ]
