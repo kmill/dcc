@@ -1,24 +1,37 @@
 #!/bin/sh
 
 runparser() {
-    
   ../../dcc --compat --target parse $1
 }
 
+cd `dirname $0`
+
 fail=0
 
-for file in `dirname $0`/illegal/*; do
+for file in ./illegal/*; do
   if runparser $file; then
-    echo "Illegal file $file parsed successfully.";
+    echo "[ ] Illegal file $file incorrectly parsed successfully.";
     fail=1
+  else
+    echo "[+]" $file;
+    echo
   fi
 done
 
-for file in `dirname $0`/legal/*; do
+for file in ./legal/*; do
   if ! runparser $file; then
-    echo "Legal file $file failed to parse.";
+    echo "[ ] Legal file $file failed to parse.";
     fail=1
+  else
+      echo "[+]" $file;
   fi
 done
+
+if [ "$fail" -eq 0 ]
+then
+    echo "\nPassed"
+else
+    echo "\nFailed"
+fi
 
 exit $fail;
