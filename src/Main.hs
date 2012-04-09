@@ -75,11 +75,11 @@ main = do args <- getArgs
             TargetDefault -> case lowir of
               Left err -> do (putStrLn err)
                              exitWith $ ExitFailure 1
-              Right lir -> putStrLn $ CodeGenerate2.lowIRToGraphViz lir 
+              Right lir -> putStrLn $ intercalate "\n" (CodeGenerate2.lowIRToAsm lir)
             TargetCodeGen -> case lowir of 
               Left err -> do (putStrLn err)
                              exitWith $ ExitFailure 1
-              Right lir -> putStrLn $ CodeGenerate2.lowIRToGraphViz lir 
+              Right lir -> putStrLn $ intercalate "\n" (CodeGenerate2.lowIRToAsm lir)
             _ -> error "No such target"
             
 -- | Perfoms the actions for the @scan@ target.

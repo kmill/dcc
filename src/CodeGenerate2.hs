@@ -6,13 +6,13 @@ import Compiler.Hoopl
 import qualified Assembly2 as A
 import Assembly2(checkIf32Bit, rmToIRM, LowIRRepr(..), LowIRField(..))
 import qualified IR2 as I
-import IR2(MidIRExpr, VarName)
+import IR2(MidIRExpr, VarName, Showing)
 import AST(noPosition, SourcePos, showPos)
 import Control.Monad
 import Data.Maybe
 import Data.List
 import Data.Int
-
+import qualified Data.Set as S
 type GM = I.GM
 
 toAss :: I.MidIRRepr -> GM LowIRRepr
@@ -335,7 +335,34 @@ cmpToFlag I.CmpEQ = A.FlagE
 cmpToFlag I.CmpNEQ = A.FlagNE
 cmpToFlag _ = error "not a comparison!"
 
+lookupLabel (GMany _ g_blocks _) lbl = case mapLookup lbl g_blocks of
+  Just x -> x
+  Nothing -> error "ERROR"
 
+labelToAsmOut graph lbl = (map show bs) ++ [show c]
+  where f :: (MaybeC C (n C O), [n O O], MaybeC C (n O C))
+             -> (n C O, [n O O], n O C)
+        f (JustC e, nodes, JustC x) = (e, nodes, x)
+        (a, bs, c) = f (blockToNodeList block)
+        block = lookupLabel graph lbl
+
+dfsSearch graph lbl visited = foldl recurseDFS visited (reverse $ successors block)
+  where block = lookupLabel graph lbl
+        recurseDFS v' nv = if nv `elem` v' then v' else dfsSearch graph nv (v' ++ [nv])
+  
+lowIRToAsm m = [ ".section .data" ]
+               ++ (concatMap showField (lowIRFields m))
+               ++ (concatMap showString (lowIRStrings m))
+               ++  [ ".globl main" ]
+               ++ (concatMap (showMethod (lowIRGraph m)) (lowIRMethods m))
+  where 
+    showField (LowIRField _ name size) = [ name ++ ":"
+                                         , "\t.skip " ++ (show size) ]
+    showString (name, _, str) = [ name ++ ":"
+                                , "\t.asciz " ++ (show str) ]
+    showMethod graph (I.Method pos name entry) = concatMap (labelToAsmOut graph) visited
+      where visited = dfsSearch graph entry [entry]
+                                                 
 lowIRToGraphViz m = "digraph name {\n"
                     ++ (showFields (lowIRFields m))
                     ++ (showStrings (lowIRStrings m))
