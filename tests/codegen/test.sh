@@ -11,6 +11,8 @@ if ! gcc -v 2>&1 |grep -q '^Target: x86_64-linux-gnu'; then
   exit 0;
 fi
 
+mv `dirname $0`/input/10-bounds.dcf 10.dfc
+
 for file in `dirname $0`/input/*.dcf; do
   asm=`tempfile --suffix=.s`
   msg=""
@@ -44,5 +46,7 @@ for file in `dirname $0`/input/*.dcf; do
   fi
   rm -f $diffout $output $binary $asm;
 done
+
+mv 10.dfc `dirname $0`/input/10-bounds.dcf
 
 exit $fail;
