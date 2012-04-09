@@ -25,6 +25,10 @@ import Assembly
 import Assembly2
 import Dataflow
 import Compiler.Hoopl.Fuel
+import Data.List
+import AST
+import qualified IR
+import qualified CodeGenerate2
 
 import qualified IR2
 import qualified MidIR2
@@ -38,187 +42,96 @@ main = do args <- getArgs
           input <- case inputFile opts of
                      Just fname -> readFile fname
                      Nothing -> getContents -- of stdin
+          tokens <- return $ doScanFile opts ifname input
+          dprogram <- return $ doParseFile opts ifname input tokens
+          ast <- return $ doCheckFile opts ifname input dprogram
+          midir <- return $ doMidIRFile opts ifname input ast
+          lowir <- return $ doLowIRFile opts ifname input midir
+          outFile <- return $ case outputFile opts of
+            Just fn -> fn
+            Nothing -> replaceExtension ifname ".s"
           case target opts of
-            TargetScan -> case doScanFile opts ifname input of
-              Left err -> putStrLn err
-              Right v -> printScannerResult v
-            TargetParse -> doParseFile opts ifname input
-            TargetInter -> doCheckFile opts ifname input
-            TargetMidIR -> doMidIRFile opts ifname input
-            TargetLowIR -> doLowIRFile opts ifname input
-            TargetDefault -> doGenerateCode opts ifname input
-            TargetCodeGen -> doGenerateCode opts ifname input
+            TargetScan -> case tokens of
+              Left err -> do (putStrLn err)
+                             exitWith $ ExitFailure 1
+              Right v -> putStrLn $ printScannerResult v
+            TargetParse -> case dprogram of
+              Left err -> do (putStrLn err)
+                             exitWith $ ExitFailure 1
+              Right r -> unless (compatMode opts) $ print r
+            TargetInter -> case ast of
+              Left err -> do (putStrLn err)
+                             exitWith $ ExitFailure 1
+              Right x -> do if debugMode opts then print x else return ()
+            TargetMidIR -> case midir of
+              Left err -> do (putStrLn err)
+                             exitWith $ ExitFailure 1
+              Right midir -> putStrLn $ IR2.midIRToGraphViz midir
+            TargetLowIR -> case lowir of
+              Left err -> do (putStrLn err)
+                             exitWith $ ExitFailure 1
+              Right lir -> putStrLn $ CodeGenerate2.lowIRToGraphViz lir 
+            TargetDefault -> case lowir of
+              Left err -> do (putStrLn err)
+                             exitWith $ ExitFailure 1
+              Right lir -> putStrLn $ CodeGenerate2.lowIRToGraphViz lir 
+            TargetCodeGen -> case lowir of 
+              Left err -> do (putStrLn err)
+                             exitWith $ ExitFailure 1
+              Right lir -> putStrLn $ CodeGenerate2.lowIRToGraphViz lir 
             _ -> error "No such target"
-
-
+            
+-- | Perfoms the actions for the @scan@ target.
 doScanFile :: CompilerOpts -> String -> String -> Either String [Token]
 doScanFile opts ifname input
   = case runScanner opts ifname input of
     Left err -> Left (reportErr (lines input) err)
     Right v2 -> Right v2
     
---doParseFile :: CompilerOpts -> String -> String -> Either String i -> Either String v
---doCheckFile :: CompilerOpts -> String -> String -> Either String i -> Either String v
---doMidIRFile :: CompilerOpts -> String -> String -> Either String i -> Either String v
---doLowIRFile :: CompilerOpts -> String -> String -> Either String i -> Either String v
---doGenerateCode :: CompilerOpts -> String -> String -> Either String i -> Either String v
-
-
 -- | Perfoms the actions for the @parse@ target.
-doParseFile :: CompilerOpts -> String -> String -> IO ()
-doParseFile opts ifname input
-    = case runScanner opts ifname input of
-        Left err -> do putStrLn $ reportErr (lines input) err
-                       exitWith $ ExitFailure 1
-        Right v ->
-            case getErrors v of
-              [] -> case runDParser opts ifname v of
-                      Left err ->
-                          do putStrLn $ reportErr (lines input) err
-                             exitWith $ ExitFailure 2
-                      Right r ->
-                          do unless (compatMode opts) $ print r
-                             exitSuccess
-              errors -> do printScannerResult errors
-                           exitWith $ ExitFailure 1
+doParseFile :: CompilerOpts -> String -> String -> Either String [Token] -> Either String DProgram
+doParseFile opts ifname input toks
+  = case toks of
+    Left err -> Left err
+    Right v ->
+      case getErrors v of
+        [] -> case runDParser opts ifname v of
+          Left err -> Left (reportErr (lines input) err)
+          Right r -> Right r
+        errors -> Left (printScannerResult errors)
     where getErrors = filter isTokenError
           isTokenError (TokenError {}) = True
           isTokenError _ = False
-
+      
 -- | Performs the actions for the @inter@ target. 
-doCheckFile :: CompilerOpts -> String -> String -> IO ()
-doCheckFile opts ifname input
-    = case runScanner opts ifname input of
-        Left err -> do putStrLn $ reportErr (lines input) err
-                       exitWith $ ExitFailure 1
-        Right v ->
-            case getErrors v of
-              [] -> case runDParser opts ifname v of
-                      Left err ->
-                          do putStrLn $ reportErr (lines input) err
-                             exitWith $ ExitFailure 2
-                      Right r ->
-                          case doSemanticCheck r of
-                            Right x -> do if debugMode opts then 
-                                              print (makeHybridAST r) else --putStrLn ((show x) ++ "\nok.") 
-                                              return ()
-                            Left (udata, errors) ->
-                                do putStrLn "Semantic errors:"
-                                   putStrLn ""
-                                   sequence_ [putStrLn (showSemError (lines input) udata e)
-                                              | e <- errors]
-                                   exitWith $ ExitFailure 4
-              errors -> do printScannerResult errors
-                           exitWith $ ExitFailure 1
-    where getErrors = filter isTokenError
-          isTokenError (TokenError {}) = True
-          isTokenError _ = False
+doCheckFile :: CompilerOpts -> String -> String -> Either String DProgram -> Either String (HDProgram Int)
+doCheckFile opts ifname input r
+  = case r of
+    Left err -> Left err
+    Right v ->
+      case doSemanticCheck v of
+        Left (udata, errors) ->
+          Left ("Semantic errors:\n" ++ "\n" ++ (intercalate "\n" [(showSemError (lines input) udata e) | e <- errors]))
+        Right x -> Right (makeHybridAST v)
+        
+-- | Performs the actions for the @midir@ target.
+doMidIRFile :: CompilerOpts -> String -> String -> Either String (HDProgram Int) -> Either String (IR2.MidIRRepr)
+doMidIRFile opts ifname input ast
+  = case ast of
+    Left err -> Left err
+    Right hast -> let mmidir = do mir <- MidIR2.generateMidIR hast
+                                  mir <- runWithFuel 2222222 $ (performDataflowAnalysis (optMode opts) mir)
+                                  return mir
+                  in Right (IR2.runGM mmidir)
+                    
 
-doMidIRFile :: CompilerOpts -> String -> String -> IO ()
-doMidIRFile opts ifname input 
-    = case runScanner opts ifname input of
-        Left err -> do putStrLn $ reportErr (lines input) err
-                       exitWith $ ExitFailure 1
-        Right v ->
-            case getErrors v of
-              [] -> case runDParser opts ifname v of
-                      Left err ->
-                          do putStrLn $ reportErr (lines input) err
-                             exitWith $ ExitFailure 2
-                      Right r ->
-                          case doSemanticCheck r of
-                            Right _ -> let hast = makeHybridAST r
-                                           mmidir = do mir <- MidIR2.generateMidIR hast
-                                                       mir <- runWithFuel 2222222 $ (performDataflowAnalysis (optMode opts) mir)
-                                                       return mir
-                                           midir = IR2.runGM mmidir
-                                       in do 
-                                         putStrLn $ IR2.midIRToGraphViz midir
-                            Left (udata, errors) ->
-                                do putStrLn "Semantic errors:"
-                                   putStrLn ""
-                                   sequence_ [putStrLn (showSemError (lines input) udata e)
-                                              | e <- errors]
-                                   exitWith $ ExitFailure 4
-              errors -> do printScannerResult errors
-                           exitWith $ ExitFailure 1
-    where getErrors = filter isTokenError
-          isTokenError (TokenError {}) = True
-          isTokenError _ = False
-
-doLowIRFile :: CompilerOpts -> String -> String -> IO ()
-doLowIRFile opts ifname input 
-    = case runScanner opts ifname input of
-        Left err -> do putStrLn $ reportErr (lines input) err
-                       exitWith $ ExitFailure 1
-        Right v ->
-            case getErrors v of
-              [] -> case runDParser opts ifname v of
-                      Left err ->
-                          do putStrLn $ reportErr (lines input) err
-                             exitWith $ ExitFailure 2
-                      Right r ->
-                          case doSemanticCheck r of
-                            Right _ -> let hast = makeHybridAST r
-                                           midir = generateMidIR hast
-                                           lowirSymb = toLowIR (optMode opts) midir
-                                           lowir = destroySymbRegs lowirSymb
-                                       in do
-                                         --putStrLn $ show lowir
-                                         if (debugMode opts) then
-                                           putStrLn $ lowIRtoGraphViz lowir 
-                                           else
-                                           putStrLn $ lowIRtoGraphViz lowirSymb
-                            Left (udata, errors) ->
-                                do putStrLn "Semantic errors:"
-                                   putStrLn ""
-                                   sequence_ [putStrLn (showSemError (lines input) udata e)
-                                              | e <- errors]
-                                   exitWith $ ExitFailure 4
-              errors -> do printScannerResult errors
-                           exitWith $ ExitFailure 1
-    where getErrors = filter isTokenError
-          isTokenError (TokenError {}) = True
-          isTokenError _ = False
-
--- | Generates unoptimized code for the @codegen@ target
-doGenerateCode :: CompilerOpts -> String -> String -> IO ()
-doGenerateCode opts ifname input 
-    = case runScanner opts ifname input of
-        Left err -> do putStrLn $ reportErr (lines input) err
-                       exitWith $ ExitFailure 1
-        Right v ->
-            case getErrors v of
-              [] -> case runDParser opts ifname v of
-                      Left err ->
-                          do putStrLn $ reportErr (lines input) err
-                             exitWith $ ExitFailure 2
-                      Right r ->
-                          case doSemanticCheck r of
-                            Right x -> let hast = makeHybridAST r
-                                           midir = generateMidIR hast
-                                           lowirSymb = toLowIR (optMode opts) midir
-                                           lowir = destroySymbRegs lowirSymb
-                                           code = runGenerateCode (makeHybridAST r) ifname 
-                                           outFile = case outputFile opts of
-                                             Just fn -> fn
-                                             Nothing -> replaceExtension ifname ".s"
-                                       in do 
-                                         if  debugMode opts  
-                                           then putStrLn $ (unlines $ lowIRReprCode lowir) ++ "\nOLD CODE: \n" ++ (show code) else return ()
-                                         writeFile outFile  (unlines $ lowIRReprCode lowir)
-                            Left (udata, errors) ->
-                                do putStrLn "Semantic errors:"
-                                   putStrLn ""
-                                   sequence_ [putStrLn (showSemError (lines input) udata e)
-                                              | e <- errors]
-                                   exitWith $ ExitFailure 4
-              errors -> do printScannerResult errors
-                           exitWith $ ExitFailure 1
-    where getErrors = filter isTokenError
-          isTokenError (TokenError {}) = True
-          isTokenError _ = False
-
+doLowIRFile :: CompilerOpts -> String -> String -> Either String IR2.MidIRRepr -> Either String (CodeGenerate2.LowIRRepr)
+doLowIRFile opts ifname input midir
+    = case midir of                      
+        Left err -> Left err
+        Right m -> let assem = CodeGenerate2.toAss m --(optMode opts) m 
+                   in Right (IR2.runGM assem)
+                 
 -- | This function formats an error so it has a nifty carat under
 -- where the error occured.
 reportErr :: [String] -- ^ The lines from the source file

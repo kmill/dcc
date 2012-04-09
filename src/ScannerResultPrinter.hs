@@ -10,10 +10,11 @@ import Text.ParserCombinators.Parsec.Pos
 import Scanner
 import Data.Maybe (fromMaybe)
 import Data.Char (ord)
+import Data.List
 
 -- | Runs 'show6035' on each of the tokens and prints each 
-printScannerResult :: [Token] -> IO ()
-printScannerResult ts = mapM_ (putStrLn . show6035) ts
+printScannerResult :: [Token] -> String
+printScannerResult ts = intercalate "\n" $ map show6035 ts
 
 -- | The 'Show6035' class is for showing things in accordance with the
 -- 6.035 specifications.  It has the same interface as 'Show', except,
