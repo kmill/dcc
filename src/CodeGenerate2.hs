@@ -296,7 +296,8 @@ expToM e = foldl1 mplus rules
       rules = [ do I.LitLabel pos s <- withNode e
                    return ( GNil
                           , A.MemAddr Nothing (A.Imm32Label s 0) Nothing A.SOne )
-              , do (g, r) <- expToR e
+              , do I.Load pos exp <- withNode e
+                   (g, r) <- expToR exp
                    return (g, A.MemAddr (Just r) (A.Imm32 0) Nothing A.SOne)
               ]
 
