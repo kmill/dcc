@@ -93,7 +93,7 @@ instToAsm (I.Call pos d name args)
          return $ catGraphs gs
                     <*> genSetArgs pos vars
                     <*> genPushRegs pos A.callerSaved
-                    <*> mkMiddle (A.Call pos (length args) (A.IRM_I $ A.Imm32Label name 0))
+                    <*> mkMiddle (A.Call pos (length args) (A.Imm32Label name 0))
                     <*> genPopRegs pos A.callerSaved
                     <*> genResetSP pos args
                     <*> mkMiddle (A.mov pos (A.MReg A.RAX) (A.SReg $ show d))
@@ -103,7 +103,7 @@ instToAsm (I.Callout pos d name args)
                     <*> genSetArgs pos vars
                     <*> genPushRegs pos A.callerSaved
                     <*> mkMiddle (A.mov pos (A.Imm32 1) (A.MReg A.RAX))
-                    <*> mkMiddle (A.Callout pos (length args) (A.IRM_I $ A.Imm32Label name 0))
+                    <*> mkMiddle (A.Callout pos (length args) (A.Imm32Label name 0))
                     <*> genPopRegs pos A.callerSaved
                     <*> genResetSP pos args
                     <*> mkMiddle (A.mov pos (A.MReg A.RAX) (A.SReg $ show d))
