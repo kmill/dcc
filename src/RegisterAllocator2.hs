@@ -48,7 +48,7 @@ collectSpill mlabels graph
                       (JustC mlabels)
                       graph
                       f
-         return g
+         return graph
 
 
 

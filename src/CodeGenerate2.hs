@@ -15,6 +15,7 @@ import Data.List
 import Data.Int
 import qualified Data.Set as S
 import Dataflow
+import Debug.Trace
 
 type GM = I.GM
 
@@ -71,6 +72,13 @@ instance MonadPlus CGM where
         = CGM $ do as <- mas
                    bs <- mbs
                    return $ as ++ bs
+
+-- | cuts the computation down to one branch
+mcut :: CGM a -> CGM a
+mcut (CGM mas) = CGM $ do as <- mas
+                          case as of
+                            [] -> return []
+                            a:_ -> return [a]
 
 -- | just take the first!
 runCGM :: CGM a -> GM a
@@ -182,7 +190,7 @@ withNode :: MidIRExpr -> CGM MidIRExpr
 withNode e = return e
 
 expToI :: MidIRExpr -> CGM (Graph A.Asm O O, A.Imm32)
-expToI e = foldl1 mplus rules
+expToI e = mcut $ foldl1 mplus rules
     where
       rules = [ do I.Lit pos i <- withNode e
                    guard $ checkIf32Bit i
@@ -195,7 +203,7 @@ expToI e = foldl1 mplus rules
               ]
 
 expToR :: MidIRExpr -> CGM (Graph A.Asm O O, A.Reg)
-expToR e = foldl1 mplus rules
+expToR e = mcut $ foldl1 mplus rules
     where
       rules = [ do I.Lit pos i <- withNode e
                    guard $ checkIf32Bit i
@@ -312,7 +320,7 @@ expToR e = foldl1 mplus rules
               ]
 
 expToMem :: MidIRExpr -> CGM (Graph A.Asm O O, A.MemAddr)
-expToMem e = foldl1 mplus rules
+expToMem e = mcut $ foldl1 mplus rules
     where
       rules = [ do I.LitLabel pos s <- withNode e
                    return ( GNil
@@ -321,11 +329,11 @@ expToMem e = foldl1 mplus rules
                    return (g, A.MemAddr (Just r) (A.Imm32 0) Nothing A.SOne)
               ]
 expToM :: MidIRExpr -> CGM (Graph A.Asm O O, A.MemAddr)
-expToM (I.Load _ exp) = expToMem exp
+expToM e@(I.Load _ exp) = mcut $ expToMem exp
 expToM e = fail ("Mem not a load: " ++ show e)
 
 expToFlag :: MidIRExpr -> CGM (Graph A.Asm O O, A.Flag)
-expToFlag e = foldl1 mplus rules
+expToFlag e = mcut $ foldl1 mplus rules
     where
       rules = [ do I.BinOp pos op expa expb <- withNode e
                    guard $ op `elem` [ I.CmpLT, I.CmpGT, I.CmpLTE
