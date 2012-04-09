@@ -360,7 +360,7 @@ lowIRToAsm m = [ ".section .data" ]
                                          , "\t.skip " ++ (show size) ]
     showString (name, _, str) = [ name ++ ":"
                                 , "\t.asciz " ++ (show str) ]
-    showMethod graph (I.Method pos name entry) = [(show entry) ++ ":"] ++ concatMap (labelToAsmOut graph) visited
+    showMethod graph (I.Method pos name entry) = [name ++ ":"] ++ concatMap (labelToAsmOut graph) visited
       where visited = dfsSearch graph entry [entry]
                                                  
 lowIRToGraphViz m = "digraph name {\n"
