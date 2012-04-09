@@ -1,3 +1,6 @@
+//> 5
+//> 4
+//> 4
 class Program {
   int get_int(int x) {
     return x;
@@ -16,9 +19,9 @@ class Program {
     x = get_bool(true);
     c = 0; d = 0; e = 0;
 
+    c = a + b;
     if (x) {
-      c = a + b;
-    } else {
+      a = 1;
       d = a + b;
     }
     e = a + b;

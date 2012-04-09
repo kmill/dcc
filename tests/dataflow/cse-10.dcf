@@ -1,3 +1,6 @@
+//> 5
+//> 0
+//> 5
 class Program {
   int get_int(int x) {
     return x;
@@ -8,20 +11,23 @@ class Program {
   }
 
   void main() {
-    int a, b, c, d;
+    int a, b, c, d, e;
     boolean x;
 
     a = get_int(2);
     b = get_int(3);
     x = get_bool(true);
-    c = 0; d = 0;
+    c = 0; d = 0; e = 0;
 
     if (x) {
       c = a + b;
+    } else {
+      d = a + b;
     }
-    d = a + b;
+    e = a + b;
 
     callout("printf", "%d\n", c);
     callout("printf", "%d\n", d);
+    callout("printf", "%d\n", e);
   }
 }

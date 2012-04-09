@@ -121,7 +121,7 @@ methodToMidIR env (HMethodDecl _ pos typ tok args st)
 --                                     (zip args' (argExprs pos)))
                       <*> graph
                       <*> mkLast (Return (tokenPos tok) defret)
-         return (Method (tokenPos tok) name startl, graph')
+         return (Method (tokenPos tok) ("method_" ++ name) startl, graph')
     where name = (tokenString tok)
           defret = case typ of
                      A.MethodVoid -> Nothing
@@ -372,7 +372,7 @@ expressionToMidIR env (HExprMethod _ _ call)
             do (gexs, exs) <- unzip `fmap` (mapM (expressionToMidIR env) exprs)
                let g' = catGraphs gexs -- args in right-to-left order
                temp <- genTmpVar
-               return $ ( g' <*> (mkMiddle $ Call pos temp (tokenString tok) exs)
+               return $ ( g' <*> (mkMiddle $ Call pos temp ("method_" ++ tokenString tok) exs)
                         , Var pos temp)
         HCalloutMethod _ pos tok args ->
             do (gexs, exs) <- unzip `fmap` (mapM evalArg args)

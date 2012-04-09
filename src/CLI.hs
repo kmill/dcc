@@ -37,7 +37,7 @@ defaultOptions
                    , debugMode = False
                    , compatMode = False
                    , helpMode = False
-                   , optMode = optAllD
+                   , optMode = optNone
                    }
 
 -- | This type represents the possible actions to do with the input
