@@ -348,7 +348,7 @@ lookupLabel (GMany _ g_blocks _) lbl = case mapLookup lbl g_blocks of
   Just x -> x
   Nothing -> error "ERROR"
 
-labelToAsmOut graph lbl = (map show bs) ++ [show c]
+labelToAsmOut graph lbl = [show a] ++ (map show bs) ++ [show c]
   where f :: (MaybeC C (n C O), [n O O], MaybeC C (n O C))
              -> (n C O, [n O O], n O C)
         f (JustC e, nodes, JustC x) = (e, nodes, x)
