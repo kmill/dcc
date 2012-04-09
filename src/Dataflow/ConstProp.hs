@@ -13,11 +13,8 @@ import Data.Int
 import Data.Maybe 
 
 type LitVal = (SourcePos, Int64)
-
 type Node = MidIRInst 
-
 -- Type and definition of the lattice
--- Need to figure out what "Var" Corresponds to 
 type ConstFact = Map.Map VarName (WithTop LitVal)
 constLattice :: DataflowLattice ConstFact
 constLattice = DataflowLattice { fact_name = "Constant Propagation Lattice (Arhrhrhghg)"

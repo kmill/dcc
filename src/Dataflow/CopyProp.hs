@@ -13,9 +13,7 @@ import Control.Monad
 type Node = MidIRInst 
 
 type VarInfo = (SourcePos, VarName)
-
 type CopyFact = Map.Map VarName (WithTop VarInfo)
-  
 copyLattice :: DataflowLattice CopyFact
 copyLattice = DataflowLattice { fact_name = "Copy Propagation Lattice"
                                , fact_bot = Map.empty
