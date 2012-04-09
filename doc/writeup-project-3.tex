@@ -199,8 +199,7 @@ liveness = mkBTransfer live
 
 The transfer function makes use of an auxiliary function called ``addUses'' to gather every variable use from a given program statement and add those variables to the set of live variables. The ``fold\_EN'' function performs a fold operation over the expressions in a node and is defined along with several other auxiliary functions in OptSupport.hs. 
  
-\subsection { Rewrite Function for Dead Code Elimination }
-
+\subsection{Rewrite Function for Dead Code Elimination}
 \begin{verbatim}
 deadAsstElim :: forall m . FuelMonad m => BwdRewrite m MidIRInst Live 
 deadAsstElim = mkBRewrite d 
@@ -213,8 +212,69 @@ deadAsstElim = mkBRewrite d
 
 As you can see, the rewrite function for Dead Code Elimination is very simple and only looks for assignments to dead variables, which it then eliminates by returning an empty graph. 
 
-\section {Unreachable Code Elimination}
+\section {Empty Block Elimination}
 \label{sec:blockelim}
+
+Empty Block Elimination, another relatively simple backward analysis, was used to work backwards and skip over Empty Blocks who only served to jump the dataflow onto another block. After analyzing the lattice, which consisted of the previously seen Label, the optimization rewrote any conditional and unconditional branches to skip over any direct empty blocks, in order to reduce code size.
+
+\subsection{Dataflow Lattice for Empty Block Elimination}
+
+\begin{verbatim}
+type LastLabel = Maybe Label
+lastLabelLattice :: DataflowLattice LastLabel
+lastLabelLattice = DataflowLattice { fact_name = "Last Labels"
+                                   , fact_bot = Nothing
+                                   , fact_join = add
+                                   }
+  where add _ (OldFact o) (NewFact n) = (c, n)
+          where c = changeIf (o /= n)
+\end{verbatim}
+
+\subsection{Transfer Function for Empty Block Elimination}
+\begin{verbatim}
+lastLabelness :: BwdTransfer MidIRInst LastLabel
+lastLabelness = mkBTransfer f
+  where f :: MidIRInst e x -> Fact x LastLabel -> LastLabel
+        f (Branch _ l) k = 
+          case lookupFact l k of
+            Just l' -> l' `mplus` Just l
+            Nothing -> Just l
+        f (Label _ l) (Just l')
+            | l == l'  = Nothing
+            | otherwise = Just l'
+        f (Label _ l) Nothing = Nothing
+        f (Enter _ l _) k = Nothing
+        
+        f _ k = Nothing
+\end{verbatim}
+
+
+\subsection{Rewrite Function for Empty Block Elimination}
+
+\begin{verbatim}
+lastLabelElim :: forall m . FuelMonad m => BwdRewrite m MidIRInst LastLabel
+lastLabelElim = deepBwdRw ll
+  where
+    ll :: MidIRInst e x -> Fact x LastLabel -> m (Maybe (Graph MidIRInst e x))
+    ll (Branch p l) f = 
+      return $ case lookupFact l f of
+          Nothing -> Nothing
+          Just mm -> mm >>= (Just . mkLast . (Branch p))
+    ll (CondBranch p ce tl fl) f
+        | tl == fl = return $ Just $ mkLast $ Branch p tl
+        | otherwise =
+            return $ do tl' <- fun tl
+                        fl' <- fun fl
+                        guard $ [tl', fl'] /= [tl, fl]
+                        Just $ mkLast $ CondBranch p ce tl' fl'
+        where
+          fun :: Label -> Maybe Label
+          fun l = fromJust (lookupFact l f) `mplus` (Just l)
+--    ll (Enter p l args) (Just l')
+--        = return $ Just (mkFirst (Enter p l args)
+--                         <*> mkLast (Branch p l'))
+    ll _ f = return Nothing
+\end{verbatim}
 
 \section {Global Common Subexpression Elimination} 
 \label{sec:cse}
