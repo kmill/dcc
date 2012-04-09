@@ -357,3 +357,38 @@ graphToGraphViz node (GMany _ g_blocks _) = concatMap bviz (mapElems g_blocks)
                     -> (n C O, [n O O], n O C)
                   f (JustC e, nodes, JustC x) = (e, nodes, x)
                   (a, bs, c) = f (blockToNodeList block)
+
+--- Map everything to C
+midIRToC m = (showFields (midIRFields m))
+             ++ (showStrings (midIRStrings m))
+             ++ (concatMap showMethod (midIRMethods m)) ++ "\n"
+             ++ graphToC show (midIRGraph m)
+ 
+    where showMethod (Method pos name entry)
+              = name ++ ": \ngoto " ++ (show entry) ++ "\n"
+          showField (MidIRField pos name msize)
+              = "int " ++ name ++ (showSize msize) ++ ";\n"
+          showSize (Just n) = "[n]"
+          showSize (Nothing) = ""
+          showFields fields = "/* begin fields */\n" 
+                              ++ (concatMap showField fields) ++ "\n"
+          showString (name, pos, str)
+              = "char *" ++ name ++ " = \"" ++ str ++ "\";"
+          showStrings strings = "/* begin strings */\n"
+                                ++ (concatMap showString strings) ++ "\n"
+
+graphToC :: NonLocal n => Showing n -> Graph n C C -> String
+graphToC node (GMany _ g_blocks _) = concatMap bviz (mapElems g_blocks)
+  where bviz block = lab ++ ": "
+                     ++ (leftAlign $ show $ b block ++ "\n") ++ "];\n"
+                     ++ (concatMap (showEdge lab) (successors block))
+            where lab = show $ entryLabel block
+                  showEdge e x = printf "%s -> %s;\n" (show e) (show x)
+                  -- | turns \n into \l so graphviz left-aligns
+                  leftAlign t = subRegex (mkRegex "([^\\\\])\\\\n") t "\\1\\l"
+        b block = node a ++ "\n" ++ unlines (map node bs) ++ node c
+            where f :: (MaybeC C (n C O), [n O O], MaybeC C (n O C))
+                    -> (n C O, [n O O], n O C)
+                  f (JustC e, nodes, JustC x) = (e, nodes, x)
+                  (a, bs, c) = f (blockToNodeList block)
+
