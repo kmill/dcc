@@ -21,6 +21,7 @@ import CodeGenerate
 import MidIR
 import LowIR
 import RegisterAllocator
+import RegisterAllocator2
 import Assembly
 import Assembly2
 import Dataflow
@@ -125,7 +126,7 @@ doMidIRFile opts ifname input ast
                   in Right (IR2.runGM mmidir)
                     
 
-doLowIRFile :: CompilerOpts -> String -> String -> Either String IR2.MidIRRepr -> Either String (CodeGenerate2.LowIRRepr)
+doLowIRFile :: CompilerOpts -> String -> String -> Either String IR2.MidIRRepr -> Either String LowIRRepr
 doLowIRFile opts ifname input midir
     = case midir of                      
         Left err -> Left err
