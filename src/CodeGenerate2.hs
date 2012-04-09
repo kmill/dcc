@@ -85,7 +85,7 @@ instToAsm (I.Store pos d sexp)
     = do (gd, s) <- expToIRM sexp
          return $ gd <*> mkMiddle (A.MovIRMtoR pos s (A.SReg $ show d))
 instToAsm (I.IndStore pos dexp sexp)
-    = do (gd, d) <- expToM dexp
+    = do (gd, d) <- expToMem dexp
          (gs, s) <- expToIR sexp
          return $ gd <*> gs
                     <*> mkMiddle (A.MovIRtoM pos s d)
@@ -290,16 +290,18 @@ expToR e = foldl1 mplus rules
                           , dr )
               ]
 
-expToM :: MidIRExpr -> CGM (Graph A.Asm O O, A.MemAddr)
-expToM e = foldl1 mplus rules
+expToMem :: MidIRExpr -> CGM (Graph A.Asm O O, A.MemAddr)
+expToMem e = foldl1 mplus rules
     where
       rules = [ do I.LitLabel pos s <- withNode e
                    return ( GNil
                           , A.MemAddr Nothing (A.Imm32Label s 0) Nothing A.SOne )
-              , do I.Load pos exp <- withNode e
-                   (g, r) <- expToR exp
+              , do (g, r) <- expToR e
                    return (g, A.MemAddr (Just r) (A.Imm32 0) Nothing A.SOne)
               ]
+expToM :: MidIRExpr -> CGM (Graph A.Asm O O, A.MemAddr)
+expToM (I.Load _ exp) = expToMem exp
+expToM e = fail ("Mem not a load: " ++ show e)
 
 expToFlag :: MidIRExpr -> CGM (Graph A.Asm O O, A.Flag)
 expToFlag e = foldl1 mplus rules
