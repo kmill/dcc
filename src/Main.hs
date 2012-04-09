@@ -52,19 +52,24 @@ main = do args <- getArgs
             Nothing -> replaceExtension ifname ".s"
           case target opts of
             TargetScan -> case tokens of
-              Left err -> putStrLn err
+              Left err -> do (putStrLn err)
+                             exitWith $ ExitFailure 1
               Right v -> putStrLn $ printScannerResult v
             TargetParse -> case dprogram of
-              Left err -> putStrLn err
+              Left err -> do (putStrLn err)
+                             exitWith $ ExitFailure 1
               Right r -> unless (compatMode opts) $ print r
             TargetInter -> case ast of
-              Left err -> putStrLn err
+              Left err -> do (putStrLn err)
+                             exitWith $ ExitFailure 1
               Right x -> do if debugMode opts then print x else return ()
             TargetMidIR -> case midir of
-              Left err -> putStrLn err
+              Left err -> do (putStrLn err)
+                             exitWith $ ExitFailure 1
               Right midir -> putStrLn $ IR2.midIRToGraphViz midir
             TargetLowIR -> case lowir of
-              Left err -> putStrLn err
+              Left err -> do (putStrLn err)
+                             exitWith $ ExitFailure 1
               Right lir -> putStrLn $ CodeGenerate2.lowIRToGraphViz lir 
             -- TargetDefault -> case lowir of
             --   Left err -> putStrLn err

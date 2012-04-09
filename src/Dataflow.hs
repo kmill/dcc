@@ -86,6 +86,15 @@ performDataflowAnalysis opts midir = do
   midir <- if optDeadCode opts 
            then performDeadCodePass midir
            else return midir
+  midir <- if optBlockElim opts
+           then performBlockElimPass midir 
+           else return midir
+  midir <- if optFlat opts
+           then performFlattenPass midir 
+           else return midir
+  midir <- if optDeadCode opts 
+           then performDeadCodePass midir
+           else return midir
   return midir
 
 performConstPropPass midir = performFwdPass constPropPass midir emptyFact
