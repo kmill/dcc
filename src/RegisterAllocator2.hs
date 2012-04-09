@@ -1,11 +1,15 @@
-{-# LANGUAGE RankNTypes, GADTs #-}
+{-# LANGUAGE RankNTypes, GADTs, ScopedTypeVariables #-}
 
 module RegisterAllocator2 where 
 
 import qualified Data.Map as Map 
 import Assembly2
+import qualified Assembly2 as A
 import CodeGenerate2
 import qualified IR2 as I
+import Dataflow
+import qualified Data.Set as S
+import Data.List
 import Control.Monad.State
 import Compiler.Hoopl
 import Data.Maybe
@@ -13,7 +17,8 @@ import AST (SourcePos, noPosition)
 
 regAlloc :: LowIRRepr -> I.GM LowIRRepr
 regAlloc (LowIRRepr fields strs meths graph)
-    = return $ LowIRRepr fields strs meths graph'
+    = do graph'' <- evalStupidFuelMonad (doRewrite mlabels graph') 22222222
+         return $ LowIRRepr fields strs meths graph''
       where GMany _ body _ = graph
             graph' = foldl (|*><*|) emptyClosedGraph bodies
             bodies = map f (mapElems body)
@@ -28,6 +33,78 @@ regAlloc (LowIRRepr fields strs meths graph)
                             JustC e' -> e'
                       x = case mx of
                             JustC x' -> x'
+            mlabels = map I.methodEntry meths
+
+doRewrite :: [Label] -> Graph A.Asm C C -> RM (Graph A.Asm C C)
+doRewrite mlabels graph
+    = do (g, _, _) <- analyzeAndRewriteBwd 
+                      replaceSpillPass
+                      (JustC mlabels)
+                      graph
+                      mapEmpty
+         return g
+
+
+
+replaceSpillPass :: (CheckpointMonad m, FuelMonad m)
+                    => BwdPass m A.Asm (S.Set String)
+replaceSpillPass = BwdPass
+                   { bp_lattice = getSpillLattice
+                   , bp_transfer = getSpillTransfer
+                   , bp_rewrite = rewriteSpill }
+    where
+      getSpillLattice :: DataflowLattice (S.Set String)
+      getSpillLattice = DataflowLattice
+                        { fact_name = "spill lattice"
+                        , fact_bot = S.empty
+                        , fact_join = add
+                        }
+          where add _ (OldFact old) (NewFact new) = (ch, j)
+                    where j = S.union new old
+                          ch = changeIf $ S.size j > S.size old
+
+      getSpillTransfer :: BwdTransfer A.Asm (S.Set String)
+      getSpillTransfer = mkBTransfer3 usedCO usedOO usedOC
+          where
+            usedCO :: A.Asm C O -> (S.Set String) -> (S.Set String)
+            usedCO _ f = f
+
+            usedOO :: A.Asm O O -> (S.Set String) -> (S.Set String)
+            usedOO (A.Spill _ _ s) f = S.insert s f
+            usedOO (A.Reload _ s _) f = S.insert s f
+            usedOO _ f = f
+
+            usedOC :: A.Asm O C -> FactBase (S.Set String) -> (S.Set String)
+            usedOC x f = S.unions $ map
+                         ((fromMaybe S.empty) . (flip lookupFact f))
+                         (successors x)
+
+      rewriteSpill :: forall m . FuelMonad m =>
+                      BwdRewrite m A.Asm (S.Set String)
+      rewriteSpill = mkBRewrite d
+          where 
+            d :: A.Asm e x -> Fact x (S.Set String) -> m (Maybe (Graph A.Asm e x))
+            d (A.Spill pos reg s) f
+                = return $ Just $ mkMiddle $ A.mov pos reg mem
+                  where offset = negate (8 + 8 * (fromJust $ elemIndex s f'))
+                        f' = S.toAscList (S.insert s f)
+                        mem = A.MemAddr (Just $ A.MReg A.RBP)
+                              (A.Imm32 $ fromIntegral offset)
+                              Nothing A.SOne
+            d (A.Reload pos s reg) f
+                = return $ Just $ mkMiddle $ A.mov pos mem reg
+                  where offset = negate (8 + 8 * (fromJust $ elemIndex s f'))
+                        f' = S.toAscList (S.insert s f)
+                        mem = A.MemAddr (Just $ A.MReg A.RBP)
+                              (A.Imm32 $ fromIntegral offset)
+                              Nothing A.SOne
+            d (A.Enter pos l x) f = if x' == x
+                                    then return Nothing
+                                    else return $ Just $ mkFirst $
+                                         A.Enter pos l x'
+                where x' = fromIntegral $ 8 * (S.size f)
+            d _ f = return Nothing
+
 
 
 freeRegs :: [Reg]
