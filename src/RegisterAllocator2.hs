@@ -4,11 +4,56 @@ module RegisterAllocator2 where
 
 import qualified Data.Map as Map 
 import Assembly2
+import CodeGenerate2
+import qualified IR2 as I
 import Control.Monad.State
 import Compiler.Hoopl
 import Data.Maybe
-import AST (SourcePos)
+import AST (SourcePos, noPosition)
 
+regAlloc :: LowIRRepr -> I.GM LowIRRepr
+regAlloc (LowIRRepr fields strs meths graph)
+    = return $ LowIRRepr fields strs meths graph'
+      where GMany _ body _ = graph
+            graph' = foldl (|*><*|) emptyClosedGraph bodies
+            bodies = map f (mapElems body)
+            f :: Block Asm C C -> Graph Asm C C
+            f block = mkFirst e
+                      <*> catGraphs (map withSpills inner)
+                      <*> mkLast x
+                where (me, inner, mx) = blockToNodeList block
+                      e :: Asm C O
+                      x :: Asm O C
+                      e = case me of
+                            JustC e' -> e'
+                      x = case mx of
+                            JustC x' -> x'
+
+
+freeRegs :: [Reg]
+freeRegs = map MReg [R10, R11, R12, R13, R14, R15] -- put this in optimal order!
+
+getSRegs :: [Reg] -> [String]
+getSRegs [] = []
+getSRegs ((SReg s):xs) = s:(getSRegs xs)
+getSRegs (_:xs) = getSRegs xs
+
+withSpills :: Asm O O -> Graph Asm O O
+withSpills expr = reloads <*> expr' <*> spills
+    where
+      (alive, dead) = getAliveDead expr
+      salive = getSRegs alive
+      sdead = getSRegs dead
+      sToRegs = zip (salive ++ sdead) freeRegs
+      f :: Reg -> Reg
+      f (SReg s) = getMReg s
+      f r = r
+      getMReg s = fromJust $ lookup s sToRegs
+      expr' = mkMiddle $ mapRR f expr
+      mkReload s = mkMiddle $ Reload noPosition s (getMReg s)
+      mkSpill s = mkMiddle $ Spill noPosition (getMReg s) s
+      reloads = catGraphs $ map mkReload salive
+      spills = catGraphs $ map mkSpill sdead
 
 
 type AliveDead = ([Reg], [Reg])

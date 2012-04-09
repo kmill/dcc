@@ -130,7 +130,9 @@ doLowIRFile :: CompilerOpts -> String -> String -> Either String IR2.MidIRRepr -
 doLowIRFile opts ifname input midir
     = case midir of                      
         Left err -> Left err
-        Right m -> let assem = CodeGenerate2.toAss m --(optMode opts) m 
+        Right m -> let assem = do a <- CodeGenerate2.toAss m
+                                  a <- RegisterAllocator2.regAlloc a
+                                  return a
                    in Right (IR2.runGM assem)
                  
 -- | This function formats an error so it has a nifty carat under

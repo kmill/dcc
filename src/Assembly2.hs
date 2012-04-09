@@ -309,7 +309,7 @@ instance Show (Asm e x) where
   show (Spill pos reg sname)
       = printf "SPILL %s, %s  # %s"
         (show reg) (show sname) (showPos pos)
-  show (Reload pos reg sname)
+  show (Reload pos sname reg)
       = printf "RELOAD %s, %s  # %s"
         (show sname) (show reg) (showPos pos)
   show (MovIRMtoR pos a b) = showBinOp "movq" pos a b
@@ -375,6 +375,10 @@ instance Mnemonic Reg Reg where
     mov p s d = MovIRMtoR p (IRM_R s) d
 instance Mnemonic MemAddr Reg where
     mov p s d = MovIRMtoR p (IRM_M s) d
+instance Mnemonic Reg MemAddr where
+    mov p s d = MovIRtoM p (IR_R s) d
+instance Mnemonic Imm32 MemAddr where
+    mov p s d = MovIRtoM p (IR_I s) d
 
 ---
 --- Registers
