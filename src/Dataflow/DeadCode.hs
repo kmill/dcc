@@ -8,6 +8,7 @@ import Dataflow.OptSupport
 import Compiler.Hoopl 
 import IR2
 import Data.Maybe
+import Debug.Trace
 
 
 
@@ -26,7 +27,7 @@ liveness = mkBTransfer live
     where live :: MidIRInst e x -> Fact x Live -> Live
           live (Label _ _) f = f 
           live n@(Enter _ _ args) f = addUses (f S.\\ (S.fromList args)) n
-          live n@(Store _ x _) f = addUses (S.delete x f) n 
+          live n@(Store _ x _) f =  addUses (S.delete x f) n 
           live n@(IndStore _ _ _) f = addUses f n 
           live n@(Call _ x _ _) f = addUses (S.delete x f) n
           live n@(Callout _ x _ _) f = addUses (S.delete x f) n 
@@ -47,7 +48,7 @@ deadAsstElim :: forall m . FuelMonad m => BwdRewrite m MidIRInst Live
 deadAsstElim = mkBRewrite d 
     where 
       d :: MidIRInst e x -> Fact x Live -> m (Maybe (Graph MidIRInst e x))
-      d (Store _ x _) live 
+      d n@(Store _ x _) live 
           | not (x `S.member` live) = return $ Just emptyGraph
       d _ _  = return Nothing
 
