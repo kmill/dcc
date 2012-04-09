@@ -337,7 +337,7 @@ expressionToMidIR env (HLoadLoc senv pos loc)
             let (isfield, var') = fromJust $ lookup (tokenString tok) env
             in return (GNil, case isfield of
                                False -> Var pos var'
-                               True -> Load pos (Var pos var'))
+                               True -> Load pos (varToLabel pos var'))
         HArrayLocation _ pos tok iexpr ->
             let var = tokenString tok -- array var name (for error message)
                 (_, var') = fromJust $ lookup var env -- destination array var
