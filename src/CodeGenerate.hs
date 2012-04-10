@@ -391,7 +391,7 @@ dfsSearch graph lbl visited = foldl recurseDFS visited (reverse $ successors blo
   where block = lookupLabel graph lbl
         recurseDFS v' nv = if nv `elem` v' then v' else dfsSearch graph nv (v' ++ [nv])
   
-lowIRToAsm m = [ ".section",  ".data" ]
+lowIRToAsm m = [ ".section .data" ]
                ++ newline
                ++ ["# fields"]
                ++ (concatMap showField (lowIRFields m))
