@@ -329,10 +329,10 @@ instance Show (Asm e x) where
   show (Callout pos nargs func) = showUnOp "call" pos func
   show (Ret pos returns)
       = showNullOp "ret" pos
-        ++ (if not returns then " (void)" else "")
+        ++ (if not returns then " (void method)" else "")
   show (RetPop pos returns num)
       = showUnOp "ret" pos num
-        ++ (if not returns then " (void)" else "")
+        ++ (if not returns then " (void method)" else "")
   show (ExitFail pos)
       = "# exited by failure. " ++ showPos pos
 

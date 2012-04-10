@@ -177,13 +177,16 @@ genPopRegs pos regs = catGraphs $ map genpop $ reverse regs
 expTo' :: (a -> b) -> CGM (Graph A.Asm O O, a) -> CGM (Graph A.Asm O O, b)
 expTo' f m = do (g, a) <- m
                 return $ (g, f a)
+expITo' :: (a -> b) -> CGM a -> CGM (Graph A.Asm O O, b)
+expITo' f m = do a <- m
+                 return $ (GNil, f a)
 
 expToIRM :: MidIRExpr -> CGM (Graph A.Asm O O, A.OperIRM)
-expToIRM e = expTo' A.IRM_I (expToI e)
+expToIRM e = expITo' A.IRM_I (expToI e)
              `mplus` expTo' A.IRM_M (expToM e)
              `mplus` expTo' A.IRM_R (expToR e)
 expToIR :: MidIRExpr -> CGM (Graph A.Asm O O, A.OperIR)
-expToIR e = expTo' A.IR_I (expToI e)
+expToIR e = expITo' A.IR_I (expToI e)
             `mplus` expTo' A.IR_R (expToR e)
 expToRM :: MidIRExpr -> CGM (Graph A.Asm O O, A.OperRM)
 expToRM e = expTo' A.RM_M (expToM e)
@@ -192,17 +195,15 @@ expToRM e = expTo' A.RM_M (expToM e)
 withNode :: MidIRExpr -> CGM MidIRExpr
 withNode e = return e
 
-expToI :: MidIRExpr -> CGM (Graph A.Asm O O, A.Imm32)
+expToI :: MidIRExpr -> CGM A.Imm32
 expToI e = mcut $ foldl1 mplus rules
     where
       rules = [ do I.Lit pos i <- withNode e
                    guard $ checkIf32Bit i
-                   return ( GNil
-                          , A.Imm32 $ fromIntegral i )
+                   return $ A.Imm32 $ fromIntegral i
 
               , do (I.LitLabel pos s) <- withNode e
-                   return ( GNil
-                          , A.Imm32Label s 0 )
+                   return $ A.Imm32Label s 0
               ]
 
 expToR :: MidIRExpr -> CGM (Graph A.Asm O O, A.Reg)
@@ -277,10 +278,24 @@ expToR e = mcut $ foldl1 mplus rules
                                            (A.RM_R $ true) dr)
                           , dr )
               , do I.BinOp pos I.OpMul expa expb <- withNode e
-                   (gb, b) <- expToI expb
+                   b <- expToI expb
+                   A.Imm32 b' <- return b
+                   let logb' = log2 b'
+                       log2 1 = 0
+                       log2 n = 1 + log2 (n `div` 2)
+                   guard $ b' > 0
+                   guard $ b' == 2 ^ logb'
+                   (ga, a) <- expToIRM expa
+                   dr <- genTmpReg
+                   return ( ga
+                            <*> mkMiddles [ A.MovIRMtoR pos a dr
+                                          , A.Shl pos (A.Imm8 $ fromIntegral logb') (A.RM_R dr) ]
+                          , dr )
+              , do I.BinOp pos I.OpMul expa expb <- withNode e
+                   b <- expToI expb
                    (ga, a) <- expToRM expa
                    dr <- genTmpReg
-                   return ( ga <*> gb
+                   return ( ga
                             <*> mkMiddle (A.IMulImm pos b a dr)
                           , dr )
               , do I.BinOp pos I.OpMul expa expb <- withNode e
@@ -329,9 +344,9 @@ expToMem e = mcut $ foldl1 mplus rules
                    return ( GNil
                           , A.MemAddr Nothing (A.Imm32Label s 0) Nothing A.SOne )
               , do I.BinOp pos I.OpAdd expa expb <- withNode e
-                   (gb, b) <- expToI expb
+                   b <- expToI expb
                    (ga, a) <- expToR expa
-                   return (ga <*> gb, A.MemAddr (Just a) b Nothing A.SOne)
+                   return (ga, A.MemAddr (Just a) b Nothing A.SOne)
               , do I.BinOp pos I.OpAdd expa expb <- withNode e
                    (gb, b) <- expToR expb
                    (ga, a) <- expToR expa
