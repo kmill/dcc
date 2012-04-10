@@ -15,7 +15,7 @@ import AST (PP, SourcePos, showPos)
 import Data.Ord
 
 bTrue, bFalse :: Int64
-bTrue = 1 -- i.e. all 1's
+bTrue = 1
 bFalse = 0
 
 boolToInt :: Bool -> Int64

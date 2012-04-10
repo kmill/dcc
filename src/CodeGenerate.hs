@@ -196,7 +196,7 @@ withNode :: MidIRExpr -> CGM MidIRExpr
 withNode e = return e
 
 expToI :: MidIRExpr -> CGM A.Imm32
-expToI e = mcut $ foldl1 mplus rules
+expToI e = mcut $ msum rules
     where
       rules = [ do I.Lit pos i <- withNode e
                    guard $ checkIf32Bit i
@@ -207,7 +207,7 @@ expToI e = mcut $ foldl1 mplus rules
               ]
 
 expToR :: MidIRExpr -> CGM (Graph A.Asm O O, A.Reg)
-expToR e = mcut $ foldl1 mplus rules
+expToR e = mcut $ msum rules
     where
       rules = [ do I.Lit pos i <- withNode e
                    guard $ checkIf32Bit i
@@ -338,7 +338,7 @@ expToR e = mcut $ foldl1 mplus rules
               ]
 
 expToMem :: MidIRExpr -> CGM (Graph A.Asm O O, A.MemAddr)
-expToMem e = mcut $ foldl1 mplus rules
+expToMem e = mcut $ msum rules
     where
       rules = [ do I.LitLabel pos s <- withNode e
                    return ( GNil
@@ -359,7 +359,7 @@ expToM e@(I.Load _ exp) = mcut $ expToMem exp
 expToM e = fail ("Mem not a load: " ++ show e)
 
 expToFlag :: MidIRExpr -> CGM (Graph A.Asm O O, A.Flag)
-expToFlag e = mcut $ foldl1 mplus rules
+expToFlag e = mcut $ msum rules
     where
       rules = [ do I.BinOp pos op expa expb <- withNode e
                    guard $ op `elem` [ I.CmpLT, I.CmpGT, I.CmpLTE

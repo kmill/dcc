@@ -12,8 +12,10 @@ import AST(SourcePos, noPosition)
 import Data.Int
 import Data.Maybe 
 
+import AlgSimplify
+
 type LitVal = (SourcePos, Int64)
-type Node = MidIRInst 
+
 -- Type and definition of the lattice
 type ConstFact = Map.Map VarName (WithTop LitVal)
 constLattice :: DataflowLattice ConstFact
@@ -30,7 +32,7 @@ emptyFact :: ConstFact
 emptyFact = fact_bot constLattice
 
 -- Analysis: variable equals a literal constant
-varHasLit :: FwdTransfer Node ConstFact
+varHasLit :: FwdTransfer MidIRInst ConstFact
 varHasLit = mkFTransfer ft
     where
       ft :: MidIRInst e x -> ConstFact -> Fact x ConstFact
@@ -53,10 +55,10 @@ varHasLit = mkFTransfer ft
 
 
 -- Rewrite function: replace constant variables
-constProp :: forall m. FuelMonad m => FwdRewrite m Node ConstFact
+constProp :: forall m. FuelMonad m => FwdRewrite m MidIRInst ConstFact
 constProp = mkFRewrite cp 
     where 
-      cp :: Node e x -> ConstFact -> m (Maybe (Graph Node e x))
+      cp :: MidIRInst e x -> ConstFact -> m (Maybe (Graph MidIRInst e x))
       cp node f 
              = return $ liftM insnToG $ mapVN (lookup f) node
       lookup :: ConstFact -> VarName -> Maybe MidIRExpr
@@ -64,12 +66,12 @@ constProp = mkFRewrite cp
                      Just (PElem (pos, v)) -> Just $ Lit pos v
                      _ -> Nothing
 
-simplify :: forall m f . FuelMonad m => FwdRewrite m Node f
+simplify :: forall m f . FuelMonad m => FwdRewrite m MidIRInst f
 simplify = deepFwdRw simp 
     where 
-      simp :: forall e x. Node e x -> f -> m (Maybe (Graph Node e x))
-      simp node _ = return $ liftM insnToG $ s_node node 
-      s_node :: Node e x -> Maybe (Node e x)
+      simp :: forall e x. MidIRInst e x -> f -> m (Maybe (Graph MidIRInst e x))
+      simp node _ = return $ liftM insnToG $ algSimplifyInst node
+      s_node :: MidIRInst e x -> Maybe (MidIRInst e x)
       s_node (CondBranch pos (Lit _ x) tl fl) 
           = Just $ Branch pos (if intToBool x then tl else fl)
       s_node n = (mapEN . mapEE) s_exp n 
