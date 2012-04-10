@@ -169,10 +169,10 @@ class GetRegs x where
 emptyAD :: AliveDead
 emptyAD = ([], [])
 
-infixl 5 @>
+infixl 5 <+>
 
-(@>) :: AliveDead -> AliveDead -> AliveDead
-(a1,d1) @> (a2,d2) = (a1++a2, d1++d2)
+(<+>) :: AliveDead -> AliveDead -> AliveDead
+(a1,d1) <+> (a2,d2) = (a1++a2, d1++d2)
 
 instance GetRegs OperIRM where
     getRSrc (IRM_I _) = ([],[])
@@ -257,37 +257,38 @@ getAliveDead expr
         Label{} -> emptyAD
         Spill _ r d -> getRSrc r
         Reload _ s r -> getRDst r
-        MovIRMtoR _ irm r -> getRSrc irm @> getRDst r
-        MovIRtoM _ ir m -> getRSrc ir @> getRDst m
+        MovIRMtoR _ irm r -> getRSrc irm <+> getRDst r
+        MovIRtoM _ ir m -> getRSrc ir <+> getRDst m
         Mov64toR _ i r -> getRDst r
-        CMovRMtoR _ _ rm r -> getRSrc rm @> getRSrc r @> getRDst r
+        CMovRMtoR _ _ rm r -> getRSrc rm <+> getRSrc r <+> getRDst r
         Enter _ _ i -> (x, x)
                 where x = map MReg (catMaybes $ take i argOrder)
         Leave{} -> emptyAD
         Call p nargs i -> (x, [MReg RAX])
                 where x = map MReg (catMaybes $ take nargs argOrder)
-        Callout p nargs i -> (x, [MReg RAX])  -- :-O  should add Caller-saved registers
+        Callout p nargs i -> (x ++ [MReg RAX], [MReg RAX])
+                             -- :-O  should add Caller-saved registers
                 where x = map MReg (catMaybes $ take nargs argOrder)
         Ret p rets -> (if rets then [MReg RAX] else [], [])
         RetPop p rets num -> (if rets then [MReg RAX] else [], [])
         ExitFail{} -> emptyAD
-        Lea p m r -> getRSrc m @> getRDst r
+        Lea p m r -> getRSrc m <+> getRDst r
         Push p irm -> getRSrc irm
         Pop p rm -> getRDst rm
         Jmp{} -> emptyAD
         JCond{} -> emptyAD
-        ALU_IRMtoR _ _ irm r -> getRSrc irm @> getRSrc r @> getRDst r
-        ALU_IRtoM _ _ ir m -> getRSrc ir @> getRSrc m @> getRDst m
-        Cmp _ ir rm -> getRSrc ir @> getRSrc rm
-        Inc _ rm -> getRSrc rm @> getRDst rm
-        Dec _ rm -> getRSrc rm @> getRDst rm
-        Neg _ rm -> getRSrc rm @> getRDst rm
-        IMulRAX _ rm -> getRSrc rm @> ([MReg RAX], [MReg RAX, MReg RDX])
-        IMulRM _ rm r -> getRSrc rm @> getRSrc r @> getRDst r
-        IMulImm _ i rm r -> getRSrc rm @> getRDst r
-        IDiv _ rm -> getRSrc rm @> ([MReg RDX, MReg RAX], [MReg RAX, MReg RDX])
-        Shl _ _ rm -> getRSrc rm @> getRDst rm
-        Shr _ _ rm -> getRSrc rm @> getRDst rm
-        Sar _ _ rm -> getRSrc rm @> getRDst rm
+        ALU_IRMtoR _ _ irm r -> getRSrc irm <+> getRSrc r <+> getRDst r
+        ALU_IRtoM _ _ ir m -> getRSrc ir <+> getRSrc m <+> getRDst m
+        Cmp _ ir rm -> getRSrc ir <+> getRSrc rm
+        Inc _ rm -> getRSrc rm <+> getRDst rm
+        Dec _ rm -> getRSrc rm <+> getRDst rm
+        Neg _ rm -> getRSrc rm <+> getRDst rm
+        IMulRAX _ rm -> getRSrc rm <+> ([MReg RAX], [MReg RAX, MReg RDX])
+        IMulRM _ rm r -> getRSrc rm <+> getRSrc r <+> getRDst r
+        IMulImm _ i rm r -> getRSrc rm <+> getRDst r
+        IDiv _ rm -> getRSrc rm <+> ([MReg RDX, MReg RAX], [MReg RAX, MReg RDX])
+        Shl _ _ rm -> getRSrc rm <+> getRDst rm
+        Shr _ _ rm -> getRSrc rm <+> getRDst rm
+        Sar _ _ rm -> getRSrc rm <+> getRDst rm
         Nop _ -> emptyAD
 
