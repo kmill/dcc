@@ -1,7 +1,7 @@
 {-# LANGUAGE GADTs #-}
 module Dataflow.OptSupport where 
 
-import IR2
+import IR
 import Compiler.Hoopl
 import Control.Monad
 import Data.Maybe

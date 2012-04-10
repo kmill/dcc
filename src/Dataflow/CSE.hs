@@ -3,7 +3,7 @@ module Dataflow.CSE where
 
 import Dataflow.OptSupport
 import Compiler.Hoopl
-import IR2
+import IR
 import qualified Data.Map as Map
 import qualified Data.Set as S
 

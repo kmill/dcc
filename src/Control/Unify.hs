@@ -7,15 +7,15 @@
 -- structures.  It could be extended to arbitrary pointed, ordered
 -- structures, but such generality isn't useful for typechecking,
 -- which was this module's intended purpose.
-module Unify( Term(..)
-            , UnificationError(..)
-            , UnifierData(..)
-            , newUnifierData
-            , BindingMonad(..)
-            , nullaryTerm
-            , unify 
-            , expandTerm
-            )
+module Control.Unify( Term(..)
+                    , UnificationError(..)
+                    , UnifierData(..)
+                    , newUnifierData
+                    , BindingMonad(..)
+                    , nullaryTerm
+                    , unify 
+                    , expandTerm
+                    )
        where
 
 import qualified Data.Map as Map

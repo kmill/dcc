@@ -5,7 +5,7 @@ module Dataflow.CopyProp where
 import qualified Data.Map as Map
 
 import Compiler.Hoopl
-import IR2
+import IR
 import AST(SourcePos)
 import Dataflow.OptSupport
 import Control.Monad

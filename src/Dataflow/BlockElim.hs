@@ -3,7 +3,7 @@
 module Dataflow.BlockElim where 
 
 import Compiler.Hoopl
-import IR2
+import IR
 import Control.Monad
 import Data.Maybe
 import Debug.Trace

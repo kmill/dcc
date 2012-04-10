@@ -14,7 +14,7 @@ import qualified Data.Set as S
 
 import Compiler.Hoopl
 import Compiler.Hoopl.Fuel
-import IR2 
+import IR
 import Debug.Trace
 import Data.Maybe
 import CLI

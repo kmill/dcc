@@ -6,7 +6,7 @@ import qualified Data.Set as S
 
 import Dataflow.OptSupport
 import Compiler.Hoopl 
-import IR2
+import IR
 import Data.Maybe
 import Debug.Trace
 

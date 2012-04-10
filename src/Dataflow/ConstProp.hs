@@ -7,7 +7,7 @@ import Control.Monad
 import qualified Data.Map as Map
 
 import Compiler.Hoopl
-import IR2
+import IR
 import AST(SourcePos, noPosition)
 import Data.Int
 import Data.Maybe 

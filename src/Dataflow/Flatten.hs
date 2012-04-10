@@ -5,7 +5,7 @@ module Dataflow.Flatten where
 import Control.Monad
 import qualified Data.Set as Set
 import Compiler.Hoopl
-import IR2
+import IR
 import AST(SourcePos)
 import Data.Maybe
 
