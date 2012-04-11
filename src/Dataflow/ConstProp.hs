@@ -37,6 +37,7 @@ varHasLit = mkFTransfer ft
     where
       ft :: MidIRInst e x -> ConstFact -> Fact x ConstFact
       ft (Label _ _) f = f
+      ft (PostEnter _ _) f = f
       ft (Enter _ _ args) f = Map.fromList (map (\a -> (a, Top)) args)
       ft (Store _ x (Lit pos k)) f = Map.insert x (PElem (pos, k)) f
       ft (Store _ x _) f = Map.insert x Top f
@@ -71,34 +72,3 @@ simplify = deepFwdRw simp
     where 
       simp :: forall e x. MidIRInst e x -> f -> m (Maybe (Graph MidIRInst e x))
       simp node _ = return $ liftM insnToG $ algSimplifyInst node
-      s_node :: MidIRInst e x -> Maybe (MidIRInst e x)
-      s_node (CondBranch pos (Lit _ x) tl fl) 
-          = Just $ Branch pos (if intToBool x then tl else fl)
-      s_node n = (mapEN . mapEE) s_exp n 
-      s_exp (BinOp pos OpDiv expr (Lit _ 0)) 
-          = Nothing
-      s_exp (BinOp pos OpMod expr (Lit _ 0)) 
-          = Nothing
-      s_exp (BinOp pos op (Lit _ x1) (Lit _ x2)) 
-          = Just $ Lit pos $ (binOp op) x1 x2
-      s_exp (UnOp pos op (Lit _ x))
-          = Just $ Lit pos $ (unOp op) x
-      s_exp (Cond pos (Lit _ x) expt expf)
-          = Just $ (if intToBool x then expt else expf)
-      s_exp (Cond pos _ expt expf)
-          | expt == expf  = Just expt
-      s_exp _ = Nothing
-      binOp OpAdd = (+)
-      binOp OpSub = (-)
-      binOp OpMul = (*)
-      binOp OpDiv = div
-      binOp OpMod = rem
-      binOp CmpLT = \x y -> boolToInt $ x < y
-      binOp CmpGT = \x y -> boolToInt $ x > y 
-      binOp CmpLTE = \x y -> boolToInt $ x <= y 
-      binOp CmpGTE = \x y -> boolToInt $ x >= y 
-      binOp CmpEQ = \x y -> boolToInt $ x == y 
-      binOp CmpNEQ = \x y -> boolToInt $ x /= y
-      unOp OpNeg = negate 
-      unOp OpNot = boolToInt . not . intToBool
-

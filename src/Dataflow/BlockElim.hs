@@ -28,6 +28,7 @@ lastLabelness = mkBTransfer f
         f (Label _ l) (Just l')
             | l == l'  = Nothing
             | otherwise = Just l'
+        f (PostEnter _ l) k = Nothing
         f (Label _ l) Nothing = Nothing
         f (Enter _ l _) k = Nothing
         

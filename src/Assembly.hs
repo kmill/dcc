@@ -125,7 +125,9 @@ instance Show Scalar where
 
 instance Show MemAddr where
     show (MemAddr Nothing lit Nothing _)
-        = show lit
+        -- Rip-relative addressing is cheaper!
+        -- http://www.x86-64.org/documentation/assembly.html
+        = show lit ++ "(%rip)"
     show (MemAddr (Just base) lit Nothing _)
         = show lit ++ "(" ++ show base ++ ")"
     show (MemAddr Nothing lit (Just index) SOne)

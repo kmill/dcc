@@ -116,16 +116,17 @@ methodToMidIR env (HMethodDecl _ pos typ tok args st)
          (args', env') <- newLocalEnvEntries [tokenString t | (HMethodArg _ _ t) <- args] env
          graph <- statementToMidIR env' no no st
          startl <- freshLabel
-         let graph' = mkFirst (Enter (tokenPos tok) startl args')
---                      <*> mkMiddles (map (uncurry $ Store pos)
---                                     (zip args' (argExprs pos)))
+         pl <- freshLabel
+         let graph' = withBranch (mkFirst (Enter pos' startl args')) pos' pl
+                      |*><*| mkFirst (PostEnter pos' pl)
                       <*> graph
-                      <*> mkLast (Return (tokenPos tok) defret)
-         return (Method (tokenPos tok) ("method_" ++ name) startl, graph')
+                      <*> mkLast (Return pos' defret)
+         return (Method (tokenPos tok) ("method_" ++ name) startl pl, graph')
     where name = (tokenString tok)
           defret = case typ of
                      A.MethodVoid -> Nothing
                      _ -> Just (Lit (tokenPos tok) 0)
+          pos' = tokenPos tok
           no = error "continue/break used when converting to MidIR :-("
 
 statementToMidIR :: IREnv

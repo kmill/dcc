@@ -25,6 +25,7 @@ nullTransfer = mkFTransfer ft
       ft (Return _ _) f = mapEmpty
       ft (Fail _) f = mapEmpty
       ft Label{} f = f
+      ft PostEnter{} f = f
       ft Enter{} f = f
       ft Store{} f = f
       ft IndStore{} f = f
@@ -57,6 +58,7 @@ flattenRewrite = deepFwdRw fl
     where
       fl :: MidIRInst e x -> () -> m (Maybe (Graph MidIRInst e x))
       fl (Label _ _) f = return Nothing
+      fl (PostEnter _ _) f = return Nothing
       fl (Enter _ _ _) f = return Nothing
       fl (Store pos v e) f = flattenExpr e (\e' -> Store pos v e')
       fl (IndStore pos dest src) f

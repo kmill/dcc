@@ -46,6 +46,7 @@ mapEE f e@(Cond pos exc ext exf) =
                      (fromMaybe ext ext') (fromMaybe exf exf')
 
 mapEN _ (Label _ _) = Nothing 
+mapEN _ (PostEnter _ _) = Nothing 
 mapEN _ (Enter _ _ _) = Nothing 
 mapEN f (Store pos var expr) = liftM (Store pos var) $ f expr
 mapEN f (IndStore pos e1 e2) = 
@@ -75,6 +76,7 @@ mapEN _ (Fail _)  = Nothing
 
 insnToG :: MidIRInst e x -> Graph MidIRInst e x  
 insnToG n@(Label _ _) = mkFirst n
+insnToG n@(PostEnter _ _) = mkFirst n
 insnToG n@(Enter _ _ _) = mkFirst n
 insnToG n@(Store _ _ _) = mkMiddle n 
 insnToG n@(IndStore _ _ _) = mkMiddle n 
@@ -98,6 +100,7 @@ fold_EE f z e@(BinOp _ _ expr1 expr2) = f (fold_EE f (fold_EE f z expr2) expr1) 
 fold_EE f z e@(Cond _ expr1 expr2 expr3) = f (fold_EE f (fold_EE f (fold_EE f z expr3) expr2) expr1) e
 
 fold_EN _ z (Label _ _) = z
+fold_EN _ z (PostEnter _ _) = z
 fold_EN _ z (Enter _ _ _) = z
 fold_EN f z (Store _ _ expr) = f z expr 
 fold_EN f z (IndStore _ expr1 expr2) = f (f z expr2) expr1

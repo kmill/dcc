@@ -162,17 +162,18 @@ simpBinOp pos op sex1 sex2 = traceM ("bin", op, sex1, sex2) $ msum rules
                guard $ (op /= OpMod) || (i2 /= 0)
                return $ Lit pos (binOp op i1 i2)
           -- The following rule enforces the order that literals occur
-          -- at the end of a string of additions/multiplications
+          -- at the beginning of a sequence of
+          -- additions or multiplications
           , do guard $ op `elem` [OpAdd, OpMul]
-               guard $ sex1 < sex2
+               guard $ sex1 > sex2
                simpES $ BinOp pos op sex2 sex1
           -- Reassociates left-association to right-association for
           -- addition and multiplication
           , do guard $ op `elem` [OpAdd, OpMul]
                BinOp _ op' oper1 oper2 <- withExpr sex1
                guard $ op' == op
-               guard $ oper2 < sex2
-               let [c, b, a] = sort [oper1, oper2, sex2]
+               guard $ oper2 > sex2
+               let [a, b, c] = sort [oper1, oper2, sex2]
                oper1' <- simpES $ BinOp pos op a b
                simpES $ BinOp pos op oper1' c
           , do Lit _ i1 <- withExpr sex2
@@ -183,8 +184,8 @@ simpBinOp pos op sex1 sex2 = traceM ("bin", op, sex1, sex2) $ msum rules
                           (Lit litpos (binOp op i1 i2))
           -- If we are adding zero, we can safely not add the zero
           , do guard $ op == OpAdd
-               Lit _ 0 <- withExpr sex2
-               return $ sex1
+               Lit _ 0 <- withExpr sex1
+               return $ sex2
           -- If we are subtracting from zero, we can do a negation.
           , do guard $ op == OpSub
                Lit _ 0 <- withExpr sex1
@@ -196,37 +197,37 @@ simpBinOp pos op sex1 sex2 = traceM ("bin", op, sex1, sex2) $ msum rules
           -- If we are multiplying by one, we can safely not do the
           -- multiply
           , do guard $ op == OpMul
-               Lit _ 1 <- withExpr sex2
-               return $ sex1
+               Lit _ 1 <- withExpr sex1
+               return $ sex2
           -- If we are dividing by one, we can safely not do the
           -- divide
           , do guard $ op == OpDiv
                Lit _ 1 <- withExpr sex2
                return $ sex1
-          -- If we are multiplying a division by zero, we may move the
+          -- If we are multiplying by zero a division, we may move the
           -- multiplication into the numerator.
           , do guard $ op == OpMul
-               Lit _ 0 <- withExpr sex2
-               BinOp binpos OpDiv num denom <- withExpr sex1
+               Lit _ 0 <- withExpr sex1
+               BinOp binpos OpDiv num denom <- withExpr sex2
                simpES $ BinOp binpos OpDiv
-                          (BinOp pos OpMul num sex2)
+                          (BinOp pos OpMul sex1 num)
                           denom
           -- We may distribute multiplication by zero over addition or
           -- subtraction
           , do guard $ op == OpMul
-               Lit _ 0 <- withExpr sex2
-               BinOp binpos op' a b <- withExpr sex1
+               Lit _ 0 <- withExpr sex1
+               BinOp binpos op' a b <- withExpr sex2
                guard $ op' `elem` [OpAdd, OpSub]
                simpES $ BinOp binpos op'
-                          (BinOp pos OpMul a sex2)
-                          (BinOp pos OpMul b sex2)
+                          (BinOp pos OpMul sex1 a)
+                          (BinOp pos OpMul sex1 b)
           -- If we are multiplying a literal by the negation of
           -- something, we can move the negation to the literal as
           -- long as the literal isn't the most negative number.
-          , do Lit litpos i <- withExpr sex2
+          , do Lit litpos i <- withExpr sex1
                guard $ i /= minBound
-               UnOp _ OpNeg nsex1 <- withExpr sex1
-               simpES $ BinOp pos OpMul nsex1 (Lit litpos (negate i))
+               UnOp _ OpNeg nsex2 <- withExpr sex2
+               simpES $ BinOp pos OpMul (Lit litpos (negate i)) nsex2
           -- Don't put in a default case.
           ]
 

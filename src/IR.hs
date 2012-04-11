@@ -93,7 +93,8 @@ type MidIRExpr = Expr VarName
 data Method = Method
     { methodPos :: SourcePos
     , methodName :: String
-    , methodEntry :: Label }
+    , methodEntry :: Label
+    , methodPostEntry :: Label }
 
 ---
 --- Expr
@@ -200,6 +201,7 @@ mapE f (Cond pos expc exp1 exp2) = Cond pos (mapE f expc) (mapE f exp1) (mapE f 
 data Inst v e x where
     Label      :: SourcePos -> Label                           -> Inst v C O
     Enter      :: SourcePos -> Label -> [v]                    -> Inst v C O
+    PostEnter  :: SourcePos -> Label                           -> Inst v C O
     Store      :: SourcePos -> v -> Expr v                     -> Inst v O O
     IndStore   :: SourcePos -> Expr v -> Expr v                -> Inst v O O
     Call       :: SourcePos -> v -> String -> [Expr v]         -> Inst v O O
@@ -211,6 +213,7 @@ data Inst v e x where
 
 instance NonLocal (Inst v) where
     entryLabel (Label _ lbl) = lbl
+    entryLabel (PostEnter _ lbl) = lbl
     entryLabel (Enter _ lbl _) = lbl
     successors (Branch _ lbl) = [lbl]
     successors (CondBranch _ exp tlbl flbl) = [tlbl, flbl]
@@ -221,6 +224,7 @@ instance NonLocal (Inst v) where
 -- | applies a function which replaces variables
 mapI :: (v1 -> v2) -> Inst v1 e x -> Inst v2 e x
 mapI f (Label pos l) = Label pos l
+mapI f (PostEnter pos l) = PostEnter pos l
 mapI f (Enter pos l args) = Enter pos l (map f args)
 mapI f (Store pos d exp) = Store pos (f d) (mapE f exp)
 mapI f (IndStore pos d s) = IndStore pos (mapE f d) (mapE f s)
@@ -270,6 +274,9 @@ instance Show v => Show (Inst v e x) where
     show (Label pos lbl)
         = printf "%s:  {%s};"
           (show lbl) (showPos pos)
+    show (PostEnter pos lbl)
+        = printf "%s:  {post enter, %s};"
+          (show lbl) (showPos pos)
     show (Enter pos lbl args)
         = printf "%s: enter (%s)  {%s};"
           (show lbl) (intercalate ", " (map show args)) (showPos pos)
@@ -299,7 +306,7 @@ instance Show v => Show (Inst v e x) where
           (showPos pos)
 
 instance Show Method where
-    show (Method pos name entry)
+    show (Method pos name entry postentry)
         = "method " ++ name
           ++ " goto " ++ show entry
 
@@ -325,7 +332,7 @@ midIRToGraphViz m = "digraph name {\n"
                     ++ (concatMap showMethod (midIRMethods m))
                     ++ graphToGraphViz show (midIRGraph m)
                     ++ "}"
-    where showMethod (Method pos name entry)
+    where showMethod (Method pos name entry postentry)
               = name ++ " [shape=doubleoctagon,label="++show name++"];\n"
                 ++ name ++ " -> " ++ show entry ++ ";\n"
           showField (MidIRField pos name msize)

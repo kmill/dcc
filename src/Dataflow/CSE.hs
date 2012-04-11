@@ -35,6 +35,7 @@ exprAvailable nonTemps = mkFTransfer ft
     where
       ft :: MidIRInst e x -> ExprFact -> Fact x ExprFact 
       ft (Label _ _) f = f
+      ft (PostEnter _ _) f = f
       ft (Enter _ _ args) f = foldl (flip invalidateExprsWith) f args
       ft (Store _ x expr) f = handleAssign x expr f
       ft (IndStore _ _ _) f = destroyLoads f

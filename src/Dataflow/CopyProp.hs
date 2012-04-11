@@ -30,6 +30,7 @@ varIsCopy = mkFTransfer ft
     where 
       ft :: MidIRInst e x -> CopyFact -> Fact x CopyFact 
       ft (Label _ _) f = f 
+      ft (PostEnter _ _) f = f 
       ft (Enter _ _ args) f = Map.fromList (map (\a -> (a, Top)) args)
       ft (Store _ x (Var pos v)) f = removeBindingsTo x $ Map.insert x (PElem (pos, v)) f 
       ft (Store _ x _) f = removeBindingsTo x $ Map.insert x Top f 

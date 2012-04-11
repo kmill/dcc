@@ -213,6 +213,7 @@ getVariablesPass = BwdPass
           where
             used :: MidIRInst e x -> Fact x (S.Set VarName) -> S.Set VarName
             used Label{} f = f
+            used PostEnter{} f = f
             used (Enter _ _ args) f = f `S.union` (S.fromList args)
             used (Store _ x _) f = S.insert x f
             used IndStore{} f = f

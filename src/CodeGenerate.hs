@@ -95,6 +95,7 @@ genTmpReg = CGM $ do s <- I.genUniqueName "s"
 
 instToAsm :: forall e x. I.MidIRInst e x -> CGM (Graph A.Asm e x)
 instToAsm (I.Label pos l) = return $ mkFirst $ A.Label pos l
+instToAsm (I.PostEnter pos l) = return $ mkFirst $ A.Label pos l
 instToAsm (I.Enter pos l args)
     = do return $ mkFirst (A.Enter pos l 0)
                     <*> (genPushRegs pos A.calleeSaved)
@@ -209,7 +210,16 @@ expToI e = mcut $ msum rules
 expToR :: MidIRExpr -> CGM (Graph A.Asm O O, A.Reg)
 expToR e = mcut $ msum rules
     where
-      rules = [ do I.Lit pos i <- withNode e
+      rules = [ -- Rules for putting the value of the expression into
+                -- a register
+        
+                -- a <- 0 is the same as a <- a xor a
+                do I.Lit pos 0 <- withNode e
+                   dr <- genTmpReg
+                   return ( mkMiddle $ A.ALU_IRMtoR pos A.Xor
+                                         (A.IRM_R $ dr) dr
+                          , dr )
+              , do I.Lit pos i <- withNode e
                    guard $ checkIf32Bit i
                    dr <- genTmpReg
                    let src = A.Imm32 $ fromIntegral i
@@ -344,9 +354,9 @@ expToMem e = mcut $ msum rules
                    return ( GNil
                           , A.MemAddr Nothing (A.Imm32Label s 0) Nothing A.SOne )
               , do I.BinOp pos I.OpAdd expa expb <- withNode e
-                   b <- expToI expb
-                   (ga, a) <- expToR expa
-                   return (ga, A.MemAddr (Just a) b Nothing A.SOne)
+                   a <- expToI expa
+                   (gb, b) <- expToR expb
+                   return (gb, A.MemAddr (Just b) a Nothing A.SOne)
               , do I.BinOp pos I.OpAdd expa expb <- withNode e
                    (gb, b) <- expToR expb
                    (ga, a) <- expToR expa
@@ -393,14 +403,28 @@ lookupLabel (GMany _ g_blocks _) lbl = case mapLookup lbl g_blocks of
   Just x -> x
   Nothing -> error "ERROR"
 
-labelToAsmOut graph lbl = [show a] ++ (map (ind . show) bs) ++ [ind $ show c] ++ (if length children > 0 then [ "   jmp " ++ (show $ head $ children) ] else [ "" ]) 
+labelToAsmOut :: Graph A.Asm C C -> (Label, Maybe Label) -> [String]
+labelToAsmOut graph (lbl, mnlabel)
+    = [show a]
+      ++ (map (ind . show) bs)
+      ++ mjmp
+      ++ (if not (null children) && not fallthrough
+          then nextJmp else [])
   where f :: (MaybeC C (n C O), [n O O], MaybeC C (n O C))
              -> (n C O, [n O O], n O C)
         f (JustC e, nodes, JustC x) = (e, nodes, x)
         (a, bs, c) = f (blockToNodeList block)
         block = lookupLabel graph lbl
-        children = reverse $ successors block
+        children = successors block
         ind = ("   " ++)
+        fallthrough = case mnlabel of
+                        Just l -> l == head (reverse children)
+                        Nothing -> False
+        nextJmp = [ind $ "jmp " ++ (show $ head $ reverse children)]
+        mjmp :: [String]
+        mjmp = case c of
+                 A.Jmp _ _ -> []
+                 _ -> [ind $ show c]
 
 dfsSearch graph lbl visited = foldl recurseDFS visited (reverse $ successors block)
   where block = lookupLabel graph lbl
@@ -419,6 +443,7 @@ lowIRToAsm m = [ ".section .data" ]
                    , "call method_main"
                    , "movq $0, %rax"
                    , "ret" ]
+               ++ newline
                ++ (concatMap (showMethod (lowIRGraph m)) (lowIRMethods m))
   where 
     newline = [""]
@@ -426,8 +451,13 @@ lowIRToAsm m = [ ".section .data" ]
         = [ name ++ ": .skip " ++ (show size) ++ ", 0\t\t# " ++ showPos pos ]
     showString (name, pos, str) = [ name ++ ":\t\t# " ++ showPos pos
                                 , "   .asciz " ++ (show str) ]
-    showMethod graph (I.Method pos name entry) = [name ++ ":"] ++ concatMap (labelToAsmOut graph) visited
+    showMethod graph (I.Method pos name entry postenter)
+        = [name ++ ":"]
+          ++ concatMap (labelToAsmOut graph) (zip visited nvisited)
       where visited = dfsSearch graph entry [entry]
+            nvisited = case visited of
+                         [] -> []
+                         _ -> map Just (tail visited) ++ [Nothing]
                                                  
 lowIRToGraphViz m = "digraph name {\n"
                     ++ (showFields (lowIRFields m))
@@ -435,7 +465,7 @@ lowIRToGraphViz m = "digraph name {\n"
                     ++ (concatMap showMethod (lowIRMethods m))
                     ++ I.graphToGraphViz show (lowIRGraph m)
                     ++ "}"
-    where showMethod (I.Method pos name entry)
+    where showMethod (I.Method pos name entry postenter)
               = name ++ " [shape=doubleoctagon,label="++show name++"];\n"
                 ++ name ++ " -> " ++ show entry ++ ";\n"
           showField (LowIRField pos name size)
