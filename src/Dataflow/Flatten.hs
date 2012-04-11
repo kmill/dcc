@@ -22,7 +22,7 @@ nullTransfer = mkFTransfer ft
       ft (Branch _ l) f = mapSingleton l f
       ft (CondBranch _ _ tl fl) f = mkFactBase nullLattice
                                     [(tl, ()), (fl, ())]
-      ft (Return _ _) f = mapEmpty
+      ft (Return _ _ _) f = mapEmpty
       ft (Fail _) f = mapEmpty
       ft Label{} f = f
       ft PostEnter{} f = f
@@ -88,11 +88,11 @@ flattenRewrite = deepFwdRw fl
           | nonTrivial e = withTmpC pos e
                            (\e' -> CondBranch pos e' tl fl)
           | otherwise = return Nothing
-      fl (Return pos (Just e)) f
+      fl (Return pos from (Just e)) f
           | nonTrivial e = withTmpC pos e
-                           (\e' -> Return pos (Just e'))
+                           (\e' -> Return pos from (Just e'))
           | otherwise = return Nothing
-      fl (Return _ Nothing) f = return Nothing
+      fl (Return _ from Nothing) f = return Nothing
       fl (Fail _) f = return Nothing
 
 

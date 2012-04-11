@@ -114,29 +114,31 @@ methodToMidIR :: IREnv -> HMethodDecl a -> MidM (Method, Graph MidIRInst C C)
 methodToMidIR env (HMethodDecl _ pos typ tok args st)
     = do setStrPrefix name
          (args', env') <- newLocalEnvEntries [tokenString t | (HMethodArg _ _ t) <- args] env
-         graph <- statementToMidIR env' no no st
+         graph <- statementToMidIR mname env' no no st
          startl <- freshLabel
          pl <- freshLabel
          let graph' = withBranch (mkFirst (Enter pos' startl args')) pos' pl
                       |*><*| mkFirst (PostEnter pos' pl)
                       <*> graph
-                      <*> mkLast (Return pos' defret)
-         return (Method (tokenPos tok) ("method_" ++ name) startl pl, graph')
+                      <*> mkLast (Return pos' mname defret)
+         return (Method (tokenPos tok) mname startl pl, graph')
     where name = (tokenString tok)
           defret = case typ of
                      A.MethodVoid -> Nothing
                      _ -> Just (Lit (tokenPos tok) 0)
           pos' = tokenPos tok
+          mname = ("method_" ++ name)
           no = error "continue/break used when converting to MidIR :-("
 
-statementToMidIR :: IREnv
+statementToMidIR :: String -- ^ function name
+                 -> IREnv
                  -> Label -- ^ label on continue
                  -> Label -- ^ label on break
                  -> HStatement a -> MidM (Graph MidIRInst O O)
 -- | Block
-statementToMidIR env c b (HBlock _ pos vars stmts)
+statementToMidIR fname env c b (HBlock _ pos vars stmts)
     = do (v', env') <- newLocalEnvEntries svarnames env
-         stmts' <- mapM (statementToMidIR env' c b) stmts
+         stmts' <- mapM (statementToMidIR fname env' c b) stmts
          return $ catGraphs $ map init (zip v' svarposs) ++ stmts'
     where svars = concatMap getSVars vars
           getSVars (HVarDecl _ pos _ toks)
@@ -144,25 +146,25 @@ statementToMidIR env c b (HBlock _ pos vars stmts)
           (svarnames, svarposs) = unzip svars
           init (v, pos) = mkMiddle $ Store pos v (Lit pos 0)
 -- | If
-statementToMidIR env c b (HIfSt _ pos expr cons malt)
+statementToMidIR fname env c b (HIfSt _ pos expr cons malt)
     = do [consl, altl, endl] <- replicateM 3 freshLabel
          (gexpr, expr) <- expressionToMidIR env expr
-         gcons <- statementToMidIR env c b cons
+         gcons <- statementToMidIR fname env c b cons
          galt <- case malt of
-                   Just alt -> statementToMidIR env c b alt
+                   Just alt -> statementToMidIR fname env c b alt
                    Nothing -> return GNil
          return $ gexpr <*> (mkLast $ CondBranch pos expr consl altl)
                   |*><*| withBranch (mkFirst (Label pos consl) <*> gcons) pos endl
                   |*><*| withBranch (mkFirst (Label pos altl) <*> galt) pos endl
                   |*><*| mkFirst (Label pos endl)
 -- | For
-statementToMidIR env c b (HForSt _ pos tok exprlow exprhigh st)
+statementToMidIR fname env c b (HForSt _ pos tok exprlow exprhigh st)
     = do high <- genTmpVar
          (i, env') <- newLocalEnvEntry (tokenString tok) env
          [checkl, loopl, incrl, endl] <- replicateM 4 freshLabel
          (glowex, lowex) <- expressionToMidIR env exprlow
          (ghighex, highex) <- expressionToMidIR env exprhigh
-         loop <- statementToMidIR env' incrl endl st
+         loop <- statementToMidIR fname env' incrl endl st
          return $ (glowex <*> (mkMiddle $ Store pos i lowex)
                    <*> ghighex <*> (mkMiddle $ Store pos high highex)
                    <*> (mkLast $ Branch pos checkl))
@@ -177,11 +179,11 @@ statementToMidIR env c b (HForSt _ pos tok exprlow exprhigh st)
              |*><*| mkFirst (Label pos endl)
 
 -- | While
-statementToMidIR env c b (HWhileSt _ pos expr st)
+statementToMidIR fname env c b (HWhileSt _ pos expr st)
     = do t <- genTmpVar
          [checkl, loopl, endl] <- replicateM 3 freshLabel
          (gex, ex) <- expressionToMidIR env expr
-         loop <- statementToMidIR env checkl endl st
+         loop <- statementToMidIR fname env checkl endl st
          return $ (mkLast $ Branch pos checkl)
              |*><*| (mkFirst (Label pos checkl)
                    <*> gex
@@ -191,31 +193,31 @@ statementToMidIR env c b (HWhileSt _ pos expr st)
              |*><*| mkFirst (Label pos endl)
 
 -- | Return
-statementToMidIR env c b (HReturnSt _ pos mexpr)
+statementToMidIR fname env c b (HReturnSt _ pos mexpr)
     = do dead <- freshLabel
          (gex, mex) <- case mexpr of
                         Just expr -> justify `fmap` expressionToMidIR env expr
                         Nothing -> return (GNil, Nothing)
-         return $ gex <*> mkLast (Return pos mex) |*><*| mkFirst (Label pos dead)
+         return $ gex <*> mkLast (Return pos fname mex) |*><*| mkFirst (Label pos dead)
     where justify (gex, ex) = (gex, Just ex)
 
 -- | Break
-statementToMidIR env c b (HBreakSt _ pos)
+statementToMidIR fname env c b (HBreakSt _ pos)
     = do dead <- freshLabel
          return $ mkLast (Branch pos b) |*><*| mkFirst (Label pos dead)
 -- | Continue
-statementToMidIR env c b (HContinueSt _ pos)
+statementToMidIR fname env c b (HContinueSt _ pos)
     = do dead <- freshLabel
          return $ mkLast (Branch pos b) |*><*| mkFirst (Label pos dead)
 
 -- | Expression
-statementToMidIR env c b (HExprSt _ expr)
+statementToMidIR fname env c b (HExprSt _ expr)
     = do (gex, ex) <- expressionToMidIR env expr
          return $ gex -- we ignore ex because side-effect-bearing
                       -- stuff should be in gex
 
 -- | Assign
-statementToMidIR env c b (HAssignSt senv pos loc op expr)
+statementToMidIR fname env c b (HAssignSt senv pos loc op expr)
     = case loc of
         HPlainLocation _ pos tok ->
             let (isfield, var') = fromJust $ lookup (tokenString tok) env -- destination var

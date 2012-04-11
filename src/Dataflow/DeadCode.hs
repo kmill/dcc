@@ -34,7 +34,7 @@ liveness = mkBTransfer live
           live n@(Callout _ x _ _) f = addUses (S.delete x f) n 
           live n@(Branch _ l) f = addUses (fact f l) n 
           live n@(CondBranch _ _ tl fl) f = addUses (fact f tl `S.union` fact f fl) n 
-          live n@(Return _ _) _ = addUses (fact_bot liveLattice) n 
+          live n@(Return _ _ _) _ = addUses (fact_bot liveLattice) n 
           live n@(Fail _) _ = addUses (fact_bot liveLattice) n 
 
           fact :: FactBase Live -> Label -> Live 

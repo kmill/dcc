@@ -51,7 +51,7 @@ varHasLit = mkFTransfer ft
       ft (CondBranch _ _ tl fl) f 
           = mkFactBase constLattice [ (tl, f)
                                     , (fl, f) ]
-      ft (Return _ _) f = mapEmpty
+      ft (Return _ _ _) f = mapEmpty
       ft (Fail _) f = mapEmpty
 
 

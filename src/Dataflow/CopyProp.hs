@@ -41,7 +41,7 @@ varIsCopy = mkFTransfer ft
       ft (CondBranch _ _ tl fl) f 
              = mkFactBase copyLattice [ (tl, f)
                                       , (fl, f) ]
-      ft (Return _ _) f = mapEmpty 
+      ft (Return _ _ _) f = mapEmpty 
       ft (Fail _) f = mapEmpty 
       removeBindingsTo :: VarName -> CopyFact -> CopyFact 
       removeBindingsTo x oldMap = newMap 

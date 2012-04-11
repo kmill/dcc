@@ -66,11 +66,11 @@ mapEN f (CondBranch pos expr tl fl) =
     case f expr of 
       Nothing -> Nothing 
       Just expr' -> Just $ CondBranch pos expr' tl fl
-mapEN f (Return pos maybeexpr) =
+mapEN f (Return pos from maybeexpr) =
     case liftM f maybeexpr of 
       Nothing -> Nothing 
       Just Nothing -> Nothing 
-      Just expr' -> Just $ Return pos expr'
+      Just expr' -> Just $ Return pos from expr'
 mapEN _ (Fail _)  = Nothing
     
 
@@ -84,7 +84,7 @@ insnToG n@(Call _ _ _ _) = mkMiddle n
 insnToG n@(Callout _ _ _ _) = mkMiddle n 
 insnToG n@(Branch _ _) = mkLast n 
 insnToG n@(CondBranch _ _ _ _) = mkLast n 
-insnToG n@(Return _ _) = mkLast n 
+insnToG n@(Return _ _ _) = mkLast n 
 insnToG n@(Fail _) = mkLast n 
 
 
@@ -108,6 +108,6 @@ fold_EN f z (Call _ _ _ es) = foldl f z es
 fold_EN f z (Callout _ _ _ es) = foldl f z es 
 fold_EN _ z (Branch _ _) = z
 fold_EN f z (CondBranch _ expr _ _) = f z expr 
-fold_EN _ z (Return _ Nothing) = z
-fold_EN f z (Return _ (Just expr)) = f z expr
+fold_EN _ z (Return _ from Nothing) = z
+fold_EN f z (Return _ from (Just expr)) = f z expr
 fold_EN _ z (Fail _) = z

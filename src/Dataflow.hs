@@ -7,7 +7,9 @@ import Dataflow.CSE
 import Dataflow.BlockElim
 import Dataflow.Flatten
 import Dataflow.CopyProp
+import Dataflow.Tailcall
 
+import Control.Monad
 import Control.Monad.Trans
 
 import qualified Data.Set as S
@@ -21,6 +23,8 @@ import CLI
 
 type RM = StupidFuelMonadT GM
 
+instance UniqueMonad RM where
+    freshUnique = lift freshUnique
 
 instance UniqueNameMonad RM where
     genUniqueName = lift . genUniqueName
@@ -68,6 +72,9 @@ performDataflowAnalysis opts midir = do
   midir <- if optConstProp opts 
            then performConstPropPass midir 
            else return midir
+  midir <- if optTailcall opts 
+           then performTailcallPass midir 
+           else return midir
   midir <- if optDeadCode opts 
            then performDeadCodePass midir 
            else return midir
@@ -82,6 +89,9 @@ performDataflowAnalysis opts midir = do
            else return midir
   midir <- if optCopyProp opts
            then performCopyPropPass midir 
+           else return midir
+  midir <- if optTailcall opts 
+           then performTailcallPass midir 
            else return midir
   midir <- if optDeadCode opts
            then performDeadCodePass midir
@@ -172,6 +182,29 @@ csePass nonTemps = FwdPass
                    { fp_lattice = exprLattice
                    , fp_transfer = exprAvailable nonTemps
                    , fp_rewrite = cseRewrite nonTemps }
+                   
+performTailcallPass :: MidIRRepr -> RM MidIRRepr
+performTailcallPass midir
+    = do graph' <- foldl (>>=) (return $ midIRGraph midir) (map forMethod (midIRMethods midir))
+         return $ midir { midIRGraph = graph' }
+    where forMethod :: Method -> Graph MidIRInst C C -> RM (Graph MidIRInst C C)
+          forMethod (Method pos name entry postentry) graph
+              = do (graph', _, _) <- analyzeAndRewriteBwd
+                                     (tailcallPass postentry argvars)
+                                     (JustC mlabels)
+                                     graph
+                                     mapEmpty
+                   return graph'
+              where argvars = getVars (blockToNodeList (lookupLabel graph entry))
+                    getVars :: (MaybeC C (MidIRInst C O), a, b) -> [VarName]
+                    getVars (JustC (Enter _ _ args), _, _) = args
+                    getVars _ = error "getVars: method label is not Enter! :-("
+          mlabels = map methodEntry $ midIRMethods midir
+          
+          lookupLabel :: Graph MidIRInst C C -> Label -> Block MidIRInst C C
+          lookupLabel (GMany _ g_blocks _) lbl = case mapLookup lbl g_blocks of
+                                                   Just x -> x
+                                                   Nothing -> error "ERROR"
 
 
 

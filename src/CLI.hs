@@ -57,13 +57,14 @@ data OptFlags = OptFlags { touched :: Bool
                          , optCopyProp :: Bool
                          , optDeadCode :: Bool
                          , optBlockElim :: Bool 
-                         , optFlat :: Bool 
+                         , optFlat :: Bool
+                         , optTailcall :: Bool
                          , optRA :: Bool }
               deriving (Show)
 
-optAllD = OptFlags True True True True True True True True
-optAll = OptFlags False True True True True True True True
-optNone = OptFlags False False False False False False False False
+optAllD = OptFlags True True True True True True True True True
+optAll = OptFlags False True True True True True True True True
+optNone = OptFlags False False False False False False False False False
 
 options :: [OptDescr (CompilerOpts -> CompilerOpts)]
 options =
@@ -85,7 +86,8 @@ options =
                                                                       "\tconstprop : Constant Propagation\n" ++
                                                                       "\t deadcode : Dead Code Elimination\n" ++
                                                                       "\tblockelim : Block Elimination\n" ++
-                                                                      "\t     flat : Flatten Optimization\n")
+                                                                      "\t     flat : Flatten Optimization\n" ++
+                                                                      "\t tailcall : Tailcall Elimination\n")
     ]
     where outfile' s opts = opts { outputFile = Just s }
           target' t opts = opts { target = targetOpt t }
@@ -117,6 +119,7 @@ optOpt opts s
     "deadcode" -> oFlags { optDeadCode = True }  
     "blockelim" -> oFlags { optBlockElim = True }
     "flat" -> oFlags { optFlat = True }
+    "tailcall" -> oFlags { optTailcall = True }
     "ra" -> oFlags { optRA = True }
     "none" -> optNone
     _ -> oFlags

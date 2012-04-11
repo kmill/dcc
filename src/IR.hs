@@ -208,7 +208,7 @@ data Inst v e x where
     Callout    :: SourcePos -> v -> String -> [Expr v]         -> Inst v O O
     Branch     :: SourcePos -> Label                           -> Inst v O C
     CondBranch :: SourcePos -> Expr v -> Label -> Label        -> Inst v O C
-    Return     :: SourcePos -> Maybe (Expr v)                  -> Inst v O C
+    Return     :: SourcePos -> String -> Maybe (Expr v)        -> Inst v O C
     Fail       :: SourcePos                                    -> Inst v O C
 
 instance NonLocal (Inst v) where
@@ -217,7 +217,7 @@ instance NonLocal (Inst v) where
     entryLabel (Enter _ lbl _) = lbl
     successors (Branch _ lbl) = [lbl]
     successors (CondBranch _ exp tlbl flbl) = [tlbl, flbl]
-    successors (Return _ _) = []
+    successors (Return _ _ _) = []
     successors (Fail _) = []
 
 
@@ -232,7 +232,7 @@ mapI f (Call pos d name args) = Call pos (f d) name (map (mapE f) args)
 mapI f (Callout pos d name args) = Callout pos (f d) name (map (mapE f) args)
 mapI f (Branch pos l) = Branch pos l
 mapI f (CondBranch pos cexp lt lf) = CondBranch pos (mapE f cexp) lt lf
-mapI f (Return pos mexp) = Return pos (mexp >>= Just . (mapE f))
+mapI f (Return pos for mexp) = Return pos for (mexp >>= Just . (mapE f))
 mapI f (Fail pos) = Fail pos
 
 
@@ -298,9 +298,9 @@ instance Show v => Show (Inst v e x) where
     show (CondBranch pos expr tlbl flbl)
         = printf "if %s then  {%s}\n  goto %s\nelse\n  goto %s"
           (show expr) (showPos pos) (show tlbl) (show flbl)
-    show (Return pos mexpr)
-        = printf "return %s  {%s}"
-          (maybe "" show mexpr) (showPos pos)
+    show (Return pos for mexpr)
+        = printf "return %s  {for %s, %s}"
+          (maybe "" show mexpr) for (showPos pos)
     show (Fail pos)
         = printf "fail  {%s}"
           (showPos pos)

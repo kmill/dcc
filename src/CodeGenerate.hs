@@ -132,11 +132,11 @@ instToAsm (I.Branch pos l)
 instToAsm (I.CondBranch pos cexp tl fl)
     = do (g, flag) <- expToFlag cexp
          return $ g <*> (mkLast $ A.JCond pos flag (A.Imm32BlockLabel tl 0) fl)
-instToAsm (I.Return pos Nothing)
+instToAsm (I.Return pos fname Nothing)
     = return $ genPopRegs pos A.calleeSaved
                <*> (mkMiddle $ A.Leave pos)
                <*> (mkLast $ A.Ret pos False)
-instToAsm (I.Return pos (Just exp))
+instToAsm (I.Return pos fname (Just exp))
     = do (g, irm) <- expToIRM exp
          return $ g <*> mkMiddle (A.MovIRMtoR pos irm (A.MReg A.RAX))
                     <*> genPopRegs pos A.calleeSaved

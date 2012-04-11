@@ -45,7 +45,7 @@ exprAvailable nonTemps = mkFTransfer ft
       ft (CondBranch _ _ tl fl) f 
           = mkFactBase exprLattice [ (tl, f) 
                                    , (fl, f) ]
-      ft (Return _ _) f = mapEmpty 
+      ft (Return _ _ _) f = mapEmpty 
       ft (Fail _) f = mapEmpty 
       handleAssign :: VarName -> MidIRExpr -> ExprFact -> ExprFact
       handleAssign x expr f = if isTemp nonTemps x 

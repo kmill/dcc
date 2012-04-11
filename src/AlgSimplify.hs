@@ -60,9 +60,9 @@ simpI e = case e of
                          return $ Branch pos
                                     $ if intToBool x then tl else fl
                      _ -> mzero
-            Return pos (Just exp) ->
+            Return pos from (Just exp) ->
                 do exp' <- simpE exp
-                   return $ Return pos (Just exp')
+                   return $ Return pos from (Just exp')
             _ -> mzero
 
 -- | Here to make rules look nicer.  Just return.
