@@ -14,7 +14,7 @@ fi
 base=`dirname $0`
 
 for file in `find $base -iname '*.dcf'`; do
-  hasdiff=0
+  diffout=0
   asm=`tempfile --suffix=.s`
   msg=""
   if runcompiler $file $asm; then
@@ -27,7 +27,6 @@ for file in `find $base -iname '*.dcf'`; do
            desired=`tempfile`
            grep '//>' $file | sed -E 's@^//> ?@@' > $desired
            diffout=`tempfile`
-           hasdiff=1
            if ! diff -u $output $desired > $diffout; then
              msg="File $file output mismatch.";
            fi
@@ -50,12 +49,10 @@ for file in `find $base -iname '*.dcf'`; do
   if [ ! -z "$msg" ]; then
     fail=1
     echo $file
-    if [ ! -z "$hasdiff" ]; then
-      if [ ! -z "$diffout" ]; then
-        cat $diffout
-      elif [ ! -z "$output" ]; then
-        cat $output
-      fi
+    if [ ! -z "$diffout" ]; then
+      cat $diffout
+    elif [ ! -z "$output" ]; then
+      cat $output
     fi
     echo $msg
   fi
