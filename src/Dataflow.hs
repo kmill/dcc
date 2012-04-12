@@ -8,6 +8,7 @@ import Dataflow.BlockElim
 import Dataflow.Flatten
 import Dataflow.CopyProp
 import Dataflow.Tailcall
+import Dataflow.NZP
 
 import Control.Monad
 import Control.Monad.Trans
@@ -72,6 +73,9 @@ performDataflowAnalysis opts midir = do
   midir <- if optConstProp opts 
            then performConstPropPass midir 
            else return midir
+  midir <- if optNZP opts
+           then performNZPPass midir
+           else return midir
   midir <- if optTailcall opts 
            then performTailcallPass midir 
            else return midir
@@ -93,6 +97,9 @@ performDataflowAnalysis opts midir = do
   midir <- if optTailcall opts 
            then performTailcallPass midir 
            else return midir
+  midir <- if optNZP opts
+           then performNZPPass midir
+           else return midir
   midir <- if optDeadCode opts
            then performDeadCodePass midir
            else return midir
@@ -106,6 +113,7 @@ performCopyPropPass midir = performFwdPass copyPropPass midir emptyCopyFact
 performDeadCodePass midir = performBwdPass deadCodePass midir S.empty
 performBlockElimPass midir = performBwdPass blockElimPass midir Nothing
 performFlattenPass midir = performFwdPass flattenPass midir ()
+performNZPPass midir = performFwdPass nzpPass midir emptyNZPFact
 
 performFwdPass :: (FwdPass (StupidFuelMonadT GM) MidIRInst a) -> MidIRRepr -> a -> RM MidIRRepr
 performFwdPass pass midir eFact
@@ -149,6 +157,13 @@ constPropPass = FwdPass
                 { fp_lattice = constLattice 
                 , fp_transfer = varHasLit
                 , fp_rewrite = constProp `thenFwdRw` simplify } 
+
+nzpPass :: (CheckpointMonad m, FuelMonad m) => FwdPass m MidIRInst NZPFact
+nzpPass = FwdPass
+          { fp_lattice = nzpLattice
+          , fp_transfer = varHasNZP
+          , fp_rewrite = nzpSimplify }
+
 
 copyPropPass :: (CheckpointMonad m, FuelMonad m) => FwdPass m MidIRInst CopyFact 
 copyPropPass = FwdPass 
@@ -205,7 +220,6 @@ performTailcallPass midir
           lookupLabel (GMany _ g_blocks _) lbl = case mapLookup lbl g_blocks of
                                                    Just x -> x
                                                    Nothing -> error "ERROR"
-
 
 
 ---

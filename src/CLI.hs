@@ -61,12 +61,13 @@ data OptFlags = OptFlags { touched :: Bool
                          , optBlockElim :: Bool 
                          , optFlat :: Bool
                          , optTailcall :: Bool
+                         , optNZP :: Bool
                          , optRA :: Bool }
               deriving (Show)
 
-optAllD = OptFlags True True True True True True True True True
-optAll = OptFlags False True True True True True True True True
-optNone = OptFlags False False False False False False False False False
+optAllD = OptFlags True True True True True True True True True True
+optAll = OptFlags False True True True True True True True True True
+optNone = OptFlags False False False False False False False False False False
 
 options :: [OptDescr (CompilerOpts -> CompilerOpts)]
 options =
@@ -87,6 +88,7 @@ options =
                                                                       "\t      cse : Constant Subexpression Elimination\n" ++
                                                                       "\t copyprop : Copy Propagation\n" ++
                                                                       "\tconstprop : Constant Propagation\n" ++
+                                                                      "\t      nzp : -/0/+ Analysis\n" ++
                                                                       "\t deadcode : Dead Code Elimination\n" ++
                                                                       "\tblockelim : Block Elimination\n" ++
                                                                       "\t     flat : Flatten Optimization\n" ++
@@ -119,6 +121,7 @@ optOpt opts s
     "all" -> optAll
     "cse" -> oFlags { optCommonSubElim = True }
     "constprop" -> oFlags { optConstProp = True }
+    "nzp" -> oFlags { optNZP = True }
     "copyprop" -> oFlags { optCopyProp = True }
     "deadcode" -> oFlags { optDeadCode = True }  
     "blockelim" -> oFlags { optBlockElim = True }
