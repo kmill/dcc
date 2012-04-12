@@ -14,14 +14,20 @@ fi
 base=`dirname $0`
 
 for file in `find $base -iname '*.dcf'`; do
-  diffout=0
+  diffout=""
+  output=""
   asm=`tempfile --suffix=.s`
   msg=""
   if runcompiler $file $asm; then
     binary=`tempfile`
     if gcc -o $binary -L `dirname $0`/lib -l6035 $asm; then
       output=`tempfile`
-      ret=`$binary &> $output`
+     
+      if $binary > $output 2>&1; then
+          ret=""
+      else
+	  ret="fail"
+      fi
       if grep '//>' $file > /dev/null; then
         if [ -z "$ret" ]; then
            desired=`tempfile`
@@ -34,7 +40,7 @@ for file in `find $base -iname '*.dcf'`; do
            msg="Program failed to run.";
         fi
       elif grep '//!' $file > /dev/null; then
-        if [ ! -z "$ret" ]; then
+        if [ -z "$ret" ]; then
            msg="Program did not fail to run.";
         fi
       else
@@ -57,7 +63,7 @@ for file in `find $base -iname '*.dcf'`; do
     echo $msg
   fi
   rm -f $output $binary $asm
-  if [ ! -z "$hasdiff" ]; then
+  if [ ! -z "$diffout" ]; then
     rm -f $diffout $desired;
   fi
 done
