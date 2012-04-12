@@ -190,7 +190,7 @@ performTailcallPass midir
     where forMethod :: Method -> Graph MidIRInst C C -> RM (Graph MidIRInst C C)
           forMethod (Method pos name entry postentry) graph
               = do (graph', _, _) <- analyzeAndRewriteBwd
-                                     (tailcallPass postentry argvars)
+                                     (tailcallPass name postentry argvars)
                                      (JustC mlabels)
                                      graph
                                      mapEmpty
