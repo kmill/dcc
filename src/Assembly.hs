@@ -98,7 +98,7 @@ instance Show Reg where
     show (SReg i) = "%" ++ i
 
 instance Show Imm8 where
-    show (Imm8 x) = show x
+    show (Imm8 x) = "$" ++ show x
 instance Show Imm16 where
     show (Imm16 x) = show x
 instance Show Imm32 where
