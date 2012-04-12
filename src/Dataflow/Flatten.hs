@@ -5,7 +5,7 @@ module Dataflow.Flatten where
 import Control.Monad
 import qualified Data.Set as Set
 import Compiler.Hoopl
-import IR2
+import IR
 import AST(SourcePos)
 import Data.Maybe
 
@@ -22,9 +22,10 @@ nullTransfer = mkFTransfer ft
       ft (Branch _ l) f = mapSingleton l f
       ft (CondBranch _ _ tl fl) f = mkFactBase nullLattice
                                     [(tl, ()), (fl, ())]
-      ft (Return _ _) f = mapEmpty
+      ft (Return _ _ _) f = mapEmpty
       ft (Fail _) f = mapEmpty
       ft Label{} f = f
+      ft PostEnter{} f = f
       ft Enter{} f = f
       ft Store{} f = f
       ft IndStore{} f = f
@@ -57,6 +58,7 @@ flattenRewrite = deepFwdRw fl
     where
       fl :: MidIRInst e x -> () -> m (Maybe (Graph MidIRInst e x))
       fl (Label _ _) f = return Nothing
+      fl (PostEnter _ _) f = return Nothing
       fl (Enter _ _ _) f = return Nothing
       fl (Store pos v e) f = flattenExpr e (\e' -> Store pos v e')
       fl (IndStore pos dest src) f
@@ -86,11 +88,11 @@ flattenRewrite = deepFwdRw fl
           | nonTrivial e = withTmpC pos e
                            (\e' -> CondBranch pos e' tl fl)
           | otherwise = return Nothing
-      fl (Return pos (Just e)) f
+      fl (Return pos from (Just e)) f
           | nonTrivial e = withTmpC pos e
-                           (\e' -> Return pos (Just e'))
+                           (\e' -> Return pos from (Just e'))
           | otherwise = return Nothing
-      fl (Return _ Nothing) f = return Nothing
+      fl (Return _ from Nothing) f = return Nothing
       fl (Fail _) f = return Nothing
 
 

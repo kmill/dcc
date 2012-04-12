@@ -5,7 +5,7 @@ module Dataflow.CopyProp where
 import qualified Data.Map as Map
 
 import Compiler.Hoopl
-import IR2
+import IR
 import AST(SourcePos)
 import Dataflow.OptSupport
 import Control.Monad
@@ -30,6 +30,7 @@ varIsCopy = mkFTransfer ft
     where 
       ft :: MidIRInst e x -> CopyFact -> Fact x CopyFact 
       ft (Label _ _) f = f 
+      ft (PostEnter _ _) f = f 
       ft (Enter _ _ args) f = Map.fromList (map (\a -> (a, Top)) args)
       ft (Store _ x (Var pos v)) f = removeBindingsTo x $ Map.insert x (PElem (pos, v)) f 
       ft (Store _ x _) f = removeBindingsTo x $ Map.insert x Top f 
@@ -40,7 +41,7 @@ varIsCopy = mkFTransfer ft
       ft (CondBranch _ _ tl fl) f 
              = mkFactBase copyLattice [ (tl, f)
                                       , (fl, f) ]
-      ft (Return _ _) f = mapEmpty 
+      ft (Return _ _ _) f = mapEmpty 
       ft (Fail _) f = mapEmpty 
       removeBindingsTo :: VarName -> CopyFact -> CopyFact 
       removeBindingsTo x oldMap = newMap 

@@ -1,795 +1,497 @@
+{-# LANGUAGE RankNTypes, GADTs, ScopedTypeVariables #-}
+
 module CodeGenerate where
 
-import qualified Data.Map as Map 
-import qualified Data.List as List
-import Data.Char
+import CLI
+import Compiler.Hoopl
+import Compiler.Hoopl.Fuel
+import qualified Assembly as A
+import Assembly(checkIf32Bit, rmToIRM, LowIRRepr(..), LowIRField(..))
+import qualified IR as I
+import IR(MidIRExpr, VarName, Showing)
+import AST(noPosition, SourcePos, showPos)
+import Control.Monad
+import Data.Maybe
+import Data.List
 import Data.Int
-import Control.Monad.State
-import SymbolTable
-import System.FilePath
-import AST
+import qualified Data.Set as S
+import Dataflow
+import Debug.Trace
 
-data Location = Reg String
-              | MemLoc String
-              | BaseOffset Int
-              | GlobalOffset Int64 Int64
+type GM = I.GM
 
-instance Show Location where
-    show (Reg s) = "%" ++ s
-    show (MemLoc s) = s
-    show (BaseOffset i) = (show i) ++ "(%rbp)"
-    show (GlobalOffset i _) = (show i)
+toAss :: I.MidIRRepr -> GM LowIRRepr
+toAss (I.MidIRRepr fields strs meths graph)
+    = do graph' <- mgraph'
+         return $ LowIRRepr (map toLowField fields) strs meths graph'
+    where GMany _ body _ = graph
+          mgraph' = do graphs' <- mapM f (mapElems body)
+                       return $ foldl (|*><*|) emptyClosedGraph graphs'
+          f :: Block I.MidIRInst C C -> GM (Graph A.Asm C C)
+          f block = do e' <- toAsm e
+                       inner' <- mapM toAsm inner
+                       x' <- toAsm x
+                       return $ e' <*> catGraphs inner' <*> x'
+              where (me, inner, mx) = blockToNodeList block
+                    e :: I.MidIRInst C O
+                    x :: I.MidIRInst O C
+                    e = case me of
+                          JustC e' -> e'
+                    x = case mx of
+                          JustC x' -> x'
+          toLowField (I.MidIRField pos name Nothing)
+              = LowIRField pos name 8
+          toLowField (I.MidIRField pos name (Just len))
+              = LowIRField pos name (8 * len)
+
+          mlabels = map I.methodEntry meths
+
+          toAsm :: forall e x. I.MidIRInst e x -> GM (Graph A.Asm e x)
+          toAsm e = do as <- rCGM $ instToAsm e
+                       case as of
+                         [] -> error $ "No output for " ++ show e
+                         a:_ -> return a
+
+
+-- | CGM is "Code Gen Monad"
+data CGM a = CGM { rCGM :: GM [a] }
+
+instance Monad CGM where
+    return x = CGM $ return [x]
+    ma >>= f = CGM $ do as <- rCGM ma
+                        as' <- sequence (map (rCGM . f) as)
+                        return $ concat as'
+    fail _ = mzero
+
+instance Functor CGM where
+    fmap f ma = do a <- ma
+                   return $ f a
+
+instance MonadPlus CGM where
+    mzero = CGM $ return []
+    mplus (CGM mas) (CGM mbs)
+        = CGM $ do as <- mas
+                   bs <- mbs
+                   return $ as ++ bs
+
+-- | cuts the computation down to one branch
+mcut :: CGM a -> CGM a
+mcut (CGM mas) = CGM $ do as <- mas
+                          case as of
+                            [] -> return []
+                            a:_ -> return [a]
+
+-- | just take the first!
+runCGM :: CGM a -> GM a
+runCGM (CGM mxs) = do xs <- mxs
+                      return $ head xs
+
+genTmpReg :: CGM A.Reg
+genTmpReg = CGM $ do s <- I.genUniqueName "s"
+                     return [A.SReg s]
+
+--genSpill :: Reg -> CGM (Graph A.Asm O O)
+--genReload :: String -> CGM
+--giveBackTmpReg :: CGM A.Reg
+
+instToAsm :: forall e x. I.MidIRInst e x -> CGM (Graph A.Asm e x)
+instToAsm (I.Label pos l) = return $ mkFirst $ A.Label pos l
+instToAsm (I.PostEnter pos l) = return $ mkFirst $ A.Label pos l
+instToAsm (I.Enter pos l args)
+    = do return $ mkFirst (A.Enter pos l 0)
+                    <*> (genPushRegs pos A.calleeSaved)
+                    <*> (genLoadArgs pos args)
+instToAsm (I.Store pos d sexp)
+    = do (gd, s) <- expToIRM sexp
+         return $ gd <*> mkMiddle (A.MovIRMtoR pos s (A.SReg $ show d))
+instToAsm (I.IndStore pos dexp sexp)
+    = do (gd, d) <- expToMem dexp
+         (gs, s) <- expToIR sexp
+         return $ gd <*> gs
+                    <*> mkMiddle (A.MovIRtoM pos s d)
+instToAsm (I.Call pos d name args)
+    = do (gs, vars) <- unzip `fmap` mapM expToIRM args
+         return $ catGraphs gs
+                    <*> genPushRegs pos A.callerSaved
+                    <*> genSetArgs pos vars
+                    <*> mkMiddle (A.Call pos (length args) (A.Imm32Label name 0))
+                    <*> genResetSP pos args
+                    <*> genPopRegs pos A.callerSaved
+                    <*> mkMiddle (A.mov pos (A.MReg A.RAX) (A.SReg $ show d))
+instToAsm (I.Callout pos d name args)
+    = do (gs, vars) <- unzip `fmap` mapM expToIRM args
+         return $ catGraphs gs
+                    <*> genPushRegs pos A.callerSaved
+                    <*> genSetArgs pos vars
+                    <*> mkMiddle (A.mov pos (A.Imm32 0) (A.MReg A.RAX))
+                    <*> mkMiddle (A.Callout pos (length args) (A.Imm32Label name 0))
+                    <*> genResetSP pos args
+                    <*> genPopRegs pos A.callerSaved
+                    <*> mkMiddle (A.mov pos (A.MReg A.RAX) (A.SReg $ show d))
+instToAsm (I.Branch pos l)
+    = return $ mkLast $ A.Jmp pos (A.Imm32BlockLabel l 0)
+instToAsm (I.CondBranch pos cexp tl fl)
+    = do (g, flag) <- expToFlag cexp
+         return $ g <*> (mkLast $ A.JCond pos flag (A.Imm32BlockLabel tl 0) fl)
+instToAsm (I.Return pos fname Nothing)
+    = return $ genPopRegs pos A.calleeSaved
+               <*> (mkMiddle $ A.Leave pos)
+               <*> (mkLast $ A.Ret pos False)
+instToAsm (I.Return pos fname (Just exp))
+    = do (g, irm) <- expToIRM exp
+         return $ g <*> mkMiddle (A.MovIRMtoR pos irm (A.MReg A.RAX))
+                    <*> genPopRegs pos A.calleeSaved
+                    <*> (mkMiddle $ A.Leave pos)
+                    <*> mkLast (A.Ret pos True)
+instToAsm (I.Fail pos)
+    = return $ mkMiddles [ A.mov pos (A.Imm32 1) (A.MReg A.RDI)
+                         , A.mov pos (A.Imm32 1) (A.MReg A.RAX)
+                         , A.Callout pos 1 (A.Imm32Label "exit" 0) ]
+               <*> mkLast (A.ExitFail pos)
+
+genSetArgs :: SourcePos -> [A.OperIRM] -> Graph A.Asm O O
+genSetArgs pos args = catGraphs $ map genset $ reverse (zip args A.argOrder)
+    where genset (a, Nothing) = mkMiddle $ A.Push pos a
+          genset (a, Just d) = mkMiddle $ A.MovIRMtoR pos a (A.MReg d)
+genResetSP :: SourcePos -> [MidIRExpr] -> Graph A.Asm O O
+genResetSP pos args = if length args - 6 > 0
+                      then mkMiddle $
+                           A.ALU_IRMtoR pos A.Add
+                                (A.IRM_I $ A.Imm32 $
+                                  fromIntegral $ 8 * (length args - 6))
+                                (A.MReg A.RSP)
+                      else GNil
+
+genLoadArgs :: SourcePos -> [VarName] -> Graph A.Asm O O
+genLoadArgs pos args = catGraphs $ map genload $ zip args A.argLocation
+    where genload (a, Right reg)
+              = mkMiddle $ A.MovIRMtoR pos (A.IRM_R reg) (A.SReg $ show a)
+          genload (a, Left mem)
+              = mkMiddle $ A.MovIRMtoR pos (A.IRM_M mem) (A.SReg $ show a)
+
+genPushRegs :: SourcePos -> [A.X86Reg] -> Graph A.Asm O O
+genPushRegs pos regs = catGraphs $ map genpush regs
+    where genpush reg = mkMiddle $ A.Push pos $ A.IRM_R (A.MReg reg)
+genPopRegs :: SourcePos -> [A.X86Reg] -> Graph A.Asm O O
+genPopRegs pos regs = catGraphs $ map genpop $ reverse regs
+    where genpop reg = mkMiddle $ A.Pop pos $ A.RM_R (A.MReg reg)
+
+expTo' :: (a -> b) -> CGM (Graph A.Asm O O, a) -> CGM (Graph A.Asm O O, b)
+expTo' f m = do (g, a) <- m
+                return $ (g, f a)
+expITo' :: (a -> b) -> CGM a -> CGM (Graph A.Asm O O, b)
+expITo' f m = do a <- m
+                 return $ (GNil, f a)
+
+expToIRM :: MidIRExpr -> CGM (Graph A.Asm O O, A.OperIRM)
+expToIRM e = expITo' A.IRM_I (expToI e)
+             `mplus` expTo' A.IRM_M (expToM e)
+             `mplus` expTo' A.IRM_R (expToR e)
+expToIR :: MidIRExpr -> CGM (Graph A.Asm O O, A.OperIR)
+expToIR e = expITo' A.IR_I (expToI e)
+            `mplus` expTo' A.IR_R (expToR e)
+expToRM :: MidIRExpr -> CGM (Graph A.Asm O O, A.OperRM)
+expToRM e = expTo' A.RM_M (expToM e)
+            `mplus` expTo' A.RM_R (expToR e)
+
+withNode :: MidIRExpr -> CGM MidIRExpr
+withNode e = return e
+
+expToI :: MidIRExpr -> CGM A.Imm32
+expToI e = mcut $ msum rules
+    where
+      rules = [ do I.Lit pos i <- withNode e
+                   guard $ checkIf32Bit i
+                   return $ A.Imm32 $ fromIntegral i
+
+                -- should use leaq for this!
+--              , do (I.LitLabel pos s) <- withNode e
+--                   return $ A.Imm32Label s 0
+              ]
+
+expToR :: MidIRExpr -> CGM (Graph A.Asm O O, A.Reg)
+expToR e = mcut $ msum rules
+    where
+      rules = [ -- Rules for putting the value of the expression into
+                -- a register
+        
+                -- a <- 0 is the same as a <- a xor a
+                do I.Lit pos 0 <- withNode e
+                   dr <- genTmpReg
+                   return ( mkMiddle $ A.ALU_IRMtoR pos A.Xor
+                                         (A.IRM_R $ dr) dr
+                          , dr )
+              , do I.Lit pos i <- withNode e
+                   guard $ checkIf32Bit i
+                   dr <- genTmpReg
+                   let src = A.Imm32 $ fromIntegral i
+                   return ( mkMiddle $ A.mov pos src dr
+                          , dr )
+              , do I.Lit pos i <- withNode e
+                   dr <- genTmpReg
+                   return ( mkMiddle $ A.Mov64toR pos (A.Imm64 i) dr
+                          , dr )
+              , do I.Var pos v <- withNode e
+                   return ( GNil
+                          , A.SReg $ show v )
+              , do I.LitLabel pos s <- withNode e
+                   dr <- genTmpReg
+                   let mem = A.MemAddr Nothing (A.Imm32Label s 0) Nothing A.SOne
+                   return ( mkMiddle $ A.Lea pos mem dr
+                          , dr )
+              , do I.Load pos exp <- withNode e
+                   (g, m) <- expToMem exp
+                   dr <- genTmpReg
+                   return ( g
+                            <*> mkMiddle (A.mov pos m dr)
+                          , dr )
+              , do I.UnOp pos I.OpNeg exp <- withNode e
+                   (g, o) <- expToRM exp
+                   dr <- genTmpReg
+                   return ( g
+                            <*> mkMiddle (A.MovIRMtoR pos (rmToIRM o) dr)
+                            <*> mkMiddle (A.Neg pos (A.RM_R dr))
+                          , dr )
+              , do I.UnOp pos I.OpNot exp <- withNode e
+                   (g, o) <- expToRM exp
+                   dr <- genTmpReg
+                   return ( g
+                            <*> mkMiddle (A.MovIRMtoR pos (rmToIRM o) dr)
+                            <*> mkMiddle (A.ALU_IRMtoR pos A.Xor
+                                               (A.IRM_I $ A.Imm32 (1))
+                                               dr)
+                          , dr )
+              , do I.BinOp pos op expa expb <- withNode e
+                   guard $ op `elem` [I.OpAdd, I.OpSub]
+                   let op' = fromJust $ lookup op [ (I.OpAdd, A.Add)
+                                                  , (I.OpSub, A.Sub) ]
+                   (ga, a) <- expToIRM expa
+                   (gb, b) <- expToIRM expb
+                   dr <- genTmpReg
+                   return ( ga
+                            <*> mkMiddle (A.MovIRMtoR pos a dr)
+                            <*> gb
+                            <*> mkMiddle (A.ALU_IRMtoR pos op' b dr)
+                          , dr )
+              , do I.BinOp pos op expa expb <- withNode e
+                   guard $ op `elem` [ I.CmpLT, I.CmpGT, I.CmpLTE
+                                     , I.CmpGTE, I.CmpEQ, I.CmpNEQ ]
+                   let flag = cmpToFlag op
+                   (gb, b) <- expToIR expb
+                   (ga, a) <- expToRM expa
+                   dr <- genTmpReg
+                   true <- genTmpReg
+                   return ( ga <*> gb
+                            <*> mkMiddle (A.mov pos (A.Imm32 $
+                                                      fromIntegral I.bTrue) true)
+                            <*> mkMiddle (A.mov pos (A.Imm32 $
+                                                      fromIntegral I.bFalse) dr)
+                            <*> mkMiddle (A.Cmp pos b a)
+                            <*> mkMiddle (A.CMovRMtoR pos flag
+                                           (A.RM_R $ true) dr)
+                          , dr )
+              , do I.BinOp pos I.OpMul expa expb <- withNode e
+                   b <- expToI expb
+                   A.Imm32 b' <- return b
+                   let logb' = log2 b'
+                       log2 1 = 0
+                       log2 n = 1 + log2 (n `div` 2)
+                   guard $ b' > 0
+                   guard $ b' == 2 ^ logb'
+                   (ga, a) <- expToIRM expa
+                   dr <- genTmpReg
+                   return ( ga
+                            <*> mkMiddles [ A.MovIRMtoR pos a dr
+                                          , A.Shl pos (A.Imm8 $ fromIntegral logb') (A.RM_R dr) ]
+                          , dr )
+              , do I.BinOp pos I.OpMul expa expb <- withNode e
+                   b <- expToI expb
+                   (ga, a) <- expToRM expa
+                   dr <- genTmpReg
+                   return ( ga
+                            <*> mkMiddle (A.IMulImm pos b a dr)
+                          , dr )
+              , do I.BinOp pos I.OpMul expa expb <- withNode e
+                   (ga, a) <- expToIRM expa
+                   (gb, b) <- expToRM expb
+                   dr <- genTmpReg
+                   return ( ga <*> gb
+                            <*> mkMiddle (A.MovIRMtoR pos a dr)
+                            <*> mkMiddle (A.IMulRM pos b dr)
+                          , dr )
+              , do I.BinOp pos I.OpDiv expa expb <- withNode e
+                   (ga, a) <- expToIRM expa
+                   (gb, b) <- expToRM expb
+                   dr <- genTmpReg
+                   return ( ga <*> gb
+                            <*> mkMiddle (A.MovIRMtoR pos a (A.MReg A.RAX))
+                            <*> mkMiddle (A.mov pos (A.Imm32 0) (A.MReg A.RDX))
+                            <*> mkMiddle (A.IDiv pos b)
+                            <*> mkMiddle (A.mov pos (A.MReg A.RAX) dr)
+                          , dr )
+              , do I.BinOp pos I.OpMod expa expb <- withNode e
+                   (ga, a) <- expToIRM expa
+                   (gb, b) <- expToRM expb
+                   dr <- genTmpReg
+                   return ( ga <*> gb
+                            <*> mkMiddle (A.MovIRMtoR pos a (A.MReg A.RAX))
+                            <*> mkMiddle (A.mov pos (A.Imm32 0) (A.MReg A.RDX))
+                            <*> mkMiddle (A.IDiv pos b)
+                            <*> mkMiddle (A.mov pos (A.MReg A.RDX) dr)
+                          , dr )
+              , do I.Cond pos cexp texp fexp <- withNode e
+                   (gflag, flag) <- expToFlag cexp
+                   (gt, t) <- expToRM texp
+                   (gf, f) <- expToIRM fexp
+                   dr <- genTmpReg
+                   return ( gf <*> mkMiddle (A.MovIRMtoR pos f dr)
+                            <*> gt <*> gflag
+                            <*> mkMiddle (A.CMovRMtoR pos flag t dr)
+                          , dr )
+              ]
+
+expToMem :: MidIRExpr -> CGM (Graph A.Asm O O, A.MemAddr)
+expToMem e = mcut $ msum rules
+    where
+      rules = [ do I.LitLabel pos s <- withNode e
+                   return ( GNil
+                          , A.MemAddr Nothing (A.Imm32Label s 0) Nothing A.SOne )
+              , do I.BinOp pos I.OpAdd expa expb <- withNode e
+                   a <- expToI expa
+                   (gb, b) <- expToR expb
+                   return (gb, A.MemAddr (Just b) a Nothing A.SOne)
+              , do I.BinOp pos I.OpAdd expa expb <- withNode e
+                   (gb, b) <- expToR expb
+                   (ga, a) <- expToR expa
+                   return (ga <*> gb, A.MemAddr (Just a) (A.Imm32 0) (Just b) A.SOne)
+              , do (g, r) <- expToR e
+                   return (g, A.MemAddr (Just r) (A.Imm32 0) Nothing A.SOne)
+              ]
+expToM :: MidIRExpr -> CGM (Graph A.Asm O O, A.MemAddr)
+expToM e@(I.Load _ exp) = mcut $ expToMem exp
+expToM e = fail ("Mem not a load: " ++ show e)
+
+expToFlag :: MidIRExpr -> CGM (Graph A.Asm O O, A.Flag)
+expToFlag e = mcut $ msum rules
+    where
+      rules = [ do I.BinOp pos op expa expb <- withNode e
+                   guard $ op `elem` [ I.CmpLT, I.CmpGT, I.CmpLTE
+                                     , I.CmpGTE, I.CmpEQ, I.CmpNEQ ]
+                   let flag = cmpToFlag op
+                   (gb, b) <- expToIR expb
+                   (ga, a) <- expToRM expa
+                   return ( ga <*> gb
+                            <*> mkMiddle (A.Cmp pos b a)
+                          , flag )
+              , do (g, r) <- expToRM e
+                   return ( g
+                            <*> mkMiddle (A.Cmp noPosition
+                                               (A.IR_I $ A.Imm32 $
+                                                 fromIntegral I.bFalse)
+                                               r)
+                          , A.FlagNE )
+              ]
+
+
+cmpToFlag :: I.BinOp -> A.Flag
+cmpToFlag I.CmpLT = A.FlagL
+cmpToFlag I.CmpLTE = A.FlagLE
+cmpToFlag I.CmpGT = A.FlagG
+cmpToFlag I.CmpGTE = A.FlagGE
+cmpToFlag I.CmpEQ = A.FlagE
+cmpToFlag I.CmpNEQ = A.FlagNE
+cmpToFlag _ = error "not a comparison!"
+
+lookupLabel (GMany _ g_blocks _) lbl = case mapLookup lbl g_blocks of
+  Just x -> x
+  Nothing -> error "ERROR"
+
+labelToAsmOut :: Bool -> Graph A.Asm C C -> (Label, Maybe Label) -> [String]
+labelToAsmOut macmode graph (lbl, mnlabel)
+    = [show a]
+      ++ (map (ind . show') bs)
+      ++ mjmp
+      ++ (if not (null children) && not fallthrough
+          then nextJmp else [])
+  where f :: (MaybeC C (n C O), [n O O], MaybeC C (n O C))
+             -> (n C O, [n O O], n O C)
+        f (JustC e, nodes, JustC x) = (e, nodes, x)
+        (a, bs, c) = f (blockToNodeList block)
+        block = lookupLabel graph lbl
+        children = successors block
+        ind = ("   " ++)
+        show' :: A.Asm O O -> String
+        show' x = if macmode
+                  then case x of
+                         A.Callout pos args (A.Imm32Label s 0)
+                             -> show $ A.Callout pos args (A.Imm32Label ("_" ++ s) 0)
+                         _ -> show x
+                  else show x
+        fallthrough = case mnlabel of
+                        Just l -> l == head (reverse children)
+                        Nothing -> False
+        nextJmp = [ind $ "jmp " ++ (show $ head $ reverse children)]
+        mjmp :: [String]
+        mjmp = case c of
+                 A.Jmp _ _ -> []
+                 _ -> [ind $ show c]
+
+dfsSearch graph lbl visited = foldl recurseDFS visited (reverse $ successors block)
+  where block = lookupLabel graph lbl
+        recurseDFS v' nv = if nv `elem` v' then v' else dfsSearch graph nv (v' ++ [nv])
+
+lowIRToAsm :: LowIRRepr -> CompilerOpts -> [String]
+lowIRToAsm m opts
+    = [ ".data" ]
+      ++ newline
+      ++ ["# fields"]
+      ++ (concatMap showField (lowIRFields m))
+      ++ newline
+      ++ ["# strings"]
+      ++ (concatMap showString (lowIRStrings m))
+      ++ newline
+      ++  [ ".text"
+          , ".globl main" 
+          , ".globl _main" 
+          , "main:"
+          , "_main:"
+          , "call method_main"
+          , "movq $0, %rax"
+          , "ret" ]
+      ++ newline
+      ++ (concatMap (showMethod (macMode opts) (lowIRGraph m)) (lowIRMethods m))
+  where 
+    newline = [""]
+    showField (LowIRField pos name size)
+        = [ name ++ ": .space " ++ (show size) ++ ", 0\t\t# " ++ showPos pos ]
+    showString (name, pos, str) = [ name ++ ":\t\t# " ++ showPos pos
+                                , "   .asciz " ++ (show str) ]
+    showMethod macmode graph (I.Method pos name entry postenter)
+        = [name ++ ":"]
+          ++ concatMap (labelToAsmOut macmode graph) (zip visited nvisited)
+      where visited = dfsSearch graph entry [entry]
+            nvisited = case visited of
+                         [] -> []
+                         _ -> map Just (tail visited) ++ [Nothing]
                                                  
-data LocInfo = LocInfo { symbolLocs :: Map.Map String Location 
-                       , finalStackOffset :: Int }
-
-lookupLocInfo :: String -> SymbolEnv LocInfo ->  Maybe Location
-lookupLocInfo name env = Map.lookup name locations 
-                         `mplus` ((parentEnv env) >>= lookupLocInfo name)
-    where locations = symbolLocs $ customValue env
-
--- Function to transform the intial HAST into an HAST with location information
-createSymbolLocations :: Maybe (SymbolEnv LocInfo) -> SymbolEnv Int -> SymbolEnv LocInfo
-createSymbolLocations (Just eParent) env = SymbolEnv { symbolBindings = symbolBindings env
-                                                     , parentEnv = Just eParent
-                                                     , customValue = locInfo }
-    where methodCall = case (parentEnv eParent) of
-                         Just _ -> False
-                         Nothing -> True
-          parentStackOffset = finalStackOffset $ customValue eParent 
-          locInfo = LocInfo { symbolLocs = Map.fromList locs
-                            , finalStackOffset = stackOffset } 
-          (locs, stackOffset) = if methodCall 
-                                then (methodArgLocations 0 (Map.keys $ symbolBindings env), 0)
-                                else localSymbolLocations parentStackOffset (Map.keys $ symbolBindings env) 
-createSymbolLocations Nothing env = SymbolEnv { symbolBindings = symbolBindings env
-                                              , parentEnv = Nothing
-                                              , customValue = locInfo }
-    where locInfo = LocInfo { symbolLocs = Map.fromList locs
-                            , finalStackOffset = 0 }
-          locs = globalSymbolLocations 0 (Map.assocs $ symbolBindings env)
-
-methodArgLocations :: Int -> [String] -> [(String, Location)]
-methodArgLocations stackOffset [] = []
-methodArgLocations stackOffset (x:xs) = (x, BaseOffset (stackOffset - 8)):(methodArgLocations (stackOffset-8) xs)
-
-localSymbolLocations :: Int -> [String] -> ([(String, Location)], Int)
-localSymbolLocations stackOffset [] = ([], stackOffset)
-localSymbolLocations stackOffset (x:xs) = let (locs, returnStackOffset) = localSymbolLocations (stackOffset+8) xs
-                                          in ((x, BaseOffset (stackOffset+8)):locs, returnStackOffset)
-
-
-globalSymbolLocations :: Int64 -> [(String, SymbolTerm)] -> [(String, Location)]
-globalSymbolLocations gOffset [] = []
-globalSymbolLocations gOffset (x@(symbol, term):xs) = case term of 
-                                                        MethodTerm _ _ -> globalSymbolLocations gOffset xs
-                                                        Term _ _ -> (symbol, GlobalOffset gOffset (termSize term)):(globalSymbolLocations (gOffset+(termSize term)) xs)
-
-createLocationInformation :: HDProgram Int -> HDProgram LocInfo
-createLocationInformation program = transformHDProgram createSymbolLocations program
-
-data CodeBlock = ConstantBlock [String] | CompoundBlock [CodeBlock]
-
-instance Show CodeBlock where
-    show (CompoundBlock blks) = unlinesWithoutEnd $ map show blks
-    show (ConstantBlock instructions) = unlinesWithoutEnd instructions 
-
--- Simple function that does the same thing as unlines without including a newLine after the final element
-unlinesWithoutEnd :: [String] -> String
-unlinesWithoutEnd = List.intercalate "\n"
-
-data CodeLabel = CodeLabel { lblName :: String, 
-                             lblParent :: Maybe CodeLabel }
-
-instance Show CodeLabel where
-    show lbl@(CodeLabel { lblParent = Nothing }) = lblName lbl
-    show lbl@(CodeLabel { lblParent = (Just prnt)}) = (show prnt) ++ "_" ++ (lblName lbl)
-
-
-data CodeState = CodeState { currentLabel :: CodeLabel
-                           , currentIfIndex :: Int
-                           , currentForIndex :: Int
-                           , currentWhileIndex :: Int 
-                           , currentOrIndex :: Int 
-                           , currentAndIndex :: Int 
-                           , stringLiterals :: [(Int, String)]
-                           , currentStringOffset :: Int}
-                           
-
-initialCodeState :: String -> CodeState
-initialCodeState filename = CodeState { currentLabel = (CodeLabel {lblName=filename, lblParent=Nothing})
-                                      , currentIfIndex = 0
-                                      , currentForIndex = 0
-                                      , currentWhileIndex = 0
-                                      , currentOrIndex = 0
-                                      , currentAndIndex = 0 
-                                      , stringLiterals = []
-                                      , currentStringOffset = 0}
-
-subBlockState :: CodeState -> CodeState
-subBlockState codeState = codeState { currentIfIndex = 0
-                                    , currentForIndex = 0
-                                    , currentWhileIndex = 0
-                                    , currentOrIndex = 0
-                                    , currentAndIndex = 0 } 
-
-updateState :: CodeState -> CodeState -> CodeState
-updateState codeState subState = codeState { stringLiterals = stringLiterals subState
-                                           , currentStringOffset = currentStringOffset subState }
-
--- | BlockStates contain data that is maintained as state while a single block of code is being evaluated. 
--- | Their primary purpose is to allow for universal labels to be generated
-data BlockState = BlockState { numIfs :: Int
-                             , numFors :: Int
-                             , numWhiles :: Int
-                             , numOrs :: Int 
-                             , numAnds :: Int
-                             , stringTable :: [String]
-                             , stringOffset :: Int}
-initialBlockState :: BlockState
-initialBlockState = BlockState { numIfs = 0
-                               , numFors = 0
-                               , numWhiles = 0 
-                               , numOrs = 0
-                               , numAnds = 0
-                               , stringTable = []
-                               , stringOffset = 0 }
-
-pushLoc :: Location -> CodeBlock 
-pushLoc (Reg s) = ConstantBlock ["pushq %" ++ s]
-pushLoc (MemLoc i) = ConstantBlock ["pushq " ++ (show i)]
-pushLoc (BaseOffset i) = ConstantBlock ["pushq " ++ (show i) ++ "(%rbp)"]
-pushLoc (GlobalOffset i s) = ConstantBlock ["pushq " ++ (show i) ++ "(GLOBALS)"]
-
-moveLoc :: Location -> Location -> CodeBlock 
-moveLoc loc1 loc2 = stringBlock $ "movq " ++ (show loc1) ++ ", " ++ (show loc2)
-
-
-hdLocToLoc :: (HDLocation LocInfo) -> Location 
-hdLocToLoc (HPlainLocation env _ tok) = let name = tokenString tok 
-                                        in case (lookupLocInfo name env) of 
-                                          Just loc -> loc
-                                          Nothing -> error "Attempted to lookup name that doesn't exist"
-hdLocToLoc (HArrayLocation env _ tok  _) = let name = tokenString tok 
-                                           in case (lookupLocInfo name env) of 
-                                             Just loc -> loc 
-                                             Nothing -> error "Attempted to lookup name that doesn't exist"
-
-stringDataBlock :: String -> CodeBlock 
-stringDataBlock str = ConstantBlock [".string \"" ++ str ++ "\""]
-
-labelBlock :: CodeLabel -> CodeBlock 
-labelBlock label = ConstantBlock [(show label)++":"]
-
-stringBlock :: String -> CodeBlock
-stringBlock str = ConstantBlock [str]
-
---- 
---- 
----
-
-{- Testing out the State monad replacement for the old code -}
-methodToCode :: (HMethodDecl LocInfo) -> State CodeState CodeBlock 
-methodToCode (HMethodDecl env _ _ tok args st) 
-    = do codeState <- get
-         let codeBlock = CompoundBlock [ stringBlock ""
-                                       , methodEntry
-                                       , statementCode 
-                                       , methodExit
-                                       , stringBlock "" ]
-             methodLabel = CodeLabel { lblName = (tokenString tok), lblParent = Nothing }
-             methodEntry = CompoundBlock [ maybeGlobal, labelBlock methodLabel, stringBlock "# Perform method entry stuff"]
-             maybeGlobal = if (tokenString tok) == "main" then stringBlock ".globl main" else stringBlock ""
-             methodExit = CompoundBlock [ stringBlock "# Perform method exit stuff"
-                                        , stringBlock "ret"]
-             subState = codeState { currentLabel = methodLabel }
-             (statementCode, statementState) = runState (statementToCode st) subState
-             newState = statementState { currentLabel = currentLabel codeState }
-         put newState 
-         return codeBlock 
-   
----
---- Generate code for statements 
----          
-
-
-statementToCode :: HStatement LocInfo -> State CodeState CodeBlock
-statementToCode (HBlock env _ _ sts) 
-    = do childCodes <- stateMap statementToCode sts
-         return $ CompoundBlock childCodes 
-
--- | Convert If Statements to a code block 
-statementToCode (HIfSt env _ expr st maybeelse) 
-    = do codeState <- get 
-         let ifIndex = currentIfIndex codeState
-             ifLabel = CodeLabel { lblName = "if_" ++ (show ifIndex), lblParent = Just (currentLabel codeState) }
-             ifTrueLabel = CodeLabel { lblName = "true", lblParent = Just ifLabel }
-             ifFalseLabel = CodeLabel { lblName = "false", lblParent = Just ifLabel }
-             ifEndLabel = CodeLabel { lblName = "end", lblParent = Just ifLabel }
-             codeBlock = CompoundBlock [ labelBlock ifLabel
-                                       , evalExprCode
-                                       , labelBlock ifTrueLabel
-                                       , trueCode
-                                       , stringBlock $ "jmp " ++ (show ifEndLabel)
-                                       , labelBlock ifFalseLabel
-                                       , falseCode
-                                       , labelBlock ifEndLabel ]
-             evalExprCode = CompoundBlock [ stringBlock "# Eval if Expr here"
-                                          , exprCode
-                                          , stringBlock "popq %rax"
-                                          , stringBlock "cmp 1, %rax"
-                                          , stringBlock ("jne " ++ (show ifFalseLabel))]
-             subState = (subBlockState codeState) { currentLabel = ifLabel }
-             (exprCode, exprState) = runState (exprToCode expr) subState
-             trueCode = CompoundBlock [stringBlock "# Perform if true", trueCodes]
-             (trueCodes, trueState) = runState (statementToCode st) exprState
-             falseCode = CompoundBlock [stringBlock "# Perform if false", falseCodes]
-             (falseCodes, falseState) = case maybeelse of 
-                                        Just stelse -> runState (statementToCode st) (subBlockState trueState)
-                                        Nothing -> (CompoundBlock [], trueState)
-             newState = (updateState codeState falseState) { currentIfIndex = ifIndex + 1 }
-         put newState
-         return codeBlock
-
--- | Convert For loops to a code block 
-statementToCode (HForSt env _ _ expr1 expr2 st)
-    = do codeState <- get 
-         let forIndex = currentForIndex codeState
-             forLabel = CodeLabel { lblName = "for_" ++ (show forIndex), lblParent = Just (currentLabel codeState) }
-             forEvalLabel = CodeLabel { lblName = "eval", lblParent = Just forLabel}
-             forReloopLabel = CodeLabel { lblName = "reloop", lblParent = Just forLabel}
-             forEndLabel = CodeLabel {lblName = "end", lblParent = Just forLabel}
-             subState = (subBlockState codeState) { currentLabel = forLabel }
-             codeBlock = CompoundBlock [ labelBlock forLabel
-                                    , initCode
-                                    , labelBlock forEvalLabel
-                                    , evalExprCode
-                                    , loopStCode
-                                    , labelBlock forReloopLabel
-                                    , postLoopCode
-                                    , labelBlock forEndLabel]
-             initCode = CompoundBlock [ stringBlock "# init looping variable here"
-                                      , iECode
-                                      , putTokBlock]
-             (iECode, iEState) = runState (exprToCode expr1) subState
-             evalExprCode = CompoundBlock [ stringBlock "# Eval the for expr here"
-                                          , eECode
-                                          , stringBlock "popq %rax"
-                                          , getTokBlock
-                                          , stringBlock "popq %rbx"
-                                          , stringBlock "cmp %rax, %rbx"
-                                          , stringBlock $ "jge " ++ (show forEndLabel)] 
-             (eECode, eEState) = runState (exprToCode expr2) iEState 
-             loopStCode = CompoundBlock [stringBlock "# Inner loop code here", loopCodes]
-             (loopCodes, loopState) = runState (statementToCode st) eEState
-             postLoopCode = CompoundBlock [ stringBlock "# Increment loop variable and re-loop here"
-                                          , getTokBlock
-                                          , stringBlock "popq %rax"
-                                          , stringBlock "addc 1, %rax"
-                                          , stringBlock "pushq %rax"
-                                          , putTokBlock
-                                          , stringBlock $ "jmp " ++ (show forEvalLabel)]
-             getTokBlock = stringBlock "#Get Value from Tok and put on stack"
-             putTokBlock = stringBlock "#Put Value from Stack and put in Tok"
-             newState = (updateState codeState loopState) { currentForIndex = forIndex+1 } 
-         put newState 
-         return codeBlock 
-
--- | Convert While loops to a code block
-statementToCode (HWhileSt env _ expr st) 
-    = do codeState <- get 
-         let whileIndex = currentWhileIndex codeState
-             whileLabel = CodeLabel { lblName = "while_" ++ (show whileIndex), lblParent = Just (currentLabel codeState) } 
-             whileEvalLabel = CodeLabel { lblName = "eval", lblParent = Just whileLabel }
-             whileReloopLabel = CodeLabel { lblName = "reloop", lblParent = Just whileLabel }
-             whileEndLabel = CodeLabel { lblName = "end", lblParent = Just whileLabel }
-             subState = (subBlockState codeState) { currentLabel = whileLabel } 
-             codeBlock = CompoundBlock [ labelBlock whileLabel
-                                       , labelBlock whileEvalLabel
-                                       , evalExprCode
-                                       , loopStCode
-                                       , labelBlock  whileReloopLabel
-                                       , postLoopCode
-                                       , labelBlock whileEndLabel]
-             evalExprCode = CompoundBlock [ stringBlock "# Eval the expr" 
-                                          , eCode
-                                          , stringBlock "popq %rax"
-                                          , stringBlock "cmp 1, %rax"
-                                          , stringBlock $ "jne " ++ (show whileEndLabel)] 
-             (eCode, eState) = runState (exprToCode expr) subState
-             loopStCode = CompoundBlock [stringBlock "# inner loop code here", loopCodes]
-             (loopCodes, loopState) = runState (statementToCode st) eState
-             postLoopCode = stringBlock $ "jmp " ++ (show whileEvalLabel)
-             newState = (updateState codeState loopState) { currentWhileIndex = whileIndex + 1 }
-         put newState 
-         return codeBlock 
-
--- | Convert Return statements to a code block
-statementToCode (HReturnSt env _ maybeExpr) 
-    = do codeState <- get
-         let codeBlock = CompoundBlock [ evalExprCode
-                                       , returnCode]
-             evalExprCode = stringBlock "# Eval the return expr here" 
-             returnCode = stringBlock "# Return from the method here"
-             newState = codeState
-         put newState 
-         return codeBlock 
-
--- | Convert Break statements to a code block 
-statementToCode (HBreakSt env _) 
-    = do codeState <- get 
-         let codeBlock = CompoundBlock [ breakCode ]
-             endLabel = CodeLabel { lblName = "end", lblParent = Just (currentLabel codeState) }
-             breakCode = stringBlock $ "jmp " ++ (show endLabel)
-         return codeBlock 
-          
--- | Convert Continue statements to a code block 
-statementToCode (HContinueSt env _) 
-    = do codeState <- get 
-         let codeBlock = CompoundBlock [ continueCode ]
-             reloopLabel = CodeLabel { lblName = "reloop", lblParent = Just (currentLabel codeState) }
-             continueCode = stringBlock $ "jmp " ++ (show reloopLabel)          
-         return codeBlock 
-
--- | Convert Expr statements to a code block 
-statementToCode (HExprSt env expr)
-    = do codeState <- get 
-         let codeBlock = CompoundBlock [ evalExprCode
-                                    , discardResultCode ]
-             (evalExprCode, exprState) = runState (exprToCode expr) codeState
-             discardResultCode = stringBlock "popq %rax"   
-             newState = exprState
-         put newState 
-         return codeBlock 
-
--- | Convert an Assign Statement to a code block 
-statementToCode (HAssignSt env _ loc op expr)
-    = do codeState <- get 
-         let codeBlock = CompoundBlock [ evalExprCode
-                                       , moveResultCode ] 
-             evalExprCode = stringBlock "# Eval assignment expr here" 
-             moveResultCode = stringBlock "# Move result into location here"
-             newState = codeState
-         put newState 
-         return codeBlock 
-   
-
----
---- Generate code for expressions 
----
-
-
-exprToCode :: (HExpr LocInfo) -> State CodeState CodeBlock 
-exprToCode (HBinaryOp env _ expr1 tok expr2) 
-    = binOpExprToCode expr1 expr2 (tokenString tok) 
-exprToCode (HUnaryOp env _ tok expr) 
-    = unaryOpExprToCode expr (tokenString tok) 
-exprToCode (HExprBoolLiteral _ _ value) 
-    = boolToBlock value
-exprToCode (HExprIntLiteral _ _ value)
-    = intToBlock value
-exprToCode (HExprCharLiteral _ _ value)
-    = charToBlock value
-exprToCode (HExprStringLiteral _ _ value) 
-    = return $ stringBlock "TODO: figure out string literals"
-exprToCode (HLoadLoc env _ loc) 
-    = return $ pushLoc $ hdLocToLoc $ loc
-exprToCode (HExprMethod env _ method) 
-    = methodCallToCode method
-
-
----
---- Method calls
----
-methodCallToCode :: HMethodCall LocInfo -> State CodeState CodeBlock 
-methodCallToCode (HNormalMethod env _ tok args)
-    = do codeState <-  get 
-         let codeBlock = CompoundBlock [preCallCode, callCode, postCallCode]
-             preCallCode = stringBlock "# TODO: implement expr evaluation"
-             callCode = stringBlock $ "jmp " ++ (show tok)
-             postCallCode = stringBlock "# TODO: implement post-call code"
-             newState = codeState
-         put newState 
-         return codeBlock 
-
-methodCallToCode (HCalloutMethod env _ tok args)  
-    = do codeState <- get 
-         let codeBlock = CompoundBlock [ preCallCode
-                                       , callCode
-                                       , postCallCode ]
-             preCallCode = CompoundBlock [ CompoundBlock evalArgsCode
-                                         , popRegistersCode 
-                                         , numArgsCode ]
-             (evalArgsCode, newState) = runState (stateMap calloutArgToCode (reverse args)) codeState
-             popRegistersCode = popArgsRegisters (length args) 
-             numArgsCode = stringBlock $ "mov $" ++ (show $ (length args)-1) ++ ", %rax"
-             callCode = stringBlock $ "call " ++ (tokenString tok)
-             postCallCode = stringBlock $ "pushq %rax" 
-         put newState 
-         return codeBlock 
-    where popArgsRegisters :: Int -> CodeBlock 
-          popArgsRegisters n = case n of 
-                                 0 -> stringBlock "" 
-                                 1 -> stringBlock "popq %rdi" 
-                                 2 -> CompoundBlock [ popArgsRegisters 1 
-                                                    , stringBlock "popq %rsi"] 
-                                 3 -> CompoundBlock [ popArgsRegisters 2 
-                                                    , stringBlock "popq %rdx"]
-                                 4 -> CompoundBlock [ popArgsRegisters 3
-                                                    , stringBlock "popq %rcx"]
-                                 5 -> CompoundBlock [ popArgsRegisters 4
-                                                    , stringBlock "popq %r8"]
-                                 _ -> CompoundBlock [ popArgsRegisters 5
-                                                    , stringBlock "popq %r9"]
-
-calloutArgToCode :: HCalloutArg LocInfo -> State CodeState CodeBlock 
-calloutArgToCode (HCArgExpr env expr) = exprToCode expr 
-calloutArgToCode (HCArgString env tok) 
-    = do codeState <- get 
-         let stringIndex = currentStringOffset codeState
-             stringLabel = CodeLabel { lblName = "STRING_" ++ (show stringIndex), lblParent = Nothing }
-             codeBlock = stringBlock $ "pushq $" ++ (show stringLabel)
-             oldStringLiterals = stringLiterals codeState
-             newState = codeState { currentStringOffset = stringIndex + 1, stringLiterals = oldStringLiterals ++ [(stringIndex, (tokenString tok))] }
-         put newState 
-         return codeBlock 
-
----
---- Literals
----
-
-boolToBlock :: Bool -> State CodeState CodeBlock
-boolToBlock value 
-    = return $ CompoundBlock [ stringBlock instr ]
-      where instr = case value of
-                      False -> "pushq 0x00"
-                      True -> "pushq 0x01"
-
-intToBlock :: Int64 -> State CodeState CodeBlock
-intToBlock value 
-    = return $ CompoundBlock [ stringBlock $ "pushq " ++ show value ]
-
-charToBlock :: Char -> State CodeState CodeBlock
-charToBlock value 
-    = return $ CompoundBlock [ stringBlock instr ]
-    where instr = "pushq " ++ (show $ ord value)
-
---- 
---- Unary operations code 
---- 
-
-unaryOpExprToCode :: HExpr LocInfo -> String -> State CodeState CodeBlock
-unaryOpExprToCode expr opStr
-    = let f = case opStr of
-                "!" -> notExprToCode
-                "-" -> negExprToCode
-                s   -> error $ "Unexpected token \"" ++ s ++ "\" for unary operator"
-      in f expr 
-
-notExprToCode :: HExpr LocInfo -> State CodeState CodeBlock  
-notExprToCode expr 
-    = do codeState <- get 
-         let (exprBlock, exprBlockState) = runState (exprToCode expr) codeState                             
-             codeBlock = CompoundBlock [ exprBlock
-                                       , stringBlock "popq %rax" 
-                                       , stringBlock "xorq 0x01, %rax" -- will only xor booleans
-                                       , stringBlock "pushq %rax" ]
-             newState = exprBlockState 
-         put newState 
-         return codeBlock
-
-negExprToCode :: HExpr LocInfo -> State CodeState CodeBlock 
-negExprToCode expr  
-    = do codeState <- get 
-         let (exprBlock, exprBlockState) = runState (exprToCode expr) codeState
-             codeBlock = CompoundBlock [ exprBlock
-                                       , stringBlock "popq %rax" 
-                                       , stringBlock "negq %rax"
-                                       , stringBlock "pushq %rax" ]
-             newState = exprBlockState 
-         put newState
-         return codeBlock 
-
- 
----
---- Binary operations code 
---- 
-binOpExprToCode :: (HExpr LocInfo) -> (HExpr LocInfo) -> String -> State CodeState CodeBlock
-binOpExprToCode exprLeft exprRight opStr
-    = let f = case opStr of 
-                "||" -> orExprToCode 
-                "&&" -> andExprToCode 
-                "+" -> addExprToCode 
-                "-" -> subExprToCode 
-                "*" -> mulExprToCode 
-                "/" -> divExprToCode  
-                "%" -> modExprToCode
-                "==" -> equalsExprToCode
-                "!=" -> notEqualsExprToCode
-                "<" -> ltExprToCode
-                ">" -> gtExprToCode
-                "<=" -> ltEqualsExprToCode 
-                ">=" -> gtEqualsExprToCode 
-                _ -> error "Unexpected token for operator" 
-      in f exprLeft exprRight
-
-addExprToCode :: (HExpr LocInfo) -> (HExpr LocInfo) -> State CodeState CodeBlock  
-addExprToCode leftExpr rightExpr
-    = do codeState <- get 
-         let (leftBlock, leftBlockState) = runState (exprToCode leftExpr) codeState
-             (rightBlock, rightBlockState) = runState (exprToCode rightExpr) leftBlockState
-             codeBlock = CompoundBlock [ leftBlock 
-                                       , rightBlock 
-                                       , stringBlock "popq %rax" 
-                                       , stringBlock "popq %rbx"
-                                       , stringBlock "addq %rax, %rbx" 
-                                       , stringBlock "pushq %rax" ]
-             newState = rightBlockState
-         put newState
-         return codeBlock 
-
-subExprToCode :: (HExpr LocInfo) -> (HExpr LocInfo) -> State CodeState CodeBlock  
-subExprToCode leftExpr rightExpr  
-    = do codeState <- get 
-         let (leftBlock, leftBlockState) = runState (exprToCode leftExpr) codeState
-             (rightBlock, rightBlockState) = runState (exprToCode rightExpr) leftBlockState
-             codeBlock = CompoundBlock [ leftBlock 
-                                       , rightBlock 
-                                       , stringBlock "popq %rax" 
-                                       , stringBlock "popq %rbx"
-                                       , stringBlock "subq %rax, %rbx" 
-                                       , stringBlock "pushq %rax" ]
-             newState = rightBlockState
-         put newState
-         return codeBlock 
-
-mulExprToCode :: (HExpr LocInfo) -> (HExpr LocInfo) -> State CodeState CodeBlock  
-mulExprToCode leftExpr rightExpr
-    = do codeState <- get 
-         let (leftBlock, leftBlockState) = runState (exprToCode leftExpr) codeState
-             (rightBlock, rightBlockState) = runState (exprToCode rightExpr) leftBlockState
-             codeBlock = CompoundBlock [ leftBlock 
-                                       , rightBlock 
-                                       , stringBlock "popq %rax" 
-                                       , stringBlock "popq %rbx"
-                                       , stringBlock "mulq %rax, %rbx" 
-                                       , stringBlock "pushq %rax" ]
-             newState = rightBlockState
-         put newState
-         return codeBlock 
-
-divExprToCode :: (HExpr LocInfo) -> (HExpr LocInfo) -> State CodeState CodeBlock  
-divExprToCode leftExpr rightExpr
-    = do codeState <- get 
-         let (leftBlock, leftBlockState) = runState (exprToCode leftExpr) codeState
-             (rightBlock, rightBlockState) = runState (exprToCode rightExpr) leftBlockState
-             codeBlock = CompoundBlock [ leftBlock 
-                                       , rightBlock 
-                                       , stringBlock "popq %rax" 
-                                       , stringBlock "popq %rbx"
-                                       , stringBlock "divq %rax, %rbx" 
-                                       , stringBlock "pushq %rax" ]
-             newState = rightBlockState
-         put newState
-         return codeBlock 
-
-modExprToCode :: (HExpr LocInfo) -> (HExpr LocInfo) -> State CodeState CodeBlock  
-modExprToCode leftExpr rightExpr
-    = do codeState <- get 
-         let (leftBlock, leftBlockState) = runState (exprToCode leftExpr) codeState
-             (rightBlock, rightBlockState) = runState (exprToCode rightExpr) leftBlockState
-             codeBlock = CompoundBlock [ leftBlock 
-                                       , rightBlock 
-                                       , stringBlock "popq %rax" 
-                                       , stringBlock "popq %rbx"
-                                       , stringBlock "modq %rax, %rbx" 
-                                       , stringBlock "pushq %rax" ]
-             newState = rightBlockState
-         put newState
-         return codeBlock 
-
-equalsExprToCode :: (HExpr LocInfo) -> (HExpr LocInfo) -> State CodeState CodeBlock  
-equalsExprToCode leftExpr rightExpr 
-    = do codeState <- get 
-         let (leftBlock, leftBlockState) = runState (exprToCode leftExpr) codeState
-             (rightBlock, rightBlockState) = runState (exprToCode rightExpr) leftBlockState
-             codeBlock = CompoundBlock [ leftBlock 
-                                       , rightBlock 
-                                       , stringBlock "popq %rax"
-                                       , stringBlock "popq %rbx" 
-                                       , stringBlock "cmpq %rax, %rbx"
-                                       , stringBlock "pushfq"
-                                       , stringBlock "popq %rax"
-                                       , stringBlock "andq 0x40, %rax" 
-                                       , stringBlock "pushq %rax" ]
-             newState = rightBlockState
-         put newState
-         return codeBlock 
-
-notEqualsExprToCode :: (HExpr LocInfo) -> (HExpr LocInfo) -> State CodeState CodeBlock  
-notEqualsExprToCode leftExpr rightExpr
-    = do codeState <- get 
-         let (leftBlock, leftBlockState) = runState (exprToCode leftExpr) codeState
-             (rightBlock, rightBlockState) = runState (exprToCode rightExpr) leftBlockState
-             codeBlock = CompoundBlock [ leftBlock 
-                                       , rightBlock 
-                                       , stringBlock "popq %rax"
-                                       , stringBlock "popq %rbx" 
-                                       , stringBlock "cmpq %rax, %rbx"
-                                       , stringBlock "pushfq"
-                                       , stringBlock "popq %rax"
-                                       , stringBlock "andq 0x40, %rax"
-                                       , stringBlock "xorq 0x40, %rax"
-                                       , stringBlock "pushq %rax" ]
-             newState = rightBlockState
-         put newState
-         return codeBlock 
-
-ltExprToCode :: (HExpr LocInfo) -> (HExpr LocInfo) -> State CodeState CodeBlock  
-ltExprToCode leftExpr rightExpr
-    = do codeState <- get 
-         let (leftBlock, leftBlockState) = runState (exprToCode leftExpr) codeState
-             (rightBlock, rightBlockState) = runState (exprToCode rightExpr) leftBlockState
-             codeBlock = CompoundBlock [ leftBlock 
-                                       , rightBlock 
-                                       , stringBlock "popq %rax"
-                                       , stringBlock "popq %rbx" 
-                                       , stringBlock "cmpq %rax, %rbx"
-                                       , stringBlock "pushfq"
-                                       , stringBlock "popq %rax"
-                                       , stringBlock "andq 0x80, %rax"
-                                       , stringBlock "pushq %rax" ]
-             newState = rightBlockState
-         put newState
-         return codeBlock 
-
-gtExprToCode :: (HExpr LocInfo) -> (HExpr LocInfo) -> State CodeState CodeBlock  
-gtExprToCode leftExpr rightExpr
-    = do codeState <- get 
-         let (leftBlock, leftBlockState) = runState (exprToCode leftExpr) codeState
-             (rightBlock, rightBlockState) = runState (exprToCode rightExpr) leftBlockState
-             codeBlock = CompoundBlock [ leftBlock 
-                                       , rightBlock 
-                                       , stringBlock "popq %rax"
-                                       , stringBlock "popq %rbx" 
-                                       , stringBlock "cmpq %rbx, %rax"
-                                       , stringBlock "pushfq"
-                                       , stringBlock "popq %rax"
-                                       , stringBlock "andq 0x80, %rax"
-                                       , stringBlock "pushq %rax" ]
-             newState = rightBlockState
-         put newState
-         return codeBlock 
-
-ltEqualsExprToCode :: (HExpr LocInfo) -> (HExpr LocInfo) -> State CodeState CodeBlock  
-ltEqualsExprToCode leftExpr rightExpr
-    = do codeState <- get 
-         let (leftBlock, leftBlockState) = runState (exprToCode leftExpr) codeState
-             (rightBlock, rightBlockState) = runState (exprToCode rightExpr) leftBlockState
-             codeBlock = CompoundBlock [ leftBlock 
-                                       , rightBlock 
-                                       , stringBlock "popq %rax"
-                                       , stringBlock "popq %rbx" 
-                                       , stringBlock "cmpq %rax, %rbx"
-                                       , stringBlock "pushfq"
-                                       , stringBlock "popq %rax"
-                                       , stringBlock "andq 0xC0, %rax"
-                                       , stringBlock "pushq %rax" ]
-             newState = rightBlockState
-         put newState
-         return codeBlock 
-
-gtEqualsExprToCode :: (HExpr LocInfo) -> (HExpr LocInfo) -> State CodeState CodeBlock  
-gtEqualsExprToCode leftExpr rightExpr
-    = do codeState <- get 
-         let (leftBlock, leftBlockState) = runState (exprToCode leftExpr) codeState
-             (rightBlock, rightBlockState) = runState (exprToCode rightExpr) leftBlockState
-             codeBlock = CompoundBlock [ leftBlock 
-                                       , rightBlock 
-                                       , stringBlock "popq %rax"
-                                       , stringBlock "popq %rbx" 
-                                       , stringBlock "cmpq %rbx, %rax"
-                                       , stringBlock "pushfq"
-                                       , stringBlock "popq %rax"
-                                       , stringBlock "andq 0xC0, %rax"
-                                       , stringBlock "pushq %rax" ]
-             newState = rightBlockState
-         put newState
-         return codeBlock 
-
-orExprToCode ::  (HExpr LocInfo) -> (HExpr LocInfo) -> State CodeState CodeBlock 
-orExprToCode leftExpr rightExpr  
-    = do codeState <- get 
-         let (leftBlock, leftBlockState) = runState (exprToCode leftExpr) codeState  
-             (rightBlock, rightBlockState) = runState (exprToCode rightExpr) leftBlockState
-             orIndex = currentOrIndex rightBlockState
-             orLabel = CodeLabel { lblName = "or_" ++ (show orIndex), lblParent = Just $ currentLabel codeState }
-             orTrueLabel = CodeLabel { lblName = "true", lblParent = Just orLabel }
-             orEndLabel = CodeLabel { lblName = "end", lblParent = Just orLabel }
-             codeBlock = CompoundBlock [ leftBlock 
-                                       , stringBlock "popq %rax"
-                                       , stringBlock "cmp %rax, $0"
-                                       , stringBlock $ "jne " ++ (show orTrueLabel)
-                                       , rightBlock
-                                       , stringBlock "popq %rax"
-                                       , stringBlock "cmp %rax, $0"
-                                       , stringBlock $ "jne " ++ (show orTrueLabel)
-                                       , stringBlock "pushq $0"
-                                       , stringBlock $ "jmp " ++ (show orEndLabel)
-                                       , labelBlock orTrueLabel
-                                       , stringBlock "pushq $1"
-                                       , labelBlock orEndLabel]
-             newState = rightBlockState { currentOrIndex = orIndex + 1 }
-         put newState 
-         return codeBlock
-
-andExprToCode :: (HExpr LocInfo) -> (HExpr LocInfo) -> State CodeState CodeBlock 
-andExprToCode leftExpr rightExpr 
-    = do codeState <- get 
-         let (leftBlock, leftBlockState) = runState (exprToCode leftExpr) codeState
-             (rightBlock, rightBlockState) = runState (exprToCode rightExpr) leftBlockState
-             andIndex = currentAndIndex rightBlockState
-             andLabel = CodeLabel { lblName = "and_" ++ (show andIndex), lblParent = Just $ currentLabel codeState }
-             andFalseLabel = CodeLabel { lblName = "false", lblParent = Just andLabel }
-             andEndLabel = CodeLabel { lblName = "end", lblParent = Just andLabel }
-             codeBlock = CompoundBlock [ leftBlock 
-                                       , stringBlock "popq %rax" 
-                                       , stringBlock "cmp %rax, $0"
-                                       , stringBlock $ "je " ++ (show andFalseLabel) 
-                                       , rightBlock
-                                       , stringBlock "popq %rax"
-                                       , stringBlock "cmp %rax, $0"
-                                       , stringBlock $ "je " ++ (show andFalseLabel) 
-                                       , stringBlock "pushq $1" 
-                                       , stringBlock $ "jmp " ++ (show andEndLabel)
-                                       , labelBlock andFalseLabel
-                                       , stringBlock "pushq $0"
-                                       , labelBlock andEndLabel ]
-             newState = rightBlockState { currentAndIndex = andIndex + 1 }
-         put newState 
-         return codeBlock 
-
----
---- Code generation for the entire program. 
----
-
-programToCode :: (HDProgram Int) -> State CodeState CodeBlock
-programToCode program = do 
-  let (HDProgram env _ _ methods) = createLocationInformation program
-      fullGlobalOffset = finalGlobalOffset env
-  -- Generate code for all of the methods
-  methodCode <- stateMap methodToCode methods
-  codeState <- get
-  -- Generate a data area for the global variables in the program text
-  let globalDecls = ConstantBlock ["GLOBALS:", "# Allocate " ++ (show $ fullGlobalOffset) ++ " bytes of global memory here" ]
-      stringDecls = CompoundBlock [ stringBlock "STRINGS: "
-                                  , CompoundBlock $ map declareString (stringLiterals codeState) ]
-  return $ CompoundBlock [ stringDecls
-                         , globalDecls
-                         , stringBlock ".text"
-                         , CompoundBlock methodCode]
-
-declareString :: (Int, String) -> CodeBlock 
-declareString (index, str) = CompoundBlock [ stringBlock $ "STRING_" ++ (show index) ++ ": "
-                                        , stringBlock $ ".string \"" ++ str ++ "\"" ]
-
-finalGlobalOffset :: SymbolEnv LocInfo -> Int64 
-finalGlobalOffset env =  case endLocations of 
-                           [] -> 0
-                           _ -> maximum endLocations
-    where endLocations = map endLocation (Map.elems $ symbolLocs $ customValue env)
-          endLocation (GlobalOffset loc size) = loc+size
-          endLocation _ = 0
-
-runGenerateCode :: (HDProgram Int) -> String -> CodeBlock
-runGenerateCode program filedir = let (block, _) = runState (programToCode program)  (initialCodeState filename)
-                                   in block
-    where filename = takeBaseName filedir
-
-
-stateMap :: (a -> State s b) -> [a] -> State s [b] 
-stateMap f [] = return []
-stateMap f (x:xs) = do y <- f x 
-                       ys <- stateMap f xs 
-                       return (y:ys)
-
+lowIRToGraphViz m = "digraph name {\n"
+                    ++ (showFields (lowIRFields m))
+                    ++ (showStrings (lowIRStrings m))
+                    ++ (concatMap showMethod (lowIRMethods m))
+                    ++ I.graphToGraphViz show (lowIRGraph m)
+                    ++ "}"
+    where showMethod (I.Method pos name entry postenter)
+              = name ++ " [shape=doubleoctagon,label="++show name++"];\n"
+                ++ name ++ " -> " ++ show entry ++ ";\n"
+          showField (LowIRField pos name size)
+              = "{" ++ name ++ "|" ++ show size ++ "}"
+          showFields fields = "_fields_ [shape=record,label=\"fields|{"
+                              ++ intercalate "|" (map showField fields)
+                              ++ "}\"];\n"
+          showString (name, pos, str)
+              = "{" ++ name ++ "|" ++ showPos pos ++ "|" ++ show str ++ "}"
+          showStrings strings = "_strings_ [shape=record,label="
+                              ++ show ("strings|{"
+                                       ++ intercalate "|" (map showString strings)
+                                       ++ "}")
+                              ++ "];\n"

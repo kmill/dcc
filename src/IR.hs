@@ -1,507 +1,366 @@
-{-# LANGUAGE FlexibleContexts, FlexibleInstances,
-    MultiParamTypeClasses, FunctionalDependencies, TypeSynonymInstances #-}
+{-# LANGUAGE GADTs, RankNTypes, TypeSynonymInstances, TypeFamilies #-}
 
 module IR where
 
-import Text.ParserCombinators.Parsec
-import Text.ParserCombinators.Parsec.Pos (newPos)
-import Text.Printf
-import Text.PrettyPrint.HughesPJ
-import Data.Graphs
-import AST
-import Data.List
+import Text.ParserCombinators.Parsec.Pos (newPos, SourcePos)
+
+import Compiler.Hoopl
+import Compiler.Hoopl.Checkpoint(CheckpointMonad(..))
 import Data.Int
+import Data.List
 import Data.Maybe
-import Data.Either
-import qualified Data.Map as Map
-import Control.Monad
+import Text.Printf
+import Text.Regex
+import AST (PP, SourcePos, showPos)
+import Data.Ord
+
+bTrue, bFalse :: Int64
+bTrue = 1
+bFalse = 0
 
 boolToInt :: Bool -> Int64
-boolToInt True = 1
-boolToInt False = 0
+boolToInt b = if b then bTrue else bFalse
 
-data BasicBlock a b = BasicBlock
-    { blockCode :: [a]
-    , blockTest :: IRTest b
-    , blockTestPos :: SourcePos }
+intToBool :: Int64 -> Bool 
+intToBool = (/= 0) 
 
-type LowBasicBlock = BasicBlock LowIRInst LowOper
-type MidBasicBlock = BasicBlock MidIRInst MidOper
-type IRGraph a = Graph a Bool
+-- | This is the type of the monad for working with graphs in Hoopl.
+newtype GM a = GM { runGM' :: [Unique] -> [Int] -> ([Unique], [Int], a) }
 
--- | This is the order of arguments in registers for the ABI.
--- 'Nothing' represents that the argument comes from the stack.
-argOrder :: [Maybe X86Reg]
-argOrder = (map Just [RDI, RSI, RDX, RCX, R8, R9]) ++ nothings
-    where nothings = Nothing:nothings
+class Monad m => UniqueNameMonad m where
+    -- | Argument is a prefix to the unique name
+    genUniqueName :: String -> m String
 
-argStackDepth :: [Int]
-argStackDepth = [no, no, no, no, no, no] ++ [16, 16+8..]
-    where no = error "argStackDepth for non-stack-arg :-("
+instance Monad GM where
+    return x = GM $ \u v -> (u, v, x)
+    ma >>= f = GM $ \u v -> let (u', v', a) = runGM' ma u v
+                            in runGM' (f a) u' v'
 
-callerSaved :: [X86Reg]
-callerSaved = [RAX, R10, R11]
+instance UniqueNameMonad GM where
+    genUniqueName prefix
+        = GM $ \u v ->
+          case v of
+            (v:vs) -> (u, vs, "@" ++ prefix ++ "_" ++ show v)
+            _ -> error "GM ran out of unique names! :-("
 
-calleeSaved :: [X86Reg]
-calleeSaved = [RBP, RBX, R12, R13, R14, R15] -- should RBP be in this?
+instance UniqueMonad GM where
+    freshUnique = GM $ \u v ->
+                  case u of
+                    (u:us) -> (us, v, u)
+                    _ -> error "GM ran out of Uniques! :-("
 
-data IRTest b = IRTestTrue
-              | IRTestFalse
-              | IRTestBinOp CmpBinOp b b
-              | IRTest b
-              | IRTestNot b
-              | IRReturn (Maybe b)
-              | IRTestFail (Maybe String)
+instance CheckpointMonad GM where
+    type Checkpoint GM = ([Unique], [Int])
+    checkpoint = GM $ \u v -> (u, v, (u, v))
+    restart (u, v) = GM $ \_ _ -> (u, v, ())
 
-data X86Reg = RAX -- temp reg, return value
-            | RBX -- callee-saved
-            | RCX -- 4th arg
-            | RDX -- 3rd arg
-            | RSP -- stack pointer
-            | RBP -- base pointer (callee-saved)
-            | RSI -- 2nd argument
-            | RDI -- 1st argument
-            | R8 -- 5th argument
-            | R9 -- 6th argument
-            | R10 -- temporary
-            | R11 -- temporary
-            | R12 -- callee-saved
-            | R13 -- callee-saved
-            | R14 -- callee-saved
-            | R15 -- callee-saved
-              deriving (Eq, Ord)
-              
-data RegName = X86Reg X86Reg
-             | SymbolicReg Int
-               deriving (Eq, Ord)
+runGM :: GM a -> a
+runGM g = a
+    where (_, _, a) = runGM' g (map intToUnique [1..]) [1..]
 
-instance Show RegName where
-    show (X86Reg r) = show r
-    show (SymbolicReg i) = "%s" ++ show i
+instance Functor GM where
+    fmap f ma = do a <- ma
+                   return $ f a
 
-data BinOp = OpAdd
-           | OpSub
-           | OpMul
-           | OpDiv
-           | OpMod
-           | OpBinCmp CmpBinOp
-             deriving Eq
-data UnOp = OpNeg
-          | OpNot
-          | OpDeref
---          | OpAddr
-            
+---
+--- IRs
+---
+
+data VarName = MV String deriving (Eq, Ord)
+
+instance Show VarName where
+    show (MV s) = s
+    
+varToLabel :: SourcePos -> VarName -> Expr VarName
+varToLabel pos (MV s) = LitLabel pos s
+
+data MidIRRepr = MidIRRepr
+    { midIRFields :: [MidIRField]
+    , midIRStrings :: [(String, SourcePos, String)]
+    , midIRMethods :: [Method]
+    , midIRGraph :: Graph MidIRInst C C }
+data MidIRField = MidIRField SourcePos String (Maybe Int64)
+
+type MidIRInst = Inst VarName
+type MidIRExpr = Expr VarName
+
+---
+--- Methods
+---
+
+-- | 'a' is the type of the metadata of the method (such as
+-- arguments), and 'v' is the type of the variables
+data Method = Method
+    { methodPos :: SourcePos
+    , methodName :: String
+    , methodEntry :: Label
+    , methodPostEntry :: Label }
+
+---
+--- Expr
+---
+
+-- | The 'v' parameter represents the type of the variables.
+data Expr v = Lit SourcePos Int64
+            | Var SourcePos v
+            | LitLabel SourcePos String
+            | Load SourcePos (Expr v)
+            | UnOp SourcePos UnOp (Expr v)
+            | BinOp SourcePos BinOp (Expr v) (Expr v)
+            -- | a ? b : c, evaluates both b and c
+            | Cond SourcePos (Expr v) (Expr v) (Expr v)
+
+instance Eq v => Eq (Expr v) where
+    (Lit _ i1) == (Lit _ i2)  = i1 == i2
+    (Var _ v1) == (Var _ v2)  = v1 == v2
+    (LitLabel _ s1) == (LitLabel _ s2)  = s1 == s2
+    (Load _ e1) == (Load _ e2)  = e1 == e2
+    (UnOp _ op1 e1) == (UnOp _ op2 e2)
+        = (op1, e1) == (op2, e2)
+    (BinOp _ op1 a1 b1) == (BinOp _ op2 a2 b2)
+        = (op1, a1, b1) == (op2, a2, b2)
+    (Cond _ a1 b1 c1) == (Cond _ a2 b2 c2)
+        = (a1, b1, c1) == (a2, b2, c2)
+    _ == _ = False
+
+instance Ord v => Ord (Expr v) where
+    compare (Lit _ i1) (Lit _ i2) = compare i1 i2
+    compare (Var _ v1) (Var _ v2) = compare v1 v2
+    compare (LitLabel _ s1) (LitLabel _ s2)
+        = compare s1 s2
+    compare (Load _ e1) (Load _ e2) = compare e1 e2
+    compare (UnOp _ op1 e1) (UnOp _ op2 e2)
+        = compare (op1, e1) (op2, e2)
+    compare (BinOp _ op1 a1 b1) (BinOp _ op2 a2 b2)
+        = compare (op1, a1, b1) (op2, a2, b2)
+    compare (Cond _ a1 b1 c1) (Cond _ a2 b2 c2)
+        = compare (a1, b1, c1) (a2, b2, c2)
+    compare Lit{} _ = LT
+    compare Var{} Lit{} = GT
+    compare Var{} _ = LT
+    compare LitLabel{} x
+        = case x of
+            Lit{} -> GT
+            Var{} -> GT
+            _ -> LT
+    compare Load{} x
+        = case x of
+            Lit{} -> GT
+            Var{} -> GT
+            LitLabel{} -> GT
+            _ -> LT
+    compare UnOp{} x
+        = case x of
+            Lit{} -> GT
+            Var{} -> GT
+            LitLabel{} -> GT
+            Load{} -> GT
+            _ -> LT
+    compare BinOp{} x
+        = case x of
+            Lit{} -> GT
+            Var{} -> GT
+            LitLabel{} -> GT
+            Load{} -> GT
+            UnOp{} -> GT
+            _ -> LT
+    compare Cond{} x
+        = case x of
+            Lit{} -> GT
+            Var{} -> GT
+            LitLabel{} -> GT
+            Load{} -> GT
+            UnOp{} -> GT
+            BinOp{} -> GT
+            _ -> LT
+
+
+
+
+data UnOp = OpNeg | OpNot
+            deriving (Eq, Ord)
+data BinOp = OpAdd | OpSub | OpMul | OpDiv | OpMod
+           | CmpLT | CmpGT | CmpLTE | CmpGTE | CmpEQ | CmpNEQ
+             deriving (Eq, Ord)
+
+-- | applies a function which replaces variables
+mapE :: (v1 -> v2) -> Expr v1 -> Expr v2
+mapE f (Lit pos x) = Lit pos x
+mapE f (Var pos v) = Var pos (f v)
+mapE f (LitLabel pos l) = LitLabel pos l
+mapE f (Load pos exp) = Load pos (mapE f exp)
+mapE f (UnOp pos op exp) = UnOp pos op (mapE f exp)
+mapE f (BinOp pos op exp1 exp2) = BinOp pos op (mapE f exp1) (mapE f exp2)
+mapE f (Cond pos expc exp1 exp2) = Cond pos (mapE f expc) (mapE f exp1) (mapE f exp2)
+
+---
+--- Instructions
+---
+
+-- | 'v' is type of variables. Confused?  Look at Show (Inst v e x).
+data Inst v e x where
+    Label      :: SourcePos -> Label                           -> Inst v C O
+    Enter      :: SourcePos -> Label -> [v]                    -> Inst v C O
+    PostEnter  :: SourcePos -> Label                           -> Inst v C O
+    Store      :: SourcePos -> v -> Expr v                     -> Inst v O O
+    IndStore   :: SourcePos -> Expr v -> Expr v                -> Inst v O O
+    Call       :: SourcePos -> v -> String -> [Expr v]         -> Inst v O O
+    Callout    :: SourcePos -> v -> String -> [Expr v]         -> Inst v O O
+    Branch     :: SourcePos -> Label                           -> Inst v O C
+    CondBranch :: SourcePos -> Expr v -> Label -> Label        -> Inst v O C
+    Return     :: SourcePos -> String -> Maybe (Expr v)        -> Inst v O C
+    Fail       :: SourcePos                                    -> Inst v O C
+
+instance NonLocal (Inst v) where
+    entryLabel (Label _ lbl) = lbl
+    entryLabel (PostEnter _ lbl) = lbl
+    entryLabel (Enter _ lbl _) = lbl
+    successors (Branch _ lbl) = [lbl]
+    successors (CondBranch _ exp tlbl flbl) = [tlbl, flbl]
+    successors (Return _ _ _) = []
+    successors (Fail _) = []
+
+
+-- | applies a function which replaces variables
+mapI :: (v1 -> v2) -> Inst v1 e x -> Inst v2 e x
+mapI f (Label pos l) = Label pos l
+mapI f (PostEnter pos l) = PostEnter pos l
+mapI f (Enter pos l args) = Enter pos l (map f args)
+mapI f (Store pos d exp) = Store pos (f d) (mapE f exp)
+mapI f (IndStore pos d s) = IndStore pos (mapE f d) (mapE f s)
+mapI f (Call pos d name args) = Call pos (f d) name (map (mapE f) args)
+mapI f (Callout pos d name args) = Callout pos (f d) name (map (mapE f) args)
+mapI f (Branch pos l) = Branch pos l
+mapI f (CondBranch pos cexp lt lf) = CondBranch pos (mapE f cexp) lt lf
+mapI f (Return pos for mexp) = Return pos for (mexp >>= Just . (mapE f))
+mapI f (Fail pos) = Fail pos
+
+
+------------------------------------------------------------
+--- Show ---------------------------------------------------
+------------------------------------------------------------
+
+instance Show v => Show (Expr v) where
+    showsPrec _ (Lit pos x) = shows x
+    showsPrec _ (LitLabel pos lab) = showString ("$" ++ lab)
+    showsPrec _ (Var pos v) = shows v
+    showsPrec _ (Load pos expr) = showString "*(" . showsPrec 0 expr . showString ")"
+    showsPrec p (UnOp pos op expr) = showParen (p>0) (shows op . showString " " . showsPrec 1 expr)
+    showsPrec p (BinOp pos op ex1 ex2)
+        = showParen (p>0) (showsPrec 1 ex1 . showString " " . shows op . showString " " . showsPrec 1 ex2)
+    showsPrec p (Cond pos exc ex1 ex2)
+        = showParen (p>0) (showsPrec 1 exc
+                           . showString " ? " . showsPrec 1 ex1
+                           . showString " : " . showsPrec 1 ex2)
+
+instance Show UnOp where
+    show OpNeg = "negate"
+    show OpNot = "not"
+
 instance Show BinOp where
     show OpAdd = "+"
     show OpSub = "-"
     show OpMul = "*"
     show OpDiv = "/"
     show OpMod = "%"
-    show (OpBinCmp cop) = show cop
-instance Show UnOp where
-    show OpNeg = "-"
-    show OpNot = "!"
-    show OpDeref = "*"
---    show OpAddr = "&"
-            
-data CmpBinOp = CmpLT
-              | CmpGT
-              | CmpLTE
-              | CmpGTE
-              | CmpEQ
-              | CmpNEQ
-                deriving Eq
---              | CmpAnd
---              | CmpOr
-
-negateCmpBinOp :: CmpBinOp -> CmpBinOp
-negateCmpBinOp CmpLT = CmpGTE
-negateCmpBinOp CmpGTE = CmpLT
-negateCmpBinOp CmpGT = CmpLTE
-negateCmpBinOp CmpLTE = CmpGT
-negateCmpBinOp CmpEQ = CmpNEQ
-negateCmpBinOp CmpNEQ = CmpEQ
-
-data CmpUnOp =  CmpZero
-              | CmpNZero
-
----
---- LowIR
----
-
-data LowIRRepr = LowIRRepr
-    { lowIRFields :: [LowIRField]
-    , lowIRStrings :: [(String, SourcePos, String)]
-    , lowIRMethods :: [LowIRMethod] }
-data LowIRField = LowIRField SourcePos String Int64
-data LowIRMethod = LowIRMethod
-    { lowIRMethodPos :: SourcePos 
-    , lowIRMethodRetP :: Bool 
-    , lowIRMethodName :: String 
-    , lowIRMethodNumArgs :: Int 
-    , lowIRMethodLocalsSize :: Int64
-    , lowIRMethodIRGraph :: LowIRGraph }
-type LowIRGraph = IRGraph LowBasicBlock
-
-data LowOper = OperReg RegName
-             | LowOperConst Int64
-             | LowOperLabel String
-
-data MemAddr = MemAddr { memBaseReg :: RegName
-                       , memDisplace :: Int
-                       , memOffsetReg :: Maybe RegName
-                       , memScalar :: Int } -- ^ [base + displace + offset * scalar]
-             | MemAddrPtr String
-
-noPosition = newPos "<none>" (-1) (-1)
-
-data LowIRInst
-    = RegBin SourcePos RegName BinOp LowOper LowOper -- ^ "r := r + r"
-    | RegUn SourcePos RegName UnOp LowOper -- ^ "r := -r"
-    | RegVal SourcePos RegName LowOper -- ^ "r := r"
-    | RegCond
-      { regCondSourcePos :: SourcePos
-      , regCondDest :: RegName
-      , regCondCmp :: CmpBinOp 
-      , regCondCmp1 :: LowOper 
-      , regCondCmp2 :: LowOper 
-      , regCondSrc :: LowOper } -- ^ "r := (if r < r) r"
-    | RegPush SourcePos LowOper
-    | StoreMem SourcePos MemAddr LowOper
-    | LoadMem SourcePos RegName MemAddr
-    | FuncProlog SourcePos [RegName]
-    | LowCall SourcePos String Int -- ^ int is number of args
-    | LowCallout SourcePos String Int
-
----
---- MidIR
----
-
-data MidIRRepr = MidIRRepr
-    { midIRFields :: [MidIRField]
-    , midIRMethods :: [MidIRMethod] }
-data MidIRField = MidIRField SourcePos String (Maybe Int64)
-data MidIRMethod = MidIRMethod SourcePos Bool String [String] MidIRGraph
-type MidIRGraph = IRGraph MidBasicBlock
-
-data MidOper = OperVar String
-             | OperConst Int64
-             | OperLabel String
-
-data MidIRInst
-    = BinAssign SourcePos String BinOp MidOper MidOper
-    | UnAssign SourcePos String UnOp MidOper
-    | ValAssign SourcePos String MidOper
-    | CondAssign
-      { condSourcePos :: SourcePos
-      , condDest :: String
-      , condCmp :: CmpBinOp
-      , condCmp1 :: MidOper
-      , condCmp2 :: MidOper
-      , condSrc :: MidOper }
-    | IndAssign SourcePos String MidOper
-    | MidCall SourcePos (Maybe String) String [MidOper]
-    | MidCallout SourcePos (Maybe String) String [Either String MidOper]
-      
-      
----
---- DeadChecker
----
-
-class Eq c => DeadChecker a b c | a -> b c, b -> a where
-    -- | Takes an operand and gives a list of things it references.
-    fromOper :: b -> [c]
-    
-    -- | For a given statement, returns a tuple of (to-be-unused,
-    -- used) variables.  The order is 1) forget about unused, and 2)
-    -- learn about used, so if a variable occurs in both unused and
-    -- used, it remains used.  The multiplicity of "used" should be
-    -- the number of times it is used.
-    checkExtents :: a -> ([c], [c])
-    
--- | For a given test, returns a list of used variables.
-checkTestExtents :: DeadChecker a b c => IRTest b -> [c]
-checkTestExtents (IRTestBinOp _ op1 op2) = fromOper op1 ++ fromOper op2
-checkTestExtents (IRTest op) = fromOper op
-checkTestExtents (IRTestNot op) = fromOper op
-checkTestExtents (IRReturn (Just op)) = fromOper op
-checkTestExtents _ = []
-
-checkBlockExtents :: DeadChecker a b c =>
-                     BasicBlock a b -> ([c], [c])
-checkBlockExtents (BasicBlock insts test testpos)
-    = check' (reverse insts) [] (nub $ checkTestExtents test)
-    where check' [] dead alive = (dead, alive)
-          check' (inst:insts) dead alive
-              = let (ddead, dalive) = checkExtents inst
-                    dead' = nub (dead ++ ddead)
-                    alive' = alive \\ ddead
-                    dead'' = dead' \\ dalive
-                    alive'' = nub (alive' ++ dalive)
-                in check' insts dead'' alive''
-
-determineExtents :: (Eq c, DeadChecker a b c) =>
-                    Graph (BasicBlock a b) Bool
-                 -> Map.Map Vertex ([c], [c], [c]) -- keep dead alive
-determineExtents ir = iterG f init ir
-    where init = Map.fromList [(v, fuse [] $ checkBlockExtents (ir !!! v))
-                               | v <- vertices ir]
-          f g v r = let (keep, dead, alive) = fromJust $ Map.lookup v r
-                        nextalive = concatMap (getAlive . fromJust . (flip Map.lookup r))
-                                    (adjVertices g v)
-                        keep' = nub (keep ++ nextalive)
-                        alive' = nub (alive ++ (keep' \\ dead))
-                        r' = Map.insert v (keep', dead, alive') r
-                    in if alive == alive' && keep == keep'
-                       then Nothing
-                       else Just (preVertices g v, r')
-          fuse a (b,c) = (a,b,c)
-          getAlive (a, b, c) = c
-
-instance DeadChecker MidIRInst MidOper String where
-    fromOper (OperVar s) = [s]
-    fromOper _ = []
-    
-    checkExtents (BinAssign _ dest op oper1 oper2)
-        = ([dest], fromOper oper1 ++ fromOper oper2)
-    checkExtents (UnAssign _ dest op oper)
-        = ([dest], fromOper oper)
-    checkExtents (ValAssign _ dest oper)
-        = ([dest], fromOper oper)
-    checkExtents (CondAssign _ dest _ cmp1 cmp2 src)
-        = ([dest], [dest] ++ concatMap fromOper [cmp1, cmp2, src])
-    checkExtents (IndAssign _ dest oper)
-        = ([dest], fromOper oper)
-    checkExtents (MidCall _ mdest _ opers) 
-        = (maybeToList mdest, concatMap fromOper opers)
-    checkExtents (MidCallout _ mdest _ eopers)
-        = ( maybeToList mdest
-          , concatMap (either (const []) fromOper) eopers)
-
-instance DeadChecker LowIRInst LowOper RegName where
-    fromOper (OperReg r) = [r]
-    fromOper _ = []
-    
-    checkExtents (RegBin _ dest op oper1 oper2)
-        = ([dest], fromOper oper1 ++ fromOper oper2)
-    checkExtents (RegUn _ dest op oper)
-        = ([dest], fromOper oper)
-    checkExtents (RegVal _ dest oper)
-        = ([dest], fromOper oper)
-    checkExtents (RegCond _ dest _ cmp1 cmp2 src)
-        = ([dest], [dest] ++ concatMap fromOper [cmp1, cmp2, src])
-    checkExtents (RegPush _ oper)
-        = ([], fromOper oper)
-    checkExtents (StoreMem _ addr oper)
-        = ([], fromAddr addr ++ fromOper oper)
-    checkExtents (LoadMem _ dest addr)
-        = ([dest], fromAddr addr)
-    checkExtents (LowCall _ _ numargs)
-        = ([X86Reg RAX], map X86Reg regs)
-          where regs = catMaybes (take numargs argOrder)
-    checkExtents (LowCallout _ _ numargs)
-        = ([X86Reg RAX], map X86Reg regs)
-          where regs = catMaybes (take numargs argOrder)
-
-fromAddr :: MemAddr -> [RegName]
-fromAddr (MemAddr br _ mdr _) = [br] ++ maybeToList mdr
-fromAddr _ = []
-
----
---- BasicBlock normalization
----
-
--- | Runs a couple of rules on the ir graph to 'normalize' the graph
--- (for instance, to make basic blocks as big as possible).
-normalizeBlocks :: IRGraph (BasicBlock a b) -> IRGraph (BasicBlock a b)
-normalizeBlocks g = rewriteGraph (cullGraph g) rules
-    where rules = normalizeBlocks_rule_join_true
-                  ||| normalizeBlocks_rule_join_conditional
-          -- add more with `mplus`.
-    
--- | Check to see if the block leading to this block unconditionally
--- goes to this block.
-normalizeBlocks_rule_join_true :: RewriteRule (BasicBlock a b) Bool
-normalizeBlocks_rule_join_true g v
-    = do let preVerts = preVertices g v
-         guard $ 1 == length preVerts
-         let [w] = preVerts
-         guard $ v /= w -- make sure it's not a self-loop!
-         case blockTest (g !!! w) of
-           IRTestTrue -> guard $ hasEdgeTo g w True v
-           IRTestFalse -> guard $ hasEdgeTo g w False v
-           _ -> mzero
-         let newblock = BasicBlock
-                        { blockCode = blockCode (g !!! w) ++ blockCode (g !!! v)
-                        , blockTest = blockTest (g !!! v)
-                        , blockTestPos = blockTestPos (g !!! v) }
-         let newouts = withStartVertex w (adjEdges g v)
-         gReplace [v,w] [(w,newblock)] newouts
-
-normalizeBlocks_rule_join_conditional :: RewriteRule (BasicBlock a b) Bool
-normalizeBlocks_rule_join_conditional g v 
-    = do let preVerts = preVertices g v 
-         guard $ 1 == length preVerts 
-         let [w] = preVerts 
-         guard $ v /= w 
-         guard $ hasEdgeTo g w True v 
-         guard $ hasEdgeTo g w False v 
-         let newblock = BasicBlock
-                        { blockCode = blockCode (g !!! w) ++ blockCode (g !!! v)
-                        , blockTest = blockTest (g !!! v)
-                        , blockTestPos = blockTestPos (g !!! v) }
-         let newouts = withStartVertex w (adjEdges g v)
-         gReplace [v,w] [(w,newblock)] newouts
-             
-
----
---- Show!
----
-
-instance Show CmpBinOp where
     show CmpLT = "<"
     show CmpGT = ">"
     show CmpLTE = "<="
     show CmpGTE = ">="
     show CmpEQ = "=="
     show CmpNEQ = "!="
---    show CmpAnd = "&&"
---    show CmpOr = "||"
-instance Show CmpUnOp where
-    show CmpZero = "0=="
-    show CmpNZero = "0!="
 
-instance Show LowOper where
-    show (OperReg r) = show r
-    show (LowOperConst i) = "$" ++ show i
-    show (LowOperLabel s) = "$" ++ s
+instance Show v => Show (Inst v e x) where
+    show (Label pos lbl)
+        = printf "%s:  {%s};"
+          (show lbl) (showPos pos)
+    show (PostEnter pos lbl)
+        = printf "%s:  {post enter, %s};"
+          (show lbl) (showPos pos)
+    show (Enter pos lbl args)
+        = printf "%s: enter (%s)  {%s};"
+          (show lbl) (intercalate ", " (map show args)) (showPos pos)
+    show (Store pos var expr)
+        = printf "%s := %s  {%s};"
+          (show var) (show expr) (showPos pos)
+    show (IndStore pos dest expr)
+        = printf "*(%s) := %s  {%s};"
+          (show dest) (show expr) (showPos pos)
+    show (Call pos dest name args)
+        = printf "%s := call %s (%s)  {%s};"
+          (show dest) name (intercalate ", " $ map show args) (showPos pos)
+    show (Callout pos dest name args)
+        = printf "%s := callout %s (%s)  {%s};"
+          (show dest) (show name) (intercalate ", " $ map show args) (showPos pos)
+    show (Branch pos lbl)
+        = printf "goto %s  {%s};"
+          (show lbl) (showPos pos)
+    show (CondBranch pos expr tlbl flbl)
+        = printf "if %s then  {%s}\n  goto %s\nelse\n  goto %s"
+          (show expr) (showPos pos) (show tlbl) (show flbl)
+    show (Return pos for mexpr)
+        = printf "return %s  {for %s, %s}"
+          (maybe "" show mexpr) for (showPos pos)
+    show (Fail pos)
+        = printf "fail  {%s}"
+          (showPos pos)
 
-instance Show MemAddr where
-    show (MemAddr base 0 Nothing _)
-        = printf "(%s)" (show base)
---        = printf "[%s]" (show base)
-    show (MemAddr base disp Nothing _)
-        = printf "%s(%s)" (show disp) (show base)
---        = printf "[%s + %s]" (show base) (show disp)
-    show (MemAddr base 0 (Just offset) scalar)
-        = printf "(%s, %s, %s)"
-          (show base) (show offset) (show scalar)
---        = printf "[%s + %s * %s]"
---          (show base) (show offset) (show scalar)
-    show (MemAddr base disp (Just offset) scalar)
-        = printf "%s(%s, %s, %s)"
-          (show disp) (show base) (show offset) (show scalar)
---        = printf "[%s + %s + %s * %s]"
---          (show base) (show disp) (show offset) (show scalar)
-    show (MemAddrPtr s) = s
---    show (MemAddrPtr s) = "[$" ++ s ++ "]"
+instance Show Method where
+    show (Method pos name entry postentry)
+        = "method " ++ name
+          ++ " goto " ++ show entry
 
-instance Show X86Reg where
-    show RAX = "%rax"
-    show RBX = "%rbx"
-    show RCX = "%rcx"
-    show RDX = "%rdx"
-    show RSP = "%rsp"
-    show RBP = "%rbp"
-    show RSI = "%rsi"
-    show RDI = "%rdi"
-    show R8 = "%r8"
-    show R9 = "%r9"
-    show R10 = "%r10"
-    show R11 = "%r11"
-    show R12 = "%r12"
-    show R13 = "%r13"
-    show R14 = "%r14"
-    show R15 = "%r15"
+instance Show MidIRRepr where
+    show (MidIRRepr fields strs methods graph)
+        = "MidIR"
+          ++ " fields\n"
+          ++ unlines (map showField fields)
+          ++ " strings\n"
+          ++ unlines (map showStr strs)
+          ++ unlines (map show methods)
+          ++ showGraph show graph
+        where showField (MidIRField pos s Nothing)
+                  = "  " ++ s ++ "  {" ++ showPos pos ++ "}"
+              showField (MidIRField pos s (Just l))
+                  = "  " ++ s ++ "[" ++ show l ++  "]  {" ++ showPos pos ++ "}"
+              showStr (label, pos, string)
+                  = "  " ++ label ++ " = " ++ show string ++ "  {" ++ showPos pos ++ "}"
 
-instance Show LowIRInst where
-    show (RegBin pos r op oper1 oper2)
-        = printf "%s := %s %s %s  {%s}"
-          (show r) (show oper1) (show op) (show oper2) (showPos pos)
-    show (RegUn pos r op oper)
-        = printf "%s := %s %s  {%s}"
-          (show r) (show op) (show oper) (showPos pos)
-    show (RegVal pos r oper)
-        = printf "%s := %s  {%s}"
-          (show r) (show oper) (showPos pos)
-    show (RegCond pos dest cmp cmp1 cmp2 src)
-        = printf "%s := (if %s %s %s) %s  {%s}"
-          (show dest) (show cmp1) (show cmp) (show cmp2)
-          (show src) (showPos pos)
-    show (RegPush pos oper)
-        = printf "push %s  {%s}"
-          (show oper) (showPos pos)
-    show (StoreMem pos mem oper)
-        = printf "%s := %s  {%s}"
-          (show mem) (show oper) (showPos pos)
-    show (LoadMem pos reg mem)
-        = printf "%s := %s  {%s}"
-          (show reg) (show mem) (showPos pos)
-    show (FuncProlog pos regs)
-        = printf "prolog %s  {%s}"
-          (show regs) (showPos pos)
-    show (LowCall pos name numargs)
-        = printf "call %s %s  {%s}" name (show numargs) (showPos pos)
-    show (LowCallout pos name numargs)
-        = printf "callout %s %s  {%s}" (show name) (show numargs) (showPos pos)
-          
-          
-instance Show MidOper where
-    show (OperVar v) = v
-    show (OperConst i) = "$" ++ show i
-    show (OperLabel s) = "$" ++ s
-          
-instance Show MidIRInst where
-    show (BinAssign pos r op oper1 oper2)
-        = printf "%s := %s %s %s  {%s}"
-          r (show oper1) (show op) (show oper2) (showPos pos)
-    show (UnAssign pos r op oper)
-        = printf "%s := %s %s  {%s}"
-          r (show op) (show oper) (showPos pos)
-    show (ValAssign pos r oper)
-        = printf "%s := %s  {%s}"
-          r (show oper) (showPos pos)
-    show (CondAssign pos dest cmp cmp1 cmp2 src)
-        = printf "%s := (if %s %s %s) %s  {%s}"
-          dest (show cmp1) (show cmp) (show cmp2)
-          (show src) (showPos pos)
-    show (IndAssign pos dest oper)
-        = printf "*%s := %s  {%s}"
-          dest (show oper) (showPos pos)
-    show (MidCall pos dest name args)
-        = printf "%scall %s(%s)  {%s}"
-          d name (intercalate ", " $ map show args) (showPos pos)
-        where d = case dest of
-                    Just d' -> d' ++ " := "
-                    Nothing -> ""
-    show (MidCallout pos dest name args)
-        = printf "%scallout %s (%s)  {%s}"
-          d (show name) (intercalate ", " $ map show' args) (showPos pos)
-        where d = case dest of
-                    Just d' -> d' ++ " := "
-                    Nothing -> ""
-              show' e = case e of
-                          Left s -> show s
-                          Right w -> show w
+midIRToGraphViz m = "digraph name {\n"
+                    ++ (showFields (midIRFields m))
+                    ++ (showStrings (midIRStrings m))
+                    ++ (concatMap showMethod (midIRMethods m))
+                    ++ graphToGraphViz show (midIRGraph m)
+                    ++ "}"
+    where showMethod (Method pos name entry postentry)
+              = name ++ " [shape=doubleoctagon,label="++show name++"];\n"
+                ++ name ++ " -> " ++ show entry ++ ";\n"
+          showField (MidIRField pos name msize)
+              = "{" ++ name ++ "|" ++ fromMaybe "val" (msize >>= return . show) ++ "}"
+          showFields fields = "_fields_ [shape=record,label=\"fields|{"
+                              ++ intercalate "|" (map showField fields)
+                              ++ "}\"];\n"
+          showString (name, pos, str)
+              = "{" ++ name ++ "|" ++ showPos pos ++ "|" ++ show str ++ "}"
+          showStrings strings = "_strings_ [shape=record,label="
+                              ++ show ("strings|{"
+                                       ++ intercalate "|" (map showString strings)
+                                       ++ "}")
+                              ++ "];\n"
 
-instance Show b => Show (IRTest b) where
-  show IRTestTrue = "true"
-  show IRTestFalse = "false"
-  show (IRTestBinOp op oper1 oper2)
-      = printf "%s %s %s"
-        (show oper1) (show op) (show oper2)
-  show (IRTest oper) = show oper
-  show (IRTestNot oper) = "!" ++ (show oper)
-  show (IRReturn Nothing) = "return"
-  show (IRReturn (Just oper)) = "return " ++ (show oper)
-  show (IRTestFail s) = "fail " ++ (maybe "" show s)
+type Showing n = forall e x . n e x -> String
 
-instance (Show a, Show b) => Show (BasicBlock a b) where
-  show bb = render $ pp bb
---      = "{" ++ intercalate ", " (map show code) ++ "} (" ++ show test ++ ")"
-
-instance (Show a, Show b) => PP (BasicBlock a b) where
-  pp (BasicBlock code test pos)
-      = (vcat $ map (text . show) code)
-        $+$ (text $ "(" ++ show test ++ ")")
-        <+> (text $ showPos pos)
+graphToGraphViz :: NonLocal n => Showing n -> Graph n C C -> String
+graphToGraphViz node (GMany _ g_blocks _) = concatMap bviz (mapElems g_blocks)
+  where bviz block = lab ++ " [shape=box, label="
+                     ++ (leftAlign $ show $ b block ++ "\n") ++ "];\n"
+                     ++ (concatMap (showEdge lab) (successors block))
+            where lab = show $ entryLabel block
+                  showEdge e x = printf "%s -> %s;\n" (show e) (show x)
+                  -- | turns \n into \l so graphviz left-aligns
+                  leftAlign t = subRegex (mkRegex "([^\\\\])\\\\n") t "\\1\\l"
+        b block = node a ++ "\n" ++ unlines (map node bs) ++ node c
+            where f :: (MaybeC C (n C O), [n O O], MaybeC C (n O C))
+                    -> (n C O, [n O O], n O C)
+                  f (JustC e, nodes, JustC x) = (e, nodes, x)
+                  (a, bs, c) = f (blockToNodeList block)

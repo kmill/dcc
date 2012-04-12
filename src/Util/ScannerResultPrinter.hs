@@ -3,7 +3,7 @@
 -- satisfies the 6.035 specification.  We put it over here in it's own
 -- file because the author would like to disown it.
 
-module ScannerResultPrinter(printScannerResult, Show6035) where
+module Util.ScannerResultPrinter(printScannerResult, Show6035) where
 
 import Text.Printf
 import Text.ParserCombinators.Parsec.Pos
