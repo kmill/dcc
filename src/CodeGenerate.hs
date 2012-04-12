@@ -463,7 +463,7 @@ lowIRToAsm m opts
   where 
     newline = [""]
     showField (LowIRField pos name size)
-        = [ name ++ ": .skip " ++ (show size) ++ ", 0\t\t# " ++ showPos pos ]
+        = [ name ++ ": .space " ++ (show size) ++ ", 0\t\t# " ++ showPos pos ]
     showString (name, pos, str) = [ name ++ ":\t\t# " ++ showPos pos
                                 , "   .asciz " ++ (show str) ]
     showMethod macmode graph (I.Method pos name entry postenter)
