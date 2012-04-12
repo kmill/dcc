@@ -146,7 +146,7 @@ instToAsm (I.Return pos fname (Just exp))
 instToAsm (I.Fail pos)
     = return $ mkMiddles [ A.mov pos (A.Imm32 1) (A.MReg A.RDI)
                          , A.mov pos (A.Imm32 1) (A.MReg A.RAX)
-                         , A.Call pos 1 (A.Imm32Label "exit" 0) ]
+                         , A.Callout pos 1 (A.Imm32Label "exit" 0) ]
                <*> mkLast (A.ExitFail pos)
 
 genSetArgs :: SourcePos -> [A.OperIRM] -> Graph A.Asm O O
