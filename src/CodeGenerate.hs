@@ -203,8 +203,9 @@ expToI e = mcut $ msum rules
                    guard $ checkIf32Bit i
                    return $ A.Imm32 $ fromIntegral i
 
-              , do (I.LitLabel pos s) <- withNode e
-                   return $ A.Imm32Label s 0
+                -- should use leaq for this!
+--              , do (I.LitLabel pos s) <- withNode e
+--                   return $ A.Imm32Label s 0
               ]
 
 expToR :: MidIRExpr -> CGM (Graph A.Asm O O, A.Reg)
@@ -234,7 +235,8 @@ expToR e = mcut $ msum rules
                           , A.SReg $ show v )
               , do I.LitLabel pos s <- withNode e
                    dr <- genTmpReg
-                   return ( mkMiddle $ A.mov pos (A.Imm32Label s 0) dr
+                   let mem = A.MemAddr Nothing (A.Imm32Label s 0) Nothing A.SOne
+                   return ( mkMiddle $ A.Lea pos mem dr
                           , dr )
               , do I.Load pos exp <- withNode e
                    (g, m) <- expToMem exp
@@ -430,7 +432,7 @@ dfsSearch graph lbl visited = foldl recurseDFS visited (reverse $ successors blo
   where block = lookupLabel graph lbl
         recurseDFS v' nv = if nv `elem` v' then v' else dfsSearch graph nv (v' ++ [nv])
   
-lowIRToAsm m = [ ".section .data" ]
+lowIRToAsm m = [ ".data" ]
                ++ newline
                ++ ["# fields"]
                ++ (concatMap showField (lowIRFields m))
@@ -438,8 +440,12 @@ lowIRToAsm m = [ ".section .data" ]
                ++ ["# strings"]
                ++ (concatMap showString (lowIRStrings m))
                ++ newline
-               ++  [ ".globl main" 
+               ++  [ ".text"
+                   , ".globl main" 
+                   , ".globl _main" 
+                   , "printf: jmp _printf"
                    , "main:"
+                   , "_main:"
                    , "call method_main"
                    , "movq $0, %rax"
                    , "ret" ]
