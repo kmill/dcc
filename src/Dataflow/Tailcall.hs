@@ -54,10 +54,17 @@ lastReturnTransfer = mkBTransfer f
           f (Store _ v _) k = case k of
                                 RUnknown -> RUnknown
                                 RJust from v' -> if v == v'
-                                            then RMulti
-                                            else RJust from v'
+                                                 then RMulti
+                                                 else RJust from v'
                                 RAnything from -> RAnything from
                                 RMulti -> RMulti
+          f (DivStore _ v _ _ _) k = case k of
+                                       RUnknown -> RUnknown
+                                       RJust from v' -> if v == v'
+                                                        then RMulti
+                                                        else RJust from v'
+                                       RAnything from -> RAnything from
+                                       RMulti -> RMulti
           f IndStore{} k = RMulti
           f Call{} k = RMulti
           f Callout{} k = RMulti

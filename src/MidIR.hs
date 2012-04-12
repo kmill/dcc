@@ -273,8 +273,8 @@ handleBinaryOp env pos opstr expr1 expr2
         "+" -> normalExpr OpAdd
         "-" -> normalExpr OpSub
         "*" -> normalExpr OpMul
-        "/" -> normalExpr OpDiv
-        "%" -> normalExpr OpMod
+        "/" -> divExpr DivQuo
+        "%" -> divExpr DivRem
         "==" -> normalExpr CmpEQ
         "!=" -> normalExpr CmpNEQ
         "<" -> normalExpr CmpLT
@@ -311,6 +311,12 @@ handleBinaryOp env pos opstr expr1 expr2
             normalExpr op = do (gex1, ex1) <- expressionToMidIR env expr1
                                (gex2, ex2) <- expressionToMidIR env expr2
                                return $ (gex1 <*> gex2, BinOp pos op ex1 ex2)
+            divExpr op = do (gex1, ex1) <- expressionToMidIR env expr1
+                            (gex2, ex2) <- expressionToMidIR env expr2
+                            t <- genTmpVar
+                            return $ ( gex1 <*> gex2
+                                       <*> mkMiddle (DivStore pos t op ex1 ex2)
+                                     , Var pos t )
 
 expressionToMidIR :: IREnv
                   -> HExpr a

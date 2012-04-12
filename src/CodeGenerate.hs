@@ -104,6 +104,17 @@ instToAsm (I.Enter pos l args)
 instToAsm (I.Store pos d sexp)
     = do (gd, s) <- expToIRM sexp
          return $ gd <*> mkMiddle (A.MovIRMtoR pos s (A.SReg $ show d))
+instToAsm (I.DivStore pos d op expa expb)
+    = do (ga, a) <- expToIRM expa
+         (gb, b) <- expToRM expb
+         return $ ga <*> gb
+                  <*> mkMiddles [ A.MovIRMtoR pos a (A.MReg A.RAX)
+                                , A.mov pos (A.Imm32 0) (A.MReg A.RDX)
+                                , A.IDiv pos b
+                                , A.mov pos (A.MReg src) (A.SReg $ show d)]
+    where src = case op of
+                  I.DivQuo -> A.RAX
+                  I.DivRem -> A.RDX
 instToAsm (I.IndStore pos dexp sexp)
     = do (gd, d) <- expToMem dexp
          (gs, s) <- expToIR sexp
@@ -319,26 +330,26 @@ expToR e = mcut $ msum rules
                             <*> mkMiddle (A.MovIRMtoR pos a dr)
                             <*> mkMiddle (A.IMulRM pos b dr)
                           , dr )
-              , do I.BinOp pos I.OpDiv expa expb <- withNode e
-                   (ga, a) <- expToIRM expa
-                   (gb, b) <- expToRM expb
-                   dr <- genTmpReg
-                   return ( ga <*> gb
-                            <*> mkMiddle (A.MovIRMtoR pos a (A.MReg A.RAX))
-                            <*> mkMiddle (A.mov pos (A.Imm32 0) (A.MReg A.RDX))
-                            <*> mkMiddle (A.IDiv pos b)
-                            <*> mkMiddle (A.mov pos (A.MReg A.RAX) dr)
-                          , dr )
-              , do I.BinOp pos I.OpMod expa expb <- withNode e
-                   (ga, a) <- expToIRM expa
-                   (gb, b) <- expToRM expb
-                   dr <- genTmpReg
-                   return ( ga <*> gb
-                            <*> mkMiddle (A.MovIRMtoR pos a (A.MReg A.RAX))
-                            <*> mkMiddle (A.mov pos (A.Imm32 0) (A.MReg A.RDX))
-                            <*> mkMiddle (A.IDiv pos b)
-                            <*> mkMiddle (A.mov pos (A.MReg A.RDX) dr)
-                          , dr )
+              -- , do I.BinOp pos I.OpDiv expa expb <- withNode e
+              --      (ga, a) <- expToIRM expa
+              --      (gb, b) <- expToRM expb
+              --      dr <- genTmpReg
+              --      return ( ga <*> gb
+              --               <*> mkMiddle (A.MovIRMtoR pos a (A.MReg A.RAX))
+              --               <*> mkMiddle (A.mov pos (A.Imm32 0) (A.MReg A.RDX))
+              --               <*> mkMiddle (A.IDiv pos b)
+              --               <*> mkMiddle (A.mov pos (A.MReg A.RAX) dr)
+              --             , dr )
+              -- , do I.BinOp pos I.OpMod expa expb <- withNode e
+              --      (ga, a) <- expToIRM expa
+              --      (gb, b) <- expToRM expb
+              --      dr <- genTmpReg
+              --      return ( ga <*> gb
+              --               <*> mkMiddle (A.MovIRMtoR pos a (A.MReg A.RAX))
+              --               <*> mkMiddle (A.mov pos (A.Imm32 0) (A.MReg A.RDX))
+              --               <*> mkMiddle (A.IDiv pos b)
+              --               <*> mkMiddle (A.mov pos (A.MReg A.RDX) dr)
+              --             , dr )
               , do I.Cond pos cexp texp fexp <- withNode e
                    (gflag, flag) <- expToFlag cexp
                    (gt, t) <- expToRM texp
