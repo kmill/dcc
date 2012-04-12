@@ -1,5 +1,11 @@
-//> 1307674368000
+//>1
 class Program {
+  int unfactorial(int a, int i) {
+    for(j=1; i) {
+      a = a/j;
+    }
+    return a;
+  }
   int _factorial(int accum, int i) {
     if(i <= 0) {
       return accum;
@@ -11,6 +17,6 @@ class Program {
     return _factorial(1, i);
   }
   void main() {
-    callout("printf", "%d\n", factorial(15));
+    callout("printf", "%d\n", unfactorial(factorial(10), 10));
   }
 }
