@@ -2,6 +2,7 @@
 
 module CodeGenerate where
 
+import CLI
 import Compiler.Hoopl
 import Compiler.Hoopl.Fuel
 import qualified Assembly as A
@@ -405,10 +406,10 @@ lookupLabel (GMany _ g_blocks _) lbl = case mapLookup lbl g_blocks of
   Just x -> x
   Nothing -> error "ERROR"
 
-labelToAsmOut :: Graph A.Asm C C -> (Label, Maybe Label) -> [String]
-labelToAsmOut graph (lbl, mnlabel)
+labelToAsmOut :: Bool -> Graph A.Asm C C -> (Label, Maybe Label) -> [String]
+labelToAsmOut macmode graph (lbl, mnlabel)
     = [show a]
-      ++ (map (ind . show) bs)
+      ++ (map (ind . show') bs)
       ++ mjmp
       ++ (if not (null children) && not fallthrough
           then nextJmp else [])
@@ -419,6 +420,13 @@ labelToAsmOut graph (lbl, mnlabel)
         block = lookupLabel graph lbl
         children = successors block
         ind = ("   " ++)
+        show' :: A.Asm O O -> String
+        show' x = if macmode
+                  then case x of
+                         A.Callout pos args (A.Imm32Label s 0)
+                             -> show $ A.Callout pos args (A.Imm32Label ("_" ++ s) 0)
+                         _ -> show x
+                  else show x
         fallthrough = case mnlabel of
                         Just l -> l == head (reverse children)
                         Nothing -> False
@@ -431,35 +439,36 @@ labelToAsmOut graph (lbl, mnlabel)
 dfsSearch graph lbl visited = foldl recurseDFS visited (reverse $ successors block)
   where block = lookupLabel graph lbl
         recurseDFS v' nv = if nv `elem` v' then v' else dfsSearch graph nv (v' ++ [nv])
-  
-lowIRToAsm m = [ ".data" ]
-               ++ newline
-               ++ ["# fields"]
-               ++ (concatMap showField (lowIRFields m))
-               ++ newline
-               ++ ["# strings"]
-               ++ (concatMap showString (lowIRStrings m))
-               ++ newline
-               ++  [ ".text"
-                   , ".globl main" 
-                   , ".globl _main" 
-                   , "printf: jmp _printf"
-                   , "main:"
-                   , "_main:"
-                   , "call method_main"
-                   , "movq $0, %rax"
-                   , "ret" ]
-               ++ newline
-               ++ (concatMap (showMethod (lowIRGraph m)) (lowIRMethods m))
+
+lowIRToAsm :: LowIRRepr -> CompilerOpts -> [String]
+lowIRToAsm m opts
+    = [ ".data" ]
+      ++ newline
+      ++ ["# fields"]
+      ++ (concatMap showField (lowIRFields m))
+      ++ newline
+      ++ ["# strings"]
+      ++ (concatMap showString (lowIRStrings m))
+      ++ newline
+      ++  [ ".text"
+          , ".globl main" 
+          , ".globl _main" 
+          , "main:"
+          , "_main:"
+          , "call method_main"
+          , "movq $0, %rax"
+          , "ret" ]
+      ++ newline
+      ++ (concatMap (showMethod (macMode opts) (lowIRGraph m)) (lowIRMethods m))
   where 
     newline = [""]
     showField (LowIRField pos name size)
         = [ name ++ ": .skip " ++ (show size) ++ ", 0\t\t# " ++ showPos pos ]
     showString (name, pos, str) = [ name ++ ":\t\t# " ++ showPos pos
                                 , "   .asciz " ++ (show str) ]
-    showMethod graph (I.Method pos name entry postenter)
+    showMethod macmode graph (I.Method pos name entry postenter)
         = [name ++ ":"]
-          ++ concatMap (labelToAsmOut graph) (zip visited nvisited)
+          ++ concatMap (labelToAsmOut macmode graph) (zip visited nvisited)
       where visited = dfsSearch graph entry [entry]
             nvisited = case visited of
                          [] -> []

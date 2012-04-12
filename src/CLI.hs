@@ -26,6 +26,7 @@ data CompilerOpts
                    -- information.
                    , optMode :: OptFlags
                    -- ^ Which optimizations to use.
+                   , macMode :: Bool
                    }
       deriving (Show)
 
@@ -38,6 +39,7 @@ defaultOptions
                    , compatMode = False
                    , helpMode = False
                    , optMode = optNone
+                   , macMode = False
                    }
 
 -- | This type represents the possible actions to do with the input
@@ -49,7 +51,7 @@ data TargetFlag = TargetScan -- ^ Given by @scan@.
                 | TargetLowIR -- ^ Given by @lowir@.
                 | TargetCodeGen -- ^ Given by @codegen@.
                 | TargetDefault -- ^ The default value if no target is given.
-                  deriving (Show)
+                  deriving (Show, Eq)
 
 data OptFlags = OptFlags { touched :: Bool
                          , optCommonSubElim :: Bool
@@ -76,6 +78,7 @@ options =
                                                              "\t  lowir : Outputs a graph of the low IR\n" ++
                                                              "\tcodegen : Outputs the compiled assembly code" )
     , Option ['d']     ["debug"]   (NoArg debug')              "Enables debug mode"
+    , Option ['m']     ["mac"]   (NoArg mac')              "Enables Mac OS X mode"
     , Option ['c']     ["compat"]  (NoArg compat')             "Enables compatibility mode with 6.035 output spec"
     , Option ['h']  ["help"]    (NoArg help')               "Prints this usage information"
     , Option ['O']     ["opt"]     (ReqArg optimize' "OPTIMIZATION") ("Enables optimizations:\n" ++
@@ -95,6 +98,7 @@ options =
           compat' opts = opts { compatMode = True }
           help' opts = opts { helpMode = True }
           optimize' t opts = opts { optMode = optOpt opts t }
+          mac' opts = opts { macMode = True }
 
 targetOpt :: String -> TargetFlag
 targetOpt s

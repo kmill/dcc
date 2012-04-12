@@ -45,7 +45,10 @@ main = do args <- getArgs
           outFile <- return $ case outputFile opts of
             Just fn -> fn
             Nothing -> replaceExtension ifname ".s"
-          case target opts of
+          let tgt = case target opts of
+                      TargetDefault -> TargetCodeGen
+                      x -> x
+          case tgt of
             TargetScan -> case tokens of
               Left err -> do (putStrLn err)
                              exitWith $ ExitFailure 1
@@ -66,16 +69,15 @@ main = do args <- getArgs
               Left err -> do (putStrLn err)
                              exitWith $ ExitFailure 1
               Right lir -> putStrLn $ CodeGenerate.lowIRToGraphViz lir 
-            TargetDefault -> case lowir of
-              Left err -> do (putStrLn err)
+            TargetCodeGen ->
+                case lowir of
+                  Left err -> do
+                             putStrLn err
                              exitWith $ ExitFailure 1
-              Right lir -> do writeFile outFile (unlines $ CodeGenerate.lowIRToAsm lir)
-                              if debugMode opts then putStrLn $ intercalate "\n" (CodeGenerate.lowIRToAsm lir) else return ()                              
-            TargetCodeGen -> case lowir of 
-              Left err -> do (putStrLn err)
-                             exitWith $ ExitFailure 1
-              Right lir -> do writeFile outFile (unlines $ CodeGenerate.lowIRToAsm lir)
-                              if debugMode opts then putStrLn $ intercalate "\n" (CodeGenerate.lowIRToAsm lir) else return ()               
+                  Right lir -> let asm = CodeGenerate.lowIRToAsm lir opts
+                               in do writeFile outFile $ unlines asm
+                                     when (debugMode opts) $ do
+                                       putStrLn $ intercalate "\n" asm
             _ -> error "No such target"
             
 -- | Perfoms the actions for the @scan@ target.
