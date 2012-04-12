@@ -4,6 +4,7 @@ module Dataflow.Tailcall where
 
 import Compiler.Hoopl
 import IR
+import AST(SourcePos)
 import Control.Monad
 import Data.Maybe
 import Debug.Trace
@@ -75,13 +76,19 @@ tailcallElim :: forall m. (UniqueNameMonad m, UniqueMonad m, FuelMonad m) =>
 tailcallElim postentry argvars = mkBRewrite tc
     where
       tc :: MidIRInst e x -> Fact x LastReturn -> m (Maybe (Graph MidIRInst e x))
-      tc (Call pos v name args) (RJust funcname _)
-        | name == funcname  = makeTailCall pos args
-        | otherwise = return Nothing
-      tc (Call pos v name args) (RAnything funcname)
-        | name == funcname  = makeTailCall pos args
-        | otherwise = return Nothing
+      tc Branch{} _ = return Nothing
+      tc CondBranch{} _ = return Nothing
+      tc (Call pos v name args) f
+          = case f of
+	     RJust funcname _
+                | name == funcname  -> makeTailCall pos args
+                | otherwise -> return Nothing
+	     RAnything funcname
+                | name == funcname  -> makeTailCall pos args
+                | otherwise -> return Nothing
+             _ -> return Nothing
       tc _ _ = return Nothing
+      makeTailCall :: SourcePos -> [MidIRExpr] -> m (Maybe (Graph MidIRInst O O))
       makeTailCall pos args
           = do dl <- freshLabel
                tvars' <- replicateM (length argvars) (genUniqueName "tc")
@@ -92,4 +99,5 @@ tailcallElim postentry argvars = mkBRewrite tc
                           <*> mkLast (Branch pos postentry)
                  
                    |*><*| mkFirst (Label pos dl)
+      mkstore :: SourcePos -> (VarName, MidIRExpr) -> Graph MidIRInst O O
       mkstore pos (dv, sv) = mkMiddle $ Store pos dv sv
