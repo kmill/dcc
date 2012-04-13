@@ -248,6 +248,7 @@ mapRR f (IMulRAX p rm) = IMulRAX p (map_RM f rm)
 mapRR f (IMulRM p rm r) = IMulRM p (map_RM f rm) (f r)
 mapRR f (IMulImm p i rm r) = IMulImm p i (map_RM f rm) (f r)
 mapRR f (IDiv p rm) = IDiv p (map_RM f rm)
+mapRR f (Cqo p) = Cqo p
 mapRR f (Shl p i rm) = Shl p i (map_RM f rm)
 mapRR f (Shr p i rm) = Shr p i (map_RM f rm)
 mapRR f (Sar p i rm) = Sar p i (map_RM f rm)
@@ -291,6 +292,7 @@ getAliveDead expr
         IMulRM _ rm r -> getRSrc rm <+> getRSrc r <+> getRDst r
         IMulImm _ i rm r -> getRSrc rm <+> getRDst r
         IDiv _ rm -> getRSrc rm <+> ([MReg RDX, MReg RAX], [MReg RAX, MReg RDX])
+        Cqo _ -> ([MReg RAX], [MReg RDX])
         Shl _ _ rm -> getRSrc rm <+> getRDst rm
         Shr _ _ rm -> getRSrc rm <+> getRDst rm
         Sar _ _ rm -> getRSrc rm <+> getRDst rm

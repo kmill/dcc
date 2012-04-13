@@ -48,7 +48,7 @@ simpI e = case e of
                 do guard $ denom /= 0
                    return $ Store pos v (Lit pos' (f num denom))
                 where f = case op of
-                            DivQuo -> div
+                            DivQuo -> quot
                             DivRem -> rem
             DivStore pos v DivQuo num (Lit _ 1) ->
                 return $ Store pos v num
@@ -250,7 +250,7 @@ binOp :: BinOp -> Int64 -> Int64 -> Int64
 binOp OpAdd = (+)
 binOp OpSub = (-)
 binOp OpMul = (*)
---binOp OpDiv = div
+--binOp OpDiv = quot
 --binOp OpMod = rem
 binOp CmpLT = \x y -> boolToInt $ x < y
 binOp CmpGT = \x y -> boolToInt $ x > y 

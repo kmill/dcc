@@ -281,6 +281,7 @@ data Asm e x where
   IMulImm :: SourcePos -> Imm32 -> OperRM -> Reg -> Asm O O
 
   IDiv :: SourcePos -> OperRM -> Asm O O
+  Cqo :: SourcePos -> Asm O O
 
   -- shift left/right
   Shl :: SourcePos -> Imm8 -> OperRM -> Asm O O
@@ -343,9 +344,9 @@ instance Show (Asm e x) where
   show (ExitFail pos)
       = "# exited by failure. " ++ showPos pos
   show (Realign pos i)
-       = "# realign"
+       = "# realign goes here for --mac"
   show (Unrealign pos)
-      = "# unrealign"
+      = "# unrealign goes here for --mac"
 
   show (Lea pos mem reg) = showBinOp "leaq" pos mem reg
 
@@ -372,6 +373,7 @@ instance Show (Asm e x) where
                              (show a) (show b) (show c) (showPos pos)
 
   show (IDiv pos oper) = showUnOp "idivq" pos oper
+  show (Cqo pos) = showNullOp "cqo" pos
 
   show (Shl pos a b) = showBinOp "shlq" pos a b
   show (Shr pos a b) = showBinOp "shrq" pos a b

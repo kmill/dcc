@@ -1,0 +1,58 @@
+//<2
+//<5
+//>x=2, y=5
+//>done
+class Program {
+  void assert(boolean t) {
+    if(!t) {
+      callout("printf", "failed\n");
+    }
+  }
+  void main() {
+    int x, y, nx, ny;
+    x = callout("get_int"); // 2
+    y = callout("get_int"); // 5
+
+    callout("printf", "x=%d, y=%d\n", x, y);
+
+    assert(x/y == 0);
+    assert(x/y == 2/5);
+    assert(y/x == 2);
+    assert(y/x == 5/2);
+
+    assert(x%y == 2);
+    assert(x%y == 2%5);
+    assert(y%x == 1);
+    assert(y%x == 5%2);
+
+    assert((-x)/y == 0);
+    assert((-x)/y == (-2)/5);
+    assert(x/(-y) == 0);
+    assert(x/(-y) == 2/(-5));
+    assert((-x)/(-y) == 0);
+    assert((-x)/(-y) == (-2)/(-5));
+
+    assert((-y)/x == -2);
+    assert((-y)/x == (-5)/2);
+    assert(y/(-x) == -2);
+    assert(y/(-x) == 5/(-2));
+    assert((-y)/(-x) == 2);
+    assert((-y)/(-x) == (-5)/(-2));
+
+    assert((-x)%y == -2);
+    assert((-x)%y == (-2)%5);
+    assert(x%(-y) == 2);
+    assert(x%(-y) == 2%(-5));
+    assert((-x)%(-y) == -2);
+    assert((-x)%(-y) == (-2)%(-5));
+
+    assert((-y)%x == -1);
+    assert((-y)%x == (-5)%2);
+    assert(y%(-x) == 1);
+    assert(y%(-x) == 5%(-2));
+    assert((-y)%(-x) == -1);
+    assert((-y)%(-x) == (-5)%(-2));
+
+    callout("printf", "done\n");
+  }
+}

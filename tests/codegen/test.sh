@@ -1,5 +1,7 @@
 #!/bin/sh
 
+optstring="--opt=all"
+
 base=`dirname $0`
 
 if uname -a | grep "Darwin" > /dev/null; then
@@ -27,7 +29,7 @@ else
 fi
 
 runcompiler() {
-    $base/../../dcc $dccopt --target codegen --opt=all -o $2 $1
+    $base/../../dcc $dccopt --target codegen $optstring -o $2 $1
 }
 
 fail=0

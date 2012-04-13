@@ -109,7 +109,7 @@ instToAsm (I.DivStore pos d op expa expb)
          (gb, b) <- expToRM expb
          return $ ga <*> gb
                   <*> mkMiddles [ A.MovIRMtoR pos a (A.MReg A.RAX)
-                                , A.mov pos (A.Imm32 0) (A.MReg A.RDX)
+                                , A.Cqo pos -- sign extend %rax into %rdx
                                 , A.IDiv pos b
                                 , A.mov pos (A.MReg src) (A.SReg $ show d)]
     where src = case op of
@@ -260,10 +260,10 @@ expToR e = mcut $ msum rules
                             <*> mkMiddle (A.mov pos m dr)
                           , dr )
               , do I.UnOp pos I.OpNeg exp <- withNode e
-                   (g, o) <- expToRM exp
+                   (g, o) <- expToIRM exp
                    dr <- genTmpReg
                    return ( g
-                            <*> mkMiddle (A.MovIRMtoR pos (rmToIRM o) dr)
+                            <*> mkMiddle (A.MovIRMtoR pos o dr)
                             <*> mkMiddle (A.Neg pos (A.RM_R dr))
                           , dr )
               , do I.UnOp pos I.OpNot exp <- withNode e
@@ -487,7 +487,7 @@ lowIRToAsm m opts
           , "call method_main"
           , "movq $0, %rax"
           , "ret" ]
-      ++ newline
+      ++ ["# methods"]
       ++ (concatMap (showMethod (macMode opts) (lowIRGraph m)) (lowIRMethods m))
   where 
     newline = [""]
@@ -496,7 +496,7 @@ lowIRToAsm m opts
     showString (name, pos, str) = [ name ++ ":\t\t# " ++ showPos pos
                                 , "   .asciz " ++ (show str) ]
     showMethod macmode graph (I.Method pos name entry postenter)
-        = [name ++ ":"]
+        = ["", name ++ ":"]
           ++ concatMap (labelToAsmOut macmode graph) (zip visited nvisited)
       where visited = dfsSearch graph entry [entry]
             nvisited = case visited of
