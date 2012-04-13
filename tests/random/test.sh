@@ -1,17 +1,25 @@
 #!/bin/sh
 
+if uname -a | grep "Darwin" > /dev/null; then
+    archstring="-arch x86_64"
+    dccopt="--mac"
+else
+    archstring=""
+    dccopt=""
+    if ! gcc -v 2>&1 |grep -q '^Target: x86_64-linux-gnu'; then
+	echo "Refusing to run cross-compilation on non-64-bit architechure."
+	exit 0;
+    fi
+fi
+
 runcompiler() {
-    ../../dcc --target codegen --opt=all -o $2 $1
+    ../../dcc $dccopt --target codegen --opt=all -o $2 $1
 }
 
 fail=0
 
-if ! gcc -v 2>&1 |grep -q '^Target: x86_64-linux-gnu'; then
-  echo "Refusing to run cross-compilation on non-64-bit architechure."
-  exit 0;
-fi
-
 base=`dirname $0`
+#lib=-L `dirname $0`/lib -l6035
 
 for file in `find $base -iname '*.dcf'`; do
   diffout=""
@@ -20,10 +28,12 @@ for file in `find $base -iname '*.dcf'`; do
   msg=""
   if runcompiler $file $asm; then
     binary=`tempfile`
-    if gcc -o $binary -L `dirname $0`/lib -l6035 $asm; then
+    if gcc $archstring -o $binary $lib $asm; then
+      input=`tempfile`
+      grep '//<' $file | sed -E 's@^//< ?@@' > $input
       output=`tempfile`
      
-      if $binary > $output 2>&1; then
+      if $binary < $input > $output 2>&1; then
           ret=""
       else
 	  ret="fail"
@@ -62,7 +72,7 @@ for file in `find $base -iname '*.dcf'`; do
     fi
     echo $msg
   fi
-  rm -f $output $binary $asm
+  rm -f $output $input $binary $asm
   if [ ! -z "$diffout" ]; then
     rm -f $diffout $desired;
   fi

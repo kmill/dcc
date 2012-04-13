@@ -220,10 +220,11 @@ instance Show Flag where
 
 -- look at cmpxchg?
 
-data ALUOp = Add | Sub | Xor
+data ALUOp = Add | Sub | And | Xor
 instance Show ALUOp where
     show Add = "add"
     show Sub = "sub"
+    show And = "and"
     show Xor = "xor"
 
 data Asm e x where
@@ -252,6 +253,10 @@ data Asm e x where
   -- | This doesn't actually do anything but close off a block. It is
   -- expected that the code has called "exit" before reaching this.
   ExitFail :: SourcePos -> Asm O C
+  
+  -- | For Mac OS X compatibility mode
+  Realign :: SourcePos -> Int -> Asm O O
+  Unrealign :: SourcePos -> Asm O O
 
   Lea :: SourcePos -> MemAddr -> Reg -> Asm O O
 
@@ -337,6 +342,10 @@ instance Show (Asm e x) where
         ++ (if not returns then " (void method)" else "")
   show (ExitFail pos)
       = "# exited by failure. " ++ showPos pos
+  show (Realign pos i)
+       = "# realign"
+  show (Unrealign pos)
+      = "# unrealign"
 
   show (Lea pos mem reg) = showBinOp "leaq" pos mem reg
 

@@ -133,9 +133,11 @@ instToAsm (I.Callout pos d name args)
     = do (gs, vars) <- unzip `fmap` mapM expToIRM args
          return $ catGraphs gs
                     <*> genPushRegs pos A.callerSaved
+                    <*> mkMiddle (A.Realign pos (min 0 ((length args) - 6)))
                     <*> genSetArgs pos vars
                     <*> mkMiddle (A.mov pos (A.Imm32 0) (A.MReg A.RAX))
                     <*> mkMiddle (A.Callout pos (length args) (A.Imm32Label name 0))
+                    <*> mkMiddle (A.Unrealign pos)
                     <*> genResetSP pos args
                     <*> genPopRegs pos A.callerSaved
                     <*> mkMiddle (A.mov pos (A.MReg A.RAX) (A.SReg $ show d))
@@ -420,7 +422,7 @@ lookupLabel (GMany _ g_blocks _) lbl = case mapLookup lbl g_blocks of
 labelToAsmOut :: Bool -> Graph A.Asm C C -> (Label, Maybe Label) -> [String]
 labelToAsmOut macmode graph (lbl, mnlabel)
     = [show a]
-      ++ (map (ind . show') bs)
+      ++ (map (show') bs)
       ++ mjmp
       ++ (if not (null children) && not fallthrough
           then nextJmp else [])
@@ -436,8 +438,23 @@ labelToAsmOut macmode graph (lbl, mnlabel)
                   then case x of
                          A.Callout pos args (A.Imm32Label s 0)
                              -> show $ A.Callout pos args (A.Imm32Label ("_" ++ s) 0)
-                         _ -> show x
-                  else show x
+                         A.Realign pos nstackargs
+                             -> let code=[ A.mov pos (A.MReg A.RSP) (A.MReg A.R12)
+                                         , A.ALU_IRMtoR pos A.Sub 
+                                                        (A.IRM_I $ A.Imm32 16)
+                                                        (A.MReg A.RSP)
+                                         , A.ALU_IRMtoR pos A.And
+                                                        (A.IRM_I $ A.Imm32 (-10))
+                                                        (A.MReg A.RSP)
+                                         , A.ALU_IRMtoR pos A.Sub
+                                                        (A.IRM_I $ A.Imm32 $ fromIntegral corr)
+                                                        (A.MReg A.RSP) ]
+                                    corr=(nstackargs `mod` 2) * 8
+                                in unlines $ map (ind . show) code
+                         A.Unrealign pos
+                             -> show $ A.mov pos (A.MReg A.R12) (A.MReg A.RSP)
+                         _ -> ind $ show x
+                  else ind $ show x
         fallthrough = case mnlabel of
                         Just l -> l == head (reverse children)
                         Nothing -> False

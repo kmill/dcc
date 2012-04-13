@@ -57,6 +57,27 @@ varHasNZP = mkFTransfer ft
       ft (PostEnter _ _) f = f
       ft (Enter _ _ args) f = Map.fromList (map (\a -> (a, Top)) args)
       ft (Store _ x expr) f = Map.insert x (nzpEval expr f) f
+      ft (DivStore _ x op num den) f
+          = let nzp1 = nzpEval num f
+                nzp2 = nzpEval den f
+                ev = case op of
+                       DivQuo -> case combineNZP nzp1 nzp2 of
+                                   Just (Neg, Neg) -> PElem Pos
+                                   Just (Pos, Pos) -> PElem Pos
+                                   Just (Neg, Pos) -> PElem Neg
+                                   Just (Pos, Neg) -> PElem Neg
+                                   Just (_, Zero) -> Top
+                                   Just (Zero, _) -> PElem Zero
+                                   _ -> Top
+                       DivRem -> case combineNZP nzp1 nzp2 of
+                                   Just (Neg, Neg) -> PElem Neg
+                                   Just (Pos, Pos) -> PElem Pos
+                                   Just (Neg, Pos) -> PElem Neg
+                                   Just (Pos, Neg) -> PElem Pos
+                                   Just (_, Zero) -> Top
+                                   Just (Zero, _) -> PElem Zero
+                                   _ -> Top
+            in Map.insert x ev f
       ft (IndStore _ _ _) f = f
       ft (Call _ x _ _) f = Map.insert x Top f
       ft (Callout _ x _ _) f = Map.insert x Top f 
@@ -74,7 +95,7 @@ nzpEval :: MidIRExpr -> NZPFact -> NZP
 nzpEval (Lit _ i) f
     | i < 0  = PElem Neg
     | i == 0 = PElem Zero
-    | i > 0  = PElem Pos
+    | otherwise  = PElem Pos
 nzpEval (Var _ v) f
     = case Map.lookup v f of
         Nothing -> error "NZP: expects all variables are defined before use! :-("
@@ -119,24 +140,6 @@ nzpEval (BinOp pos op exp1 exp2) f
                       Just (Pos, Neg) -> PElem Neg
                       Just (Zero, _) -> PElem Zero
                       Just (_, Zero) -> PElem Zero
-                      _ -> Top
-           OpDiv -> case combineNZP nzp1 nzp2 of
-                      Just (Neg, Neg) -> PElem Pos
-                      Just (Pos, Pos) -> PElem Pos
-                      Just (Neg, Pos) -> PElem Neg
-                      Just (Pos, Neg) -> PElem Neg
-                      Just (_, Zero) ->
-                          error $ "Division by zero detected at " ++ showPos pos
-                      Just (Zero, _) -> PElem Zero
-                      _ -> Top
-           OpMod -> case combineNZP nzp1 nzp2 of
-                      Just (Neg, Neg) -> PElem Neg
-                      Just (Pos, Pos) -> PElem Pos
-                      Just (Neg, Pos) -> PElem Neg
-                      Just (Pos, Neg) -> PElem Pos
-                      Just (_, Zero) ->
-                          error $ "Modulo by zero detected at " ++ showPos pos
-                      Just (Zero, _) -> PElem Zero
                       _ -> Top
            CmpLT -> case combineNZP nzp1 nzp2 of
                       Just (Neg, Zero) -> PElem Pos
@@ -206,6 +209,7 @@ nzpSimplify = mkFRewrite simp
       simp Enter{} _ = return Nothing
       simp PostEnter{} _ = return Nothing
       simp Store{} _ = return Nothing
+      simp DivStore{} _ = return Nothing
       simp IndStore{} _ = return Nothing
       simp Call{} _ = return Nothing
       simp Callout{} _ = return Nothing

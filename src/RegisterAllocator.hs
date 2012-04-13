@@ -231,6 +231,8 @@ mapRR f a@(Callout{}) = a
 mapRR f a@(Ret{}) = a
 mapRR f a@(RetPop{}) = a
 mapRR f a@(ExitFail{}) = a
+mapRR f a@(Realign{}) = a
+mapRR f a@(Unrealign{}) = a
 mapRR f (Lea p m r) = Lea p (map_M f m) (f r)
 mapRR f (Push p irm) = Push p (map_IRM f irm)
 mapRR f (Pop p rm) = Pop p (map_RM f rm)
@@ -272,6 +274,8 @@ getAliveDead expr
         Ret p rets -> (if rets then [MReg RAX] else [], [])
         RetPop p rets num -> (if rets then [MReg RAX] else [], [])
         ExitFail{} -> emptyAD
+        Realign{} -> emptyAD
+        Unrealign{} -> emptyAD
         Lea p m r -> getRSrc m <+> getRDst r
         Push p irm -> getRSrc irm
         Pop p rm -> getRDst rm
