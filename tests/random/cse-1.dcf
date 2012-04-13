@@ -1,0 +1,16 @@
+// Tests to make sure CSE doesn't think the 'i+1' can be reused.
+//> 6
+class Program {
+  int get_int(int i) {
+    return i;
+  }
+  void main() {
+    int i;
+    i = get_int(5);
+    i = i + 1;
+    while(i<5) {
+      i = i + 1;
+    }
+    callout("printf", "%d\n", i);
+  }
+}

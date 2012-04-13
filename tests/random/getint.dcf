@@ -1,0 +1,9 @@
+//<5
+//>5
+class Program {
+  void main() {
+    int i;
+    i = callout("get_int_035");
+    callout("printf", "%d\n", i);
+  }
+}

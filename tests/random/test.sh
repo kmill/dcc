@@ -1,11 +1,15 @@
 #!/bin/sh
 
+base=`dirname $0`
+
 if uname -a | grep "Darwin" > /dev/null; then
     archstring="-arch x86_64"
     dccopt="--mac"
+    lib="-L. -l6035"
 else
     archstring=""
     dccopt=""
+    lib="-L$base/lib -l6035"
     if ! gcc -v 2>&1 |grep -q '^Target: x86_64-linux-gnu'; then
 	echo "Refusing to run cross-compilation on non-64-bit architechure."
 	exit 0;
@@ -17,9 +21,6 @@ runcompiler() {
 }
 
 fail=0
-
-base=`dirname $0`
-#lib=-L `dirname $0`/lib -l6035
 
 for file in `find $base -iname '*.dcf'`; do
   diffout=""
@@ -78,4 +79,7 @@ for file in `find $base -iname '*.dcf'`; do
   fi
 done
 
+if [ "$fail" -ne "0" ]; then
+    echo "*** A test failed ***"
+fi
 exit $fail;

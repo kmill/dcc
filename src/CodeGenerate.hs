@@ -450,7 +450,7 @@ labelToAsmOut macmode graph (lbl, mnlabel)
                                                         (A.IRM_I $ A.Imm32 $ fromIntegral corr)
                                                         (A.MReg A.RSP) ]
                                     corr=(nstackargs `mod` 2) * 8
-                                in unlines $ map (ind . show) code
+                                in intercalate "\n" $ map (ind . show) code
                          A.Unrealign pos
                              -> show $ A.mov pos (A.MReg A.R12) (A.MReg A.RSP)
                          _ -> ind $ show x
