@@ -1,9 +1,9 @@
 //<5
-//>5
+//>Enter Integer Value: 5
 class Program {
   void main() {
     int i;
-    i = callout("get_int");
+    i = callout("get_int_035");
     callout("printf", "%d\n", i);
   }
 }

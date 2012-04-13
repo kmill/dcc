@@ -11,7 +11,7 @@ if uname -a | grep "Darwin" > /dev/null; then
 else
     archstring=""
     dccopt=""
-    lib="-L$base/lib -l6035"
+    lib="-L$base/lib -l6035 -l6035_2"
     if ! gcc -v 2>&1 |grep -q '^Target: x86_64-linux-gnu'; then
 	echo "Refusing to run cross-compilation on non-64-bit architechure."
 	exit 0;
