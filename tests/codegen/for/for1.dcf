@@ -1,0 +1,22 @@
+//>ok
+class Program {
+  int a[100];
+  void main() {
+    int accum;
+    for(i=0; 100) {
+      a[i]=0;
+    }
+    for(i=0; 100) {
+      a[i] += i+1;
+    }
+    accum=0;
+    for(i=0; 100) {
+      accum += a[99-i];
+    }
+    if(accum == 100*101/2) {
+      callout("printf", "ok\n");
+    } else {
+      callout("printf", ":-(");
+    }
+  }
+}

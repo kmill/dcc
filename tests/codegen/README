@@ -1,0 +1,28 @@
+######################
+# To make test files #
+######################
+
+Input should begin like
+//< input to program
+
+Expected output should begin like
+//> output from program
+
+If the program is expected to raise an exception, then put
+//!
+without any "//>" lines
+
+##########################
+# To run the test script #
+##########################
+
+We have a "get_int" function in addition to the "get_int_035" which
+doesn't print out "Enter Integer Value: ".  Enter the lib directory
+and run make to build this library.
+
+To make the system work on a mac, run "make" from inside the "maclib"
+directory before running "test.sh".  This creates an object file
+containing these two "get_int*" functions.
+
+Then, just run ./test.sh, which will recursively find all "*.dcf"
+files in the directory.
