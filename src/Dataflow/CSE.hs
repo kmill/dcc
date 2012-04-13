@@ -38,6 +38,7 @@ exprAvailable nonTemps = mkFTransfer ft
       ft (PostEnter _ _) f = f
       ft (Enter _ _ args) f = foldl (flip invalidateExprsWith) f args
       ft (Store _ x expr) f = handleAssign x expr f
+      ft DivStore{} f = f -- assuming both expressions are variables!
       ft (IndStore _ _ _) f = destroyLoads f
       ft (Call _ x _ _) f = invalidateExprsWith x f
       ft (Callout _ x _ _) f = invalidateExprsWith x f 

@@ -10,13 +10,13 @@ import Data.Maybe
 import Debug.Trace
 
 tailcallPass :: (CheckpointMonad m, FuelMonad m, UniqueMonad m, UniqueNameMonad m) =>
-                Label -> [VarName]
+                String -> Label -> [VarName]
                 -> BwdPass m MidIRInst LastReturn
-tailcallPass postentry argvars
+tailcallPass fname postentry argvars
     = BwdPass
       { bp_lattice = lastReturnLattice
       , bp_transfer = lastReturnTransfer
-      , bp_rewrite = tailcallElim postentry argvars }
+      , bp_rewrite = tailcallElim fname postentry argvars }
 
 data LastReturn = RUnknown
                 | RJust String VarName
@@ -54,10 +54,11 @@ lastReturnTransfer = mkBTransfer f
           f (Store _ v _) k = case k of
                                 RUnknown -> RUnknown
                                 RJust from v' -> if v == v'
-                                            then RMulti
-                                            else RJust from v'
+                                                 then RMulti
+                                                 else RJust from v'
                                 RAnything from -> RAnything from
                                 RMulti -> RMulti
+          f (DivStore _ v _ _ _) k = RMulti
           f IndStore{} k = RMulti
           f Call{} k = RMulti
           f Callout{} k = RMulti
@@ -71,9 +72,9 @@ lastReturnTransfer = mkBTransfer f
           f (Fail _) k = RMulti
 
 tailcallElim :: forall m. (UniqueNameMonad m, UniqueMonad m, FuelMonad m) =>
-                Label -> [VarName]
+                String -> Label -> [VarName]
              -> BwdRewrite m MidIRInst LastReturn
-tailcallElim postentry argvars = mkBRewrite tc
+tailcallElim fname postentry argvars = mkBRewrite tc
     where
       tc :: MidIRInst e x -> Fact x LastReturn -> m (Maybe (Graph MidIRInst e x))
       tc Branch{} _ = return Nothing
@@ -81,10 +82,10 @@ tailcallElim postentry argvars = mkBRewrite tc
       tc (Call pos v name args) f
           = case f of
 	     RJust funcname _
-                | name == funcname  -> makeTailCall pos args
+                | name == fname && name == funcname  -> makeTailCall pos args
                 | otherwise -> return Nothing
 	     RAnything funcname
-                | name == funcname  -> makeTailCall pos args
+                | name == fname && name == funcname  -> makeTailCall pos args
                 | otherwise -> return Nothing
              _ -> return Nothing
       tc _ _ = return Nothing

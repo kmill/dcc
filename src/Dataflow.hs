@@ -205,7 +205,7 @@ performTailcallPass midir
     where forMethod :: Method -> Graph MidIRInst C C -> RM (Graph MidIRInst C C)
           forMethod (Method pos name entry postentry) graph
               = do (graph', _, _) <- analyzeAndRewriteBwd
-                                     (tailcallPass postentry argvars)
+                                     (tailcallPass name postentry argvars)
                                      (JustC mlabels)
                                      graph
                                      mapEmpty
@@ -263,6 +263,7 @@ getVariablesPass = BwdPass
             used PostEnter{} f = f
             used (Enter _ _ args) f = f `S.union` (S.fromList args)
             used (Store _ x _) f = S.insert x f
+            used (DivStore _ x _ _ _) f = S.insert x f
             used IndStore{} f = f
             used (Call _ x _ _) f = S.insert x f
             used (Callout _ x _ _) f = S.insert x f

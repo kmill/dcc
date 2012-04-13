@@ -169,8 +169,8 @@ statementToMidIR fname env c b (HForSt _ pos tok exprlow exprhigh st)
                    <*> ghighex <*> (mkMiddle $ Store pos high highex)
                    <*> (mkLast $ Branch pos checkl))
              |*><*| (mkFirst (Label pos checkl)
-                     <*> (mkLast $ CondBranch pos (BinOp pos CmpLT (Var pos i) (Var pos high))
-                                      loopl endl))
+                     <*> (mkLast $ CondBranch pos (BinOp pos CmpGTE (Var pos i) (Var pos high))
+                                      endl loopl))
              |*><*| (mkFirst (Label pos loopl) <*> loop
                      <*> (mkLast $ Branch pos incrl))
              |*><*| (mkFirst (Label pos incrl)
@@ -273,8 +273,8 @@ handleBinaryOp env pos opstr expr1 expr2
         "+" -> normalExpr OpAdd
         "-" -> normalExpr OpSub
         "*" -> normalExpr OpMul
-        "/" -> normalExpr OpDiv
-        "%" -> normalExpr OpMod
+        "/" -> divExpr DivQuo
+        "%" -> divExpr DivRem
         "==" -> normalExpr CmpEQ
         "!=" -> normalExpr CmpNEQ
         "<" -> normalExpr CmpLT
@@ -311,6 +311,12 @@ handleBinaryOp env pos opstr expr1 expr2
             normalExpr op = do (gex1, ex1) <- expressionToMidIR env expr1
                                (gex2, ex2) <- expressionToMidIR env expr2
                                return $ (gex1 <*> gex2, BinOp pos op ex1 ex2)
+            divExpr op = do (gex1, ex1) <- expressionToMidIR env expr1
+                            (gex2, ex2) <- expressionToMidIR env expr2
+                            t <- genTmpVar
+                            return $ ( gex1 <*> gex2
+                                       <*> mkMiddle (DivStore pos t op ex1 ex2)
+                                     , Var pos t )
 
 expressionToMidIR :: IREnv
                   -> HExpr a

@@ -3,6 +3,6 @@ class Program {
   int i;
   void main() {
     i = 5;
-    callout("printf", "hello %s\n", i);
+    callout("printf", "hello %d\n", i);
   }
 }

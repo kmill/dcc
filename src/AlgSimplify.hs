@@ -44,6 +44,21 @@ simpI e = case e of
             Store pos v exp ->
                 do exp' <- simpE exp
                    return $ Store pos v exp'
+            DivStore pos v op (Lit pos' num) (Lit _ denom) ->
+                do guard $ denom /= 0
+                   return $ Store pos v (Lit pos' (f num denom))
+                where f = case op of
+                            DivQuo -> div
+                            DivRem -> rem
+            DivStore pos v DivQuo num (Lit _ 1) ->
+                return $ Store pos v num
+            DivStore pos v DivQuo num (Lit pos' (-1)) ->
+                do num' <- simpES $ UnOp pos' OpNeg num
+                   return $ Store pos v num'
+            DivStore pos v op exp1 exp2 ->
+                do [exp1', exp2'] <- simpEMany [exp1, exp2]
+                   let inst' = DivStore pos v op exp1' exp2'
+                   simpI inst' `mplus` return inst'
             IndStore pos dexp sexp ->
                 do [dexp', sexp'] <- simpEMany [dexp, sexp]
                    return $ IndStore pos dexp' sexp'
@@ -158,8 +173,8 @@ simpBinOp pos op sex1 sex2 = traceM ("bin", op, sex1, sex2) $ msum rules
             -- constants. unless there is a divide by zero.
             do Lit _ i1 <- withExpr sex1
                Lit _ i2 <- withExpr sex2
-               guard $ (op /= OpDiv) || (i2 /= 0)
-               guard $ (op /= OpMod) || (i2 /= 0)
+--               guard $ (op /= OpDiv) || (i2 /= 0)
+--               guard $ (op /= OpMod) || (i2 /= 0)
                return $ Lit pos (binOp op i1 i2)
           -- The following rule enforces the order that literals occur
           -- at the beginning of a sequence of
@@ -201,17 +216,17 @@ simpBinOp pos op sex1 sex2 = traceM ("bin", op, sex1, sex2) $ msum rules
                return $ sex2
           -- If we are dividing by one, we can safely not do the
           -- divide
-          , do guard $ op == OpDiv
-               Lit _ 1 <- withExpr sex2
-               return $ sex1
+--          , do guard $ op == OpDiv
+--               Lit _ 1 <- withExpr sex2
+--               return $ sex1
           -- If we are multiplying by zero a division, we may move the
           -- multiplication into the numerator.
-          , do guard $ op == OpMul
-               Lit _ 0 <- withExpr sex1
-               BinOp binpos OpDiv num denom <- withExpr sex2
-               simpES $ BinOp binpos OpDiv
-                          (BinOp pos OpMul sex1 num)
-                          denom
+--          , do guard $ op == OpMul
+--               Lit _ 0 <- withExpr sex1
+--               BinOp binpos OpDiv num denom <- withExpr sex2
+--               simpES $ BinOp binpos OpDiv
+--                          (BinOp pos OpMul sex1 num)
+--                          denom
           -- We may distribute multiplication by zero over addition or
           -- subtraction
           , do guard $ op == OpMul
@@ -235,8 +250,8 @@ binOp :: BinOp -> Int64 -> Int64 -> Int64
 binOp OpAdd = (+)
 binOp OpSub = (-)
 binOp OpMul = (*)
-binOp OpDiv = div
-binOp OpMod = rem
+--binOp OpDiv = div
+--binOp OpMod = rem
 binOp CmpLT = \x y -> boolToInt $ x < y
 binOp CmpGT = \x y -> boolToInt $ x > y 
 binOp CmpLTE = \x y -> boolToInt $ x <= y 

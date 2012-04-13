@@ -28,6 +28,7 @@ nullTransfer = mkFTransfer ft
       ft PostEnter{} f = f
       ft Enter{} f = f
       ft Store{} f = f
+      ft DivStore{} f = f
       ft IndStore{} f = f
       ft Call{} f = f
       ft Callout{} f = f
@@ -61,6 +62,10 @@ flattenRewrite = deepFwdRw fl
       fl (PostEnter _ _) f = return Nothing
       fl (Enter _ _ _) f = return Nothing
       fl (Store pos v e) f = flattenExpr e (\e' -> Store pos v e')
+      fl (DivStore pos v op e1 e2) f
+          | nonTrivial e1 = flattenExpr e1 (\e1' -> DivStore pos v op e1' e2)
+          | nonTrivial e2 = flattenExpr e2 (\e2' -> DivStore pos v op e1 e2')
+          | otherwise = return Nothing
       fl (IndStore pos dest src) f
           | nonTrivial dest = withTmp pos dest
                               (\dest' -> IndStore pos dest' src)

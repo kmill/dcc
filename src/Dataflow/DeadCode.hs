@@ -29,6 +29,7 @@ liveness = mkBTransfer live
           live (PostEnter _ _) f = f 
           live n@(Enter _ _ args) f = addUses (f S.\\ (S.fromList args)) n
           live n@(Store _ x _) f =  addUses (S.delete x f) n 
+          live n@(DivStore _ x _ _ _) f =  addUses (S.delete x f) n 
           live n@(IndStore _ _ _) f = addUses f n 
           live n@(Call _ x _ _) f = addUses (S.delete x f) n
           live n@(Callout _ x _ _) f = addUses (S.delete x f) n 
@@ -51,5 +52,7 @@ deadAsstElim = mkBRewrite d
       d :: MidIRInst e x -> Fact x Live -> m (Maybe (Graph MidIRInst e x))
       d n@(Store _ x _) live 
           | not (x `S.member` live) = return $ Just emptyGraph
+      d n@(DivStore _ x _ _ (Lit _ i)) live 
+          | i /= 0 && not (x `S.member` live) = return $ Just emptyGraph
       d _ _  = return Nothing
 
