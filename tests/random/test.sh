@@ -31,7 +31,7 @@ for file in `find $base -iname '*.dcf'`; do
   msg=""
   if runcompiler $file $asm; then
     binary=`tempfile`
-    if gcc $archstring -o $binary $lib $asm; then
+    if gcc $archstring -o $binary $asm $lib; then
       input=`tempfile`
       grep '//<' $file | sed -E 's@^//< ?@@' > $input
       output=`tempfile`
