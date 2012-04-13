@@ -1,5 +1,5 @@
 //<5
-//>5
+//>Enter Integer Value: 5
 class Program {
   void main() {
     int i;
