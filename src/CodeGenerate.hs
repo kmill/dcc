@@ -133,7 +133,7 @@ instToAsm (I.Callout pos d name args)
     = do (gs, vars) <- unzip `fmap` mapM expToIRM args
          return $ catGraphs gs
                     <*> genPushRegs pos A.callerSaved
-                    <*> mkMiddle (A.Realign pos (min 0 ((length args) - 6)))
+                    <*> mkMiddle (A.Realign pos (max 0 ((length args) - 6)))
                     <*> genSetArgs pos vars
                     <*> mkMiddle (A.mov pos (A.Imm32 0) (A.MReg A.RAX))
                     <*> mkMiddle (A.Callout pos (length args) (A.Imm32Label name 0))
@@ -158,7 +158,8 @@ instToAsm (I.Return pos fname (Just exp))
                     <*> mkLast (A.Ret pos True)
 instToAsm (I.Fail pos)
     = return $ mkMiddles [ A.mov pos (A.Imm32 1) (A.MReg A.RDI)
-                         , A.mov pos (A.Imm32 1) (A.MReg A.RAX)
+                         , A.mov pos (A.Imm32 0) (A.MReg A.RAX)
+                         , A.Realign pos 0
                          , A.Callout pos 1 (A.Imm32Label "exit" 0) ]
                <*> mkLast (A.ExitFail pos)
 

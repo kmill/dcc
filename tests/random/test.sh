@@ -3,9 +3,11 @@
 base=`dirname $0`
 
 if uname -a | grep "Darwin" > /dev/null; then
+    echo "(compiling for Mac OS X)"
     archstring="-arch x86_64"
     dccopt="--mac"
-    lib="-L. -l6035"
+    lib="$base/maclib/lib6035.o"
+    LD_LIBRARY_PATH=$base/maclib:$LD_LIBRARY_PATH
 else
     archstring=""
     dccopt=""
