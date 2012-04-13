@@ -81,5 +81,7 @@ done
 
 if [ "$fail" -ne "0" ]; then
     echo "*** A test failed ***"
+else
+    echo "(success)"
 fi
 exit $fail;
