@@ -1,3 +1,6 @@
+//> [Hello World]
+//> should be here
+//> should be here
 class Program
 {
     boolean not2(boolean a)

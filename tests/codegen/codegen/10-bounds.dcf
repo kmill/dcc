@@ -1,4 +1,4 @@
-// This should produce a runtime error
+//!
 class Program {
   int a[10];
   

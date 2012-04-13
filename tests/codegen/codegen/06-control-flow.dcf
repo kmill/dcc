@@ -1,3 +1,4 @@
+//> control flow OK if no previous output
 class Program
 {
     void main()

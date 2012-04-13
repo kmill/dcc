@@ -1,3 +1,10 @@
+//> should see 6 corrects and no incorrects
+//> correct
+//> correct
+//> correct
+//> correct
+//> correct
+//> correct
 class Program
 {
 
