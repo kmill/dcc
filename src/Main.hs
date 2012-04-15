@@ -10,29 +10,23 @@ import Data.Maybe (fromMaybe)
 import Control.Monad
 import Scanner
 import Parser
-import ScannerResultPrinter
+import Util.ScannerResultPrinter
 import Text.ParserCombinators.Parsec.Pos
 import Text.ParserCombinators.Parsec.Error
 import SemanticCheck
 import SymbolTable
 import Text.Printf
-import Unify
-import CodeGenerate
-import MidIR
-import LowIR
-import RegisterAllocator
-import RegisterAllocator2
-import Assembly
-import Assembly2
+import Control.Unify
 import Dataflow
 import Compiler.Hoopl.Fuel
 import Data.List
 import AST
-import qualified IR
-import qualified CodeGenerate2
 
-import qualified IR2
-import qualified MidIR2
+import qualified IR
+import qualified MidIR
+import qualified RegisterAllocator
+import qualified CodeGenerate
+import Assembly
 
 -- | The main entry point to @dcc@.  See 'CLI' for command line
 -- arguments.
@@ -52,7 +46,10 @@ main = do args <- getArgs
           outFile <- return $ case outputFile opts of
             Just fn -> fn
             Nothing -> replaceExtension ifname ".s"
-          case target opts of
+          let tgt = case target opts of
+                      TargetDefault -> TargetCodeGen
+                      x -> x
+          case tgt of
             TargetScan -> case tokens of
               Left err -> do (putStrLn err)
                              exitWith $ ExitFailure 1
@@ -68,23 +65,24 @@ main = do args <- getArgs
             TargetMidIR -> case midir of
               Left err -> do (putStrLn err)
                              exitWith $ ExitFailure 1
-              Right midir -> putStrLn $ IR2.midIRToGraphViz midir
+              Right midir -> putStrLn $ IR.midIRToGraphViz midir
             TargetMidIRC -> case midir of
               Left err -> do (putStrLn err)
                              exitWith $ ExitFailure 1
-              Right midir -> putStrLn $ IR2.midIRToC midir
+              Right midir -> putStrLn $ IR.midIRToC midir
             TargetLowIR -> case lowir of
               Left err -> do (putStrLn err)
                              exitWith $ ExitFailure 1
-              Right lir -> putStrLn $ CodeGenerate2.lowIRToGraphViz lir 
-            TargetDefault -> case lowir of
-              Left err -> do (putStrLn err)
+              Right lir -> putStrLn $ CodeGenerate.lowIRToGraphViz lir 
+            TargetCodeGen ->
+                case lowir of
+                  Left err -> do
+                             putStrLn err
                              exitWith $ ExitFailure 1
-              Right lir -> putStrLn $ intercalate "\n" (CodeGenerate2.lowIRToAsm lir)
-            TargetCodeGen -> case lowir of 
-              Left err -> do (putStrLn err)
-                             exitWith $ ExitFailure 1
-              Right lir -> putStrLn $ intercalate "\n" (CodeGenerate2.lowIRToAsm lir)
+                  Right lir -> let asm = CodeGenerate.lowIRToAsm lir opts
+                               in do writeFile outFile $ unlines asm
+                                     when (debugMode opts) $ do
+                                       putStrLn $ intercalate "\n" asm
             _ -> error "No such target"
             
 -- | Perfoms the actions for the @scan@ target.
@@ -121,22 +119,23 @@ doCheckFile opts ifname input r
         Right x -> Right (makeHybridAST v)
         
 -- | Performs the actions for the @midir@ and @c@ target.
-doMidIRFile :: CompilerOpts -> String -> String -> Either String (HDProgram Int) -> Either String (IR2.MidIRRepr)
+doMidIRFile :: CompilerOpts -> String -> String -> Either String (HDProgram Int) -> Either String (IR.MidIRRepr)
 doMidIRFile opts ifname input ast
   = case ast of
     Left err -> Left err
-    Right hast -> let mmidir = do mir <- MidIR2.generateMidIR hast
+    Right hast -> let mmidir = do mir <- MidIR.generateMidIR hast
                                   mir <- runWithFuel 2222222 $ (performDataflowAnalysis (optMode opts) mir)
                                   return mir
-                  in Right (IR2.runGM mmidir)
-
-
-doLowIRFile :: CompilerOpts -> String -> String -> Either String IR2.MidIRRepr -> Either String LowIRRepr
+                  in Right (IR.runGM mmidir)
+                    
+doLowIRFile :: CompilerOpts -> String -> String -> Either String IR.MidIRRepr -> Either String LowIRRepr
 doLowIRFile opts ifname input midir
     = case midir of                      
         Left err -> Left err
-        Right m -> let assem = CodeGenerate2.toAss m --(optMode opts) m 
-                   in Right (IR2.runGM assem)
+        Right m -> let assem = do a <- CodeGenerate.toAss m
+                                  a <- if debugMode opts then return a else  RegisterAllocator.regAlloc a
+                                  return a
+                   in Right (IR.runGM assem)
                  
 -- | This function formats an error so it has a nifty carat under
 -- where the error occured.

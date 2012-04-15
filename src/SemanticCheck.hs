@@ -15,7 +15,7 @@ module SemanticCheck(doSemanticCheck,
 import AST
 import Scanner (Token(..), TokenType(..))
 import Text.ParserCombinators.Parsec (SourcePos)
-import Unify
+import Control.Unify
 import qualified Data.Map as Map
 import Control.Applicative
 import Control.Monad

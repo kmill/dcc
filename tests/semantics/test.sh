@@ -6,6 +6,8 @@ runparser() {
 
 cd `dirname $0`
 
+mv legal/really-deep.dc rd.dc
+
 fail=0
 temp="`mktemp /tmp/XXXXX`"
 
@@ -35,5 +37,7 @@ then
 else
     echo "\nFailed"
 fi
+
+mv rd.dc legal/really-deep.dc
 
 exit $fail;

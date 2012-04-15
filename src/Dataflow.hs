@@ -7,20 +7,25 @@ import Dataflow.CSE
 import Dataflow.BlockElim
 import Dataflow.Flatten
 import Dataflow.CopyProp
+import Dataflow.Tailcall
+--import Dataflow.NZP
 
+import Control.Monad
 import Control.Monad.Trans
 
 import qualified Data.Set as S
 
 import Compiler.Hoopl
 import Compiler.Hoopl.Fuel
-import IR2 
+import IR
 import Debug.Trace
 import Data.Maybe
 import CLI
 
 type RM = StupidFuelMonadT GM
 
+instance UniqueMonad RM where
+    freshUnique = lift freshUnique
 
 instance UniqueNameMonad RM where
     genUniqueName = lift . genUniqueName
@@ -68,13 +73,19 @@ performDataflowAnalysis opts midir = do
   midir <- if optConstProp opts 
            then performConstPropPass midir 
            else return midir
+--  midir <- if optNZP opts
+--           then performNZPPass midir
+--           else return midir
+  midir <- if optTailcall opts 
+           then performTailcallPass midir 
+           else return midir
   midir <- if optDeadCode opts 
            then performDeadCodePass midir 
            else return midir
   midir <- if optBlockElim opts
            then performBlockElimPass midir 
            else return midir
-  midir <- if optFlat opts
+  midir <- if (optCommonSubElim opts || optFlat opts)
            then performFlattenPass midir 
            else return midir
   midir <- if optCommonSubElim opts
@@ -83,6 +94,12 @@ performDataflowAnalysis opts midir = do
   midir <- if optCopyProp opts
            then performCopyPropPass midir 
            else return midir
+  midir <- if optTailcall opts 
+           then performTailcallPass midir 
+           else return midir
+--  midir <- if optNZP opts
+--           then performNZPPass midir
+--           else return midir
   midir <- if optDeadCode opts
            then performDeadCodePass midir
            else return midir
@@ -96,6 +113,7 @@ performCopyPropPass midir = performFwdPass copyPropPass midir emptyCopyFact
 performDeadCodePass midir = performBwdPass deadCodePass midir S.empty
 performBlockElimPass midir = performBwdPass blockElimPass midir Nothing
 performFlattenPass midir = performFwdPass flattenPass midir ()
+--performNZPPass midir = performFwdPass nzpPass midir emptyNZPFact
 
 performFwdPass :: (FwdPass (StupidFuelMonadT GM) MidIRInst a) -> MidIRRepr -> a -> RM MidIRRepr
 performFwdPass pass midir eFact
@@ -140,6 +158,13 @@ constPropPass = FwdPass
                 , fp_transfer = varHasLit
                 , fp_rewrite = constProp `thenFwdRw` simplify } 
 
+--nzpPass :: (CheckpointMonad m, FuelMonad m) => FwdPass m MidIRInst NZPFact
+--nzpPass = FwdPass
+--          { fp_lattice = nzpLattice
+--          , fp_transfer = varHasNZP
+--          , fp_rewrite = nzpSimplify }
+
+
 copyPropPass :: (CheckpointMonad m, FuelMonad m) => FwdPass m MidIRInst CopyFact 
 copyPropPass = FwdPass 
                { fp_lattice = copyLattice
@@ -172,7 +197,29 @@ csePass nonTemps = FwdPass
                    { fp_lattice = exprLattice
                    , fp_transfer = exprAvailable nonTemps
                    , fp_rewrite = cseRewrite nonTemps }
-
+                   
+performTailcallPass :: MidIRRepr -> RM MidIRRepr
+performTailcallPass midir
+    = do graph' <- foldl (>>=) (return $ midIRGraph midir) (map forMethod (midIRMethods midir))
+         return $ midir { midIRGraph = graph' }
+    where forMethod :: Method -> Graph MidIRInst C C -> RM (Graph MidIRInst C C)
+          forMethod (Method pos name entry postentry) graph
+              = do (graph', _, _) <- analyzeAndRewriteBwd
+                                     (tailcallPass name postentry argvars)
+                                     (JustC mlabels)
+                                     graph
+                                     mapEmpty
+                   return graph'
+              where argvars = getVars (blockToNodeList (lookupLabel graph entry))
+                    getVars :: (MaybeC C (MidIRInst C O), a, b) -> [VarName]
+                    getVars (JustC (Enter _ _ args), _, _) = args
+                    getVars _ = error "getVars: method label is not Enter! :-("
+          mlabels = map methodEntry $ midIRMethods midir
+          
+          lookupLabel :: Graph MidIRInst C C -> Label -> Block MidIRInst C C
+          lookupLabel (GMany _ g_blocks _) lbl = case mapLookup lbl g_blocks of
+                                                   Just x -> x
+                                                   Nothing -> error "ERROR"
 
 
 ---
@@ -213,8 +260,10 @@ getVariablesPass = BwdPass
           where
             used :: MidIRInst e x -> Fact x (S.Set VarName) -> S.Set VarName
             used Label{} f = f
+            used PostEnter{} f = f
             used (Enter _ _ args) f = f `S.union` (S.fromList args)
             used (Store _ x _) f = S.insert x f
+            used (DivStore _ x _ _ _) f = S.insert x f
             used IndStore{} f = f
             used (Call _ x _ _) f = S.insert x f
             used (Callout _ x _ _) f = S.insert x f

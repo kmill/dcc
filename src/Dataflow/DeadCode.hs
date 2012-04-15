@@ -6,8 +6,9 @@ import qualified Data.Set as S
 
 import Dataflow.OptSupport
 import Compiler.Hoopl 
-import IR2
+import IR
 import Data.Maybe
+import Debug.Trace
 
 
 
@@ -25,14 +26,16 @@ liveness :: BwdTransfer MidIRInst Live
 liveness = mkBTransfer live 
     where live :: MidIRInst e x -> Fact x Live -> Live
           live (Label _ _) f = f 
+          live (PostEnter _ _) f = f 
           live n@(Enter _ _ args) f = addUses (f S.\\ (S.fromList args)) n
-          live n@(Store _ x _) f = addUses (S.delete x f) n 
+          live n@(Store _ x _) f =  addUses (S.delete x f) n 
+          live n@(DivStore _ x _ _ _) f =  addUses (S.delete x f) n 
           live n@(IndStore _ _ _) f = addUses f n 
           live n@(Call _ x _ _) f = addUses (S.delete x f) n
           live n@(Callout _ x _ _) f = addUses (S.delete x f) n 
           live n@(Branch _ l) f = addUses (fact f l) n 
           live n@(CondBranch _ _ tl fl) f = addUses (fact f tl `S.union` fact f fl) n 
-          live n@(Return _ _) _ = addUses (fact_bot liveLattice) n 
+          live n@(Return _ _ _) _ = addUses (fact_bot liveLattice) n 
           live n@(Fail _) _ = addUses (fact_bot liveLattice) n 
 
           fact :: FactBase Live -> Label -> Live 
@@ -47,7 +50,9 @@ deadAsstElim :: forall m . FuelMonad m => BwdRewrite m MidIRInst Live
 deadAsstElim = mkBRewrite d 
     where 
       d :: MidIRInst e x -> Fact x Live -> m (Maybe (Graph MidIRInst e x))
-      d (Store _ x _) live 
+      d n@(Store _ x _) live 
           | not (x `S.member` live) = return $ Just emptyGraph
+      d n@(DivStore _ x _ _ (Lit _ i)) live 
+          | i /= 0 && not (x `S.member` live) = return $ Just emptyGraph
       d _ _  = return Nothing
 

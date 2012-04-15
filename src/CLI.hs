@@ -26,6 +26,7 @@ data CompilerOpts
                    -- information.
                    , optMode :: OptFlags
                    -- ^ Which optimizations to use.
+                   , macMode :: Bool
                    }
       deriving (Show)
 
@@ -38,6 +39,7 @@ defaultOptions
                    , compatMode = False
                    , helpMode = False
                    , optMode = optNone
+                   , macMode = False
                    }
 
 -- | This type represents the possible actions to do with the input
@@ -50,7 +52,7 @@ data TargetFlag = TargetScan -- ^ Given by @scan@.
                 | TargetLowIR -- ^ Given by @lowir@.
                 | TargetCodeGen -- ^ Given by @codegen@.
                 | TargetDefault -- ^ The default value if no target is given.
-                  deriving (Show)
+                  deriving (Show, Eq)
 
 data OptFlags = OptFlags { touched :: Bool
                          , optCommonSubElim :: Bool
@@ -58,19 +60,27 @@ data OptFlags = OptFlags { touched :: Bool
                          , optCopyProp :: Bool
                          , optDeadCode :: Bool
                          , optBlockElim :: Bool 
-                         , optFlat :: Bool 
+                         , optFlat :: Bool
+                         , optTailcall :: Bool
+                         , optNZP :: Bool
                          , optRA :: Bool }
               deriving (Show)
 
-optAllD = OptFlags True True True True True True True True
-optAll = OptFlags False True True True True True True True
-optNone = OptFlags False False False False False False False False
+optAllD = OptFlags True True True True True True True True True True
+optAll = OptFlags False True True True True True True True True True
+optNone = OptFlags False False False False False False False False False False
 
 options :: [OptDescr (CompilerOpts -> CompilerOpts)]
 options =
     [ Option ['o']  ["out"]     (ReqArg outfile' "FILE")    "output FILE"
-    , Option ['t']  ["target"]  (ReqArg target' "TARGET")   "Set target type"
+    , Option ['t']  ["target"]  (ReqArg target' "TARGET")   ("Set target type:\n" ++
+                                                             "\t   scan : Scans the input file\n" ++
+                                                             "\t  parse : Parses the input file\n" ++
+                                                             "\t  midir : Outputs a graph of the mid IR\n" ++
+                                                             "\t  lowir : Outputs a graph of the low IR\n" ++
+                                                             "\tcodegen : Outputs the compiled assembly code" )
     , Option ['d']     ["debug"]   (NoArg debug')              "Enables debug mode"
+    , Option ['m']     ["mac"]   (NoArg mac')              "Enables Mac OS X mode"
     , Option ['c']     ["compat"]  (NoArg compat')             "Enables compatibility mode with 6.035 output spec"
     , Option ['h']  ["help"]    (NoArg help')               "Prints this usage information"
     , Option ['O']     ["opt"]     (ReqArg optimize' "OPTIMIZATION") ("Enables optimizations:\n" ++
@@ -79,10 +89,11 @@ options =
                                                                       "\t      cse : Constant Subexpression Elimination\n" ++
                                                                       "\t copyprop : Copy Propagation\n" ++
                                                                       "\tconstprop : Constant Propagation\n" ++
+                                                                      "\t      nzp : -/0/+ Analysis\n" ++
                                                                       "\t deadcode : Dead Code Elimination\n" ++
                                                                       "\tblockelim : Block Elimination\n" ++
                                                                       "\t     flat : Flatten Optimization\n" ++
-                                                                      "\t       ra : Register Allocation")
+                                                                      "\t tailcall : Tailcall Elimination\n")
     ]
     where outfile' s opts = opts { outputFile = Just s }
           target' t opts = opts { target = targetOpt t }
@@ -90,6 +101,7 @@ options =
           compat' opts = opts { compatMode = True }
           help' opts = opts { helpMode = True }
           optimize' t opts = opts { optMode = optOpt opts t }
+          mac' opts = opts { macMode = True }
 
 targetOpt :: String -> TargetFlag
 targetOpt s
@@ -111,10 +123,12 @@ optOpt opts s
     "all" -> optAll
     "cse" -> oFlags { optCommonSubElim = True }
     "constprop" -> oFlags { optConstProp = True }
+    "nzp" -> oFlags { optNZP = True }
     "copyprop" -> oFlags { optCopyProp = True }
     "deadcode" -> oFlags { optDeadCode = True }  
     "blockelim" -> oFlags { optBlockElim = True }
     "flat" -> oFlags { optFlat = True }
+    "tailcall" -> oFlags { optTailcall = True }
     "ra" -> oFlags { optRA = True }
     "none" -> optNone
     _ -> oFlags

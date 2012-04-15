@@ -7,13 +7,15 @@ import Control.Monad
 import qualified Data.Map as Map
 
 import Compiler.Hoopl
-import IR2
+import IR
 import AST(SourcePos, noPosition)
 import Data.Int
 import Data.Maybe 
 
+import AlgSimplify
+
 type LitVal = (SourcePos, Int64)
-type Node = MidIRInst 
+
 -- Type and definition of the lattice
 type ConstFact = Map.Map VarName (WithTop LitVal)
 constLattice :: DataflowLattice ConstFact
@@ -30,14 +32,16 @@ emptyFact :: ConstFact
 emptyFact = fact_bot constLattice
 
 -- Analysis: variable equals a literal constant
-varHasLit :: FwdTransfer Node ConstFact
+varHasLit :: FwdTransfer MidIRInst ConstFact
 varHasLit = mkFTransfer ft
     where
       ft :: MidIRInst e x -> ConstFact -> Fact x ConstFact
       ft (Label _ _) f = f
+      ft (PostEnter _ _) f = f
       ft (Enter _ _ args) f = Map.fromList (map (\a -> (a, Top)) args)
       ft (Store _ x (Lit pos k)) f = Map.insert x (PElem (pos, k)) f
       ft (Store _ x _) f = Map.insert x Top f
+      ft (DivStore _ x _ _ _) f = Map.insert x Top f
       ft (IndStore _ _ _) f = f
       ft (Call _ x _ _) f = Map.insert x Top f
       ft (Callout _ x _ _) f = Map.insert x Top f 
@@ -48,15 +52,15 @@ varHasLit = mkFTransfer ft
       ft (CondBranch _ _ tl fl) f 
           = mkFactBase constLattice [ (tl, f)
                                     , (fl, f) ]
-      ft (Return _ _) f = mapEmpty
+      ft (Return _ _ _) f = mapEmpty
       ft (Fail _) f = mapEmpty
 
 
 -- Rewrite function: replace constant variables
-constProp :: forall m. FuelMonad m => FwdRewrite m Node ConstFact
+constProp :: forall m. FuelMonad m => FwdRewrite m MidIRInst ConstFact
 constProp = mkFRewrite cp 
     where 
-      cp :: Node e x -> ConstFact -> m (Maybe (Graph Node e x))
+      cp :: MidIRInst e x -> ConstFact -> m (Maybe (Graph MidIRInst e x))
       cp node f 
              = return $ liftM insnToG $ mapVN (lookup f) node
       lookup :: ConstFact -> VarName -> Maybe MidIRExpr
@@ -64,39 +68,8 @@ constProp = mkFRewrite cp
                      Just (PElem (pos, v)) -> Just $ Lit pos v
                      _ -> Nothing
 
-simplify :: forall m f . FuelMonad m => FwdRewrite m Node f
+simplify :: forall m f . FuelMonad m => FwdRewrite m MidIRInst f
 simplify = deepFwdRw simp 
     where 
-      simp :: forall e x. Node e x -> f -> m (Maybe (Graph Node e x))
-      simp node _ = return $ liftM insnToG $ s_node node 
-      s_node :: Node e x -> Maybe (Node e x)
-      s_node (CondBranch pos (Lit _ x) tl fl) 
-          = Just $ Branch pos (if intToBool x then tl else fl)
-      s_node n = (mapEN . mapEE) s_exp n 
-      s_exp (BinOp pos OpDiv expr (Lit _ 0)) 
-          = Nothing
-      s_exp (BinOp pos OpMod expr (Lit _ 0)) 
-          = Nothing
-      s_exp (BinOp pos op (Lit _ x1) (Lit _ x2)) 
-          = Just $ Lit pos $ (binOp op) x1 x2
-      s_exp (UnOp pos op (Lit _ x))
-          = Just $ Lit pos $ (unOp op) x
-      s_exp (Cond pos (Lit _ x) expt expf)
-          = Just $ (if intToBool x then expt else expf)
-      s_exp (Cond pos _ expt expf)
-          | expt == expf  = Just expt
-      s_exp _ = Nothing
-      binOp OpAdd = (+)
-      binOp OpSub = (-)
-      binOp OpMul = (*)
-      binOp OpDiv = div
-      binOp OpMod = rem
-      binOp CmpLT = \x y -> boolToInt $ x < y
-      binOp CmpGT = \x y -> boolToInt $ x > y 
-      binOp CmpLTE = \x y -> boolToInt $ x <= y 
-      binOp CmpGTE = \x y -> boolToInt $ x >= y 
-      binOp CmpEQ = \x y -> boolToInt $ x == y 
-      binOp CmpNEQ = \x y -> boolToInt $ x /= y
-      unOp OpNeg = negate 
-      unOp OpNot = boolToInt . not . intToBool
-
+      simp :: forall e x. MidIRInst e x -> f -> m (Maybe (Graph MidIRInst e x))
+      simp node _ = return $ liftM insnToG $ algSimplifyInst node

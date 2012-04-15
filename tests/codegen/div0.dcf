@@ -1,0 +1,6 @@
+//!
+class Program {
+  void main() {
+    callout("printf", "%d", (6/0)*0);
+  }
+}

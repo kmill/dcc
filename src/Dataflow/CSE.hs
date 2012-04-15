@@ -3,7 +3,7 @@ module Dataflow.CSE where
 
 import Dataflow.OptSupport
 import Compiler.Hoopl
-import IR2
+import IR
 import qualified Data.Map as Map
 import qualified Data.Set as S
 
@@ -35,8 +35,10 @@ exprAvailable nonTemps = mkFTransfer ft
     where
       ft :: MidIRInst e x -> ExprFact -> Fact x ExprFact 
       ft (Label _ _) f = f
+      ft (PostEnter _ _) f = f
       ft (Enter _ _ args) f = foldl (flip invalidateExprsWith) f args
       ft (Store _ x expr) f = handleAssign x expr f
+      ft DivStore{} f = f -- assuming both expressions are variables!
       ft (IndStore _ _ _) f = destroyLoads f
       ft (Call _ x _ _) f = invalidateExprsWith x f
       ft (Callout _ x _ _) f = invalidateExprsWith x f 
@@ -44,7 +46,7 @@ exprAvailable nonTemps = mkFTransfer ft
       ft (CondBranch _ _ tl fl) f 
           = mkFactBase exprLattice [ (tl, f) 
                                    , (fl, f) ]
-      ft (Return _ _) f = mapEmpty 
+      ft (Return _ _ _) f = mapEmpty 
       ft (Fail _) f = mapEmpty 
       handleAssign :: VarName -> MidIRExpr -> ExprFact -> ExprFact
       handleAssign x expr f = if isTemp nonTemps x 
