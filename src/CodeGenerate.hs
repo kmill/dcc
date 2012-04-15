@@ -17,6 +17,7 @@ import Data.Int
 import qualified Data.Set as S
 import Dataflow
 import Debug.Trace
+import Text.Printf
 
 type GM = I.GM
 
@@ -524,3 +525,139 @@ lowIRToGraphViz m = "digraph name {\n"
                                        ++ intercalate "|" (map showString strings)
                                        ++ "}")
                               ++ "];\n"
+
+--- Map everything to C
+class ShowC a where
+    showC :: (ShowC a) => a -> String
+
+instance ShowC Label where
+    showC lbl = "label_" ++ (show lbl)
+
+instance ShowC VarName where
+    showC (I.MV s) = tail s
+
+data ExprWrap v = EW (I.Expr v)
+instance (Show v, ShowC v) => Show (ExprWrap v) where
+    showsPrec _ (EW (I.Lit pos x)) = shows x
+    showsPrec _ (EW (I.LitLabel pos lab)) = showString lab
+    showsPrec _ (EW (I.Var pos v)) = (++) (showC v)
+    showsPrec _ (EW (I.Load pos expr)) = showString "*(" . showsPrec 0 expr . showString ")"
+    showsPrec p (EW (I.UnOp pos op expr)) = showParen (p>0) (shows op . showString " " . showsPrec 1 expr)
+    showsPrec p (EW (I.BinOp pos op ex1 ex2))
+        = showParen (p>0) (showsPrec 1 ex1 . showString " " . shows op . showString " " . showsPrec 1 ex2)
+    showsPrec p (EW (I.Cond pos exc ex1 ex2))
+        = showParen (p>0) (showsPrec 1 exc
+                           . showString " ? " . showsPrec 1 ex1
+                           . showString " : " . showsPrec 1 ex2)
+
+instance (Show v, ShowC v) => ShowC (I.Expr v) where
+    showC = show . EW
+
+showT :: (Show a) => a -> String
+showT = tail . show
+
+instance (Show v, ShowC v) => ShowC (I.Inst v e x) where
+    showC (I.Label pos lbl)
+        = printf "%s: // {%s}"
+          (showC lbl) (showPos pos)
+    showC (I.Enter pos lbl args)
+        = printf "int %s; // {%s}"
+          (intercalate ", " (map showC args)) (showPos pos)
+    showC (I.PostEnter pos lbl)
+        = printf "%s: // {%s}"
+          (showC lbl) (showPos pos)
+    showC (I.Store pos var expr)
+        = printf "int %s = %s; // {%s}"
+          (showC var) (showC expr) (showPos pos)
+    showC (I.DivStore pos var op expr1 expr2)
+        = printf "int %s = (%s) %s (%s); // {%s}"
+          (showC var) (showC expr1) (show op) (showC expr2) (showPos pos)
+    showC (I.IndStore pos dest expr)
+        = printf "*(%s) = %s; // {%s}"
+          (showC dest) (showC expr) (showPos pos)
+    showC (I.Call pos dest name args)
+        = printf "int %s = method_%s(%s); // {%s}"
+          (showC dest) name (intercalate ", " $ map showC args) (showPos pos)
+    showC (I.Callout pos dest name args)
+        = printf "int %s = %s(%s); // {%s}"
+          (showC dest) name (intercalate ", " $ map showC args) (showPos pos)
+    showC (I.Branch pos lbl)
+        = printf "goto %s; // {%s}"
+          (showC lbl) (showPos pos)
+    showC (I.CondBranch pos expr tlbl flbl)
+        = printf "if (%s) // {%s}\n  goto %s;\nelse\n  goto %s;"
+          (showC expr) (showPos pos) (showC tlbl) (showC flbl)
+    showC (I.Return pos for mexpr)
+        = printf "return %s; // {%s, %s}"
+          (maybe "" showC mexpr) for (showPos pos)
+    showC (I.Fail pos)
+        = printf "fail; // {%s}"
+          (showPos pos)
+
+midIRToC m = (showFields (I.midIRFields m))
+             ++ (showStrings (I.midIRStrings m))
+             ++ "void main()\n{\n"
+             ++ (showMethods (I.midIRMethods m))
+             -- ++ graphToC showC (graph)
+             ++ "}"
+ 
+    where graph = I.midIRGraph m
+          showMethod (I.Method pos name entry postenter)
+              = "\n" ++ name ++ ":\n"
+                ++ (intercalate "\n" $ concatMap (labelToC graph) (zip visited nvisited))
+              where visited = dfsSearch graph entry [entry]
+                    nvisited = case visited of
+                                   [] -> []
+                                   _ -> map Just (tail visited) ++ [Nothing]
+          showMethods methods = "/* begin methods */\n" 
+                                ++ (concatMap showMethod methods) ++ "\n"
+          showField (I.MidIRField pos name msize)
+              = "int " ++ name ++ (showSize msize) ++ ";\n"
+          showSize (Just n) = "[n]"
+          showSize (Nothing) = ""
+          showFields fields = "/* begin fields */\n" 
+                              ++ (concatMap showField fields) ++ "\n"
+          showString (name, pos, str)
+              = "char *" ++ name ++ " = \"" ++ str ++ "\";\n"
+          showStrings strings = "/* begin strings */\n"
+                                ++ (concatMap showString strings) ++ "\n"
+
+labelToC :: Graph I.MidIRInst C C -> (Label, Maybe Label) -> [String]
+labelToC graph (lbl, mnlabel)
+    = [show a]
+      ++ (map (show') bs)
+      ++ mjmp
+      ++ (if not (null children) && not fallthrough
+          then nextJmp else [])
+  where f :: (MaybeC C (n C O), [n O O], MaybeC C (n O C))
+             -> (n C O, [n O O], n O C)
+        f (JustC e, nodes, JustC x) = (e, nodes, x)
+        (a, bs, c) = f (blockToNodeList block)
+        block = lookupLabel graph lbl
+        children = successors block
+        ind = ("   " ++)
+        show' :: I.MidIRInst e x -> String
+        show' = ind . showC
+        fallthrough = case mnlabel of
+                        Just l -> l == head (reverse children)
+                        Nothing -> False
+        nextJmp = [ind $ "goto " ++ (show $ head $ reverse children) ++ ";"]
+        mjmp :: [String]
+        mjmp = case c of
+                 _ -> [show' c]
+
+
+
+graphToC :: NonLocal n => Showing n -> Graph n C C -> String
+graphToC node (GMany _ g_blocks _) = concatMap bviz (mapElems g_blocks)
+  where bviz block = lab ++ ": \n"
+                     ++ b block ++ "\n"
+                     ++ (concatMap (showEdge lab) (successors block))
+            where lab = showC $ entryLabel block
+                  showEdge e x = printf "%s %s\n" (show e) (show x)
+        b block = node a ++ "\n" ++ unlines (map node bs) ++ node c ++ "\n"
+            where f :: (MaybeC C (n C O), [n O O], MaybeC C (n O C))
+                    -> (n C O, [n O O], n O C)
+                  f (JustC e, nodes, JustC x) = (e, nodes, x)
+                  (a, bs, c) = f (blockToNodeList block)
+

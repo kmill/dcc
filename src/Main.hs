@@ -69,7 +69,7 @@ main = do args <- getArgs
             TargetMidIRC -> case midir of
               Left err -> do (putStrLn err)
                              exitWith $ ExitFailure 1
-              Right midir -> putStrLn $ IR.midIRToC midir
+              Right midir -> putStrLn $ CodeGenerate.midIRToC midir
             TargetLowIR -> case lowir of
               Left err -> do (putStrLn err)
                              exitWith $ ExitFailure 1
