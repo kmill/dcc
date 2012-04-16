@@ -542,7 +542,7 @@ instance (ShowC v) => Show (ExprWrap v) where
     showsPrec _ (EW (I.Lit pos x)) = shows x
     showsPrec _ (EW (I.LitLabel pos lab)) = showString lab
     showsPrec _ (EW (I.Var pos v)) = showString $ showC v
-    showsPrec _ (EW (I.Load pos expr)) = showString "*((int *)(" . showsPrec 0 (EW expr) . showString "))"
+    showsPrec _ (EW (I.Load pos expr)) = showString "*(int *)(" . showsPrec 0 (EW expr) . showString ")"
     showsPrec p (EW (I.UnOp pos op expr)) = showParen (p>0) (shows op . showString " " . showsPrec 1 (EW expr))
     showsPrec p (EW (I.BinOp pos op ex1 ex2))
         = showParen (p>0) (showsPrec 1 (EW ex1) . showString " " . shows op . showString " " . showsPrec 1 (EW ex2))
@@ -660,7 +660,7 @@ midIRToC m = "#include <stdio.h>\n#include <stdlib.h>\n"
           showField (I.MidIRField pos name msize)
               = "int " ++ name ++ (showSize msize) ++ ";\n"
           showSize (Just n) = printf "[%s]" (show n)
-          showSize (Nothing) = ""
+          showSize (Nothing) = "[1]"
           showFields fields = "/* begin fields */\n" 
                               ++ (concatMap showField fields) ++ "\n"
           showString (name, pos, str) = printf "char *%s = %s;\n" name (show str)
