@@ -641,9 +641,10 @@ midIRToC m = "#include <stdio.h>\n#include <stdlib.h>\n"
                                    [] -> []
                                    _ -> map Just (tail visited) ++ [Nothing]
                     entryBlock = lookupLabel graph entry
-                    argString = intercalate ", " (map (("int " ++) . showC) (extractArgs entryBlock))
+                    args = extractArgs entryBlock
+                    argString = intercalate ", " (map (("int " ++) . showC) args)
                     varSet = foldl1 S.union $ map (variablesUsed . lookupLabel graph) visited
-                    vars = S.toList varSet
+                    vars = S.toList (S.difference varSet $ S.fromList args)
                     varString :: String
                     varString = 
                         case vars of
