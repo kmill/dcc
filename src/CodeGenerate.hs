@@ -529,7 +529,7 @@ lowIRToGraphViz m = "digraph name {\n"
 
 --- Map everything to C
 class ShowC a where
-    showC :: (ShowC a) => a -> String
+    showC :: a -> String
 
 instance ShowC Label where
     showC lbl = "label_" ++ (show lbl)
