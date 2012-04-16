@@ -589,14 +589,14 @@ instance (ShowC v) => ShowC (I.Inst v e x) where
         = printf "if (%s) // {%s}\n      goto %s;\n    else\n      goto %s;"
           (showC expr) (showPos pos) (showC tlbl) (showC flbl)
     showC (I.Return pos for mexpr)
-        = printf "return%s; // {%s, %s}"
-          (maybe "" ((" " ++ ) . showC) mexpr) for (showPos pos)
+        = printf "return %s; // {%s, %s}"
+          (maybe "0" showC mexpr) for (showPos pos)
     showC (I.Fail pos)
         = printf "exit(1); // {%s}"
           (showPos pos)
 
-variablesUsed :: Block (I.Inst v) C C -> [v]
-variablesUsed block = catMaybes $ map getVar instrs
+variablesUsed :: Block I.MidIRInst C C -> S.Set I.VarName
+variablesUsed block = S.fromList $ map fromJust $ filter isJust $ map getVar instrs
     where (_, instrs, _) = blockToNodeList block
           getVar :: (I.Inst v e x) -> Maybe v
           getVar (I.Store _ var _) = Just var
@@ -633,29 +633,29 @@ midIRToC m = "#include <stdio.h>\n#include <stdlib.h>\n"
     where graph = I.midIRGraph m
           showMethod (I.Method pos name entry postenter)
               = printf "%s %s(%s)\n{\n%s\n\n%s\n}"
-                returnType name argString varString instString
+                returnType cName argString varString instString
               where visited = dfsSearch graph entry [entry]
                     nvisited = case visited of
                                    [] -> []
                                    _ -> map Just (tail visited) ++ [Nothing]
                     entryBlock = lookupLabel graph entry
                     argString = intercalate ", " (map (("int " ++) . showC) (extractArgs entryBlock))
-                    vars = concatMap (variablesUsed . lookupLabel graph) visited
+                    vars = concatMap (S.toList . variablesUsed . lookupLabel graph) visited
                     varString :: String
                     varString = 
                         case vars of
                             [] -> "  // no locals"
                             _ -> printf "  int %s;" (intercalate ", " (map showC vars))
                     instString = (intercalate "\n" $ intercalate [""] $ map (labelToC graph) (zip visited nvisited))
-                    returnType =
-                        case (hasReturn $ lookupLabel graph $ last visited) of
-                            True -> "int"
-                            False -> "void"
+                    returnType = "int"
+                    cName
+                        | name == "method_main" = "main"
+                        | otherwise = name
           showMethods methods = "/* begin methods */\n" 
                                 ++ (intercalate "\n\n" $ map showMethod methods)
           showField (I.MidIRField pos name msize)
               = "int " ++ name ++ (showSize msize) ++ ";\n"
-          showSize (Just n) = "[n]"
+          showSize (Just n) = printf "[%s]" (show n)
           showSize (Nothing) = ""
           showFields fields = "/* begin fields */\n" 
                               ++ (concatMap showField fields) ++ "\n"
@@ -679,7 +679,7 @@ labelToC graph (lbl, mnlabel)
         fallthrough = case mnlabel of
                         Just l -> l == head (reverse children)
                         Nothing -> False
-        nextJmp = [ind $ "goto " ++ (show $ head $ reverse children) ++ ";"]
+        nextJmp = [ind $ "goto " ++ (showC $ head $ reverse children) ++ ";"]
         mjmp :: [String]
         mjmp = case c of
                  _ -> [(ind $ showC c) ++ " // (c)"]
