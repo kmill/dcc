@@ -92,7 +92,7 @@ for file in `find $base -iname '*.dcf'`; do
   ccode=`tempfile`
   if runcompilertoc $file $ccode; then
     cbinary=`tempfile`
-    if gcc -x c -o $cbinary $ccode; then
+    if gcc -x c -o $cbinary $ccode 2>/dev/null; then
       coutput=`tempfile`
       input=`tempfile`
       grep '//<' $file | sed -E 's@^//< ?@@' > $input
@@ -104,9 +104,9 @@ for file in `find $base -iname '*.dcf'`; do
       fi
       if grep '//!' $file > /dev/null; then
         if [ -z "$ret" ]; then
-          echo "Program did not fail to run when compiled from C.";
+          cmsg="Program should have failed.";
         else
-          echo "Successful compilation and run failure from C."
+          cmsg=""
         fi
       else
         if [ -z "$ret" ]; then
@@ -114,21 +114,31 @@ for file in `find $base -iname '*.dcf'`; do
            grep '//>' $file | sed -E 's@^//> ?@@' > $desired
            diffout=`tempfile`
            if ! diff -u $coutput $desired > $diffout; then
-             echo "File $file output mismatch when compiled from C.";
+             cmsg="File output mismatch.";
            else
-             echo "Successful compilation from C."
+             cmsg=""
            fi
         else
-          echo "Program failed to run when compiled from C.";
+          cmsg="Program failed to run.";
         fi
       fi
     else
-      echo "Couldn't run gcc on C from $file."
+      cmsg="Couldn't run gcc."
     fi
   else
-    echo "Couldn't compile to C on $file."
+    cmsg="Couldn't compile to C."
   fi
   
+  if [ ! -z "$cmsg" ]; then
+    echo "Compilation via C failed on $file:"
+    if [ ! -z "$diffout" ]; then
+      cat $diffout
+    elif [ ! -z "$coutput" ]; then
+      cat $coutput
+    fi
+    echo "  $cmsg"
+  fi
+
   rm -f $output $input $binary $asm $coutput $cbinary $ccode
   if [ ! -z "$diffout" ]; then
     rm -f $diffout $desired;
