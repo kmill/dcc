@@ -609,17 +609,19 @@ extractInsts :: (MaybeC C (n C O), [n O O], MaybeC C (n O C))
                 -> (n C O, [n O O], n O C)
 extractInsts (JustC e, nodes, JustC x) = (e, nodes, x)
 
-extractArgs :: Block (I.Inst v) C C -> [v]
+extractArgs :: Block I.MidIRInst C C -> [VarName]
 extractArgs block =
-    case (extractInsts $ blockToNodeList block) of
+    case instTriple of
         (I.Enter _ _ args, _, _) -> args
         _ -> error "shouldn't be extracting args here :-O"
+    where instTriple = extractInsts $ blockToNodeList block
 
-hasReturn :: Block (I.Inst v) C C -> Bool
+hasReturn :: Block I.MidIRInst C C -> Bool
 hasReturn block =
-    case (extractInsts $ blockToNodeList block) of
-        (_, _, I.Return _ _ (Just _)) -> True
+    case instTriple of
+        (_, _, I.Return _ _ returnVal) -> isJust returnVal
         _ -> False
+    where instTriple = extractInsts $ blockToNodeList block
 
 midIRToC :: I.MidIRRepr -> String
 midIRToC m = "#include <stdio.h>\n#include <stdlib.h>\n"
