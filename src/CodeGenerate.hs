@@ -542,7 +542,7 @@ instance (ShowC v) => Show (ExprWrap v) where
     showsPrec _ (EW (I.Lit pos x)) = shows x
     showsPrec _ (EW (I.LitLabel pos lab)) = showString lab
     showsPrec _ (EW (I.Var pos v)) = showString $ showC v
-    showsPrec _ (EW (I.Load pos expr)) = showString "*(" . showsPrec 0 (EW expr) . showString ")"
+    showsPrec _ (EW (I.Load pos expr)) = showString "*((int *)(" . showsPrec 0 (EW expr) . showString "))"
     showsPrec p (EW (I.UnOp pos op expr)) = showParen (p>0) (shows op . showString " " . showsPrec 1 (EW expr))
     showsPrec p (EW (I.BinOp pos op ex1 ex2))
         = showParen (p>0) (showsPrec 1 (EW ex1) . showString " " . shows op . showString " " . showsPrec 1 (EW ex2))
@@ -574,7 +574,7 @@ instance (ShowC v) => ShowC (I.Inst v e x) where
         = printf "%s = (%s) %s (%s); // {%s}"
           (showC var) (showC expr1) (show op) (showC expr2) (showPos pos)
     showC (I.IndStore pos dest expr)
-        = printf "*(%s) = %s; // {%s}"
+        = printf "*((int *)(%s)) = %s; // {%s}"
           (showC dest) (showC expr) (showPos pos)
     showC (I.Call pos dest name args)
         = printf "%s = %s(%s); // {%s}"
@@ -640,7 +640,8 @@ midIRToC m = "#include <stdio.h>\n#include <stdlib.h>\n"
                                    _ -> map Just (tail visited) ++ [Nothing]
                     entryBlock = lookupLabel graph entry
                     argString = intercalate ", " (map (("int " ++) . showC) (extractArgs entryBlock))
-                    vars = concatMap (S.toList . variablesUsed . lookupLabel graph) visited
+                    varSet = foldl1 S.union $ map (variablesUsed . lookupLabel graph) visited
+                    vars = S.toList varSet
                     varString :: String
                     varString = 
                         case vars of

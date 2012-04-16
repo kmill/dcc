@@ -23,13 +23,17 @@ else
     dccopt=""
     lib="-L$base/lib -l6035 -l6035_2"
     if ! gcc -v 2>&1 |grep -q '^Target: x86_64-linux-gnu'; then
-	echo "Refusing to run cross-compilation on non-64-bit architechure."
-	exit 0;
+  echo "Refusing to run cross-compilation on non-64-bit architechure."
+  exit 0;
     fi
 fi
 
 runcompiler() {
     $base/../../dcc $dccopt --target codegen $optstring -o $2 $1
+}
+
+runcompilertoc() {
+    $base/../../dcc $dccopt --target midirc $optstring $1 > $2
 }
 
 fail=0
@@ -39,6 +43,7 @@ for file in `find $base -iname '*.dcf'`; do
   output=""
   asm=`tempfile --suffix=.s`
   msg=""
+  desired="blargle this shouldn't match anything"
   if runcompiler $file $asm; then
     binary=`tempfile`
     if gcc $archstring -o $binary $asm $lib; then
@@ -47,9 +52,9 @@ for file in `find $base -iname '*.dcf'`; do
       output=`tempfile`
      
       if $binary < $input > $output 2>&1; then
-          ret=""
+        ret=""
       else
-	  ret="fail"
+        ret="fail"
       fi
       if grep '//!' $file > /dev/null; then
         if [ -z "$ret" ]; then
@@ -83,7 +88,48 @@ for file in `find $base -iname '*.dcf'`; do
     fi
     echo $msg
   fi
-  rm -f $output $input $binary $asm
+
+  ccode=`tempfile`
+  if runcompilertoc $file $ccode; then
+    cbinary=`tempfile`
+    if gcc -x c -o $cbinary $ccode; then
+      coutput=`tempfile`
+      input=`tempfile`
+      grep '//<' $file | sed -E 's@^//< ?@@' > $input
+      
+      if $cbinary < $input > $coutput 2>&1; then
+        ret=""
+      else
+        ret="fail"
+      fi
+      if grep '//!' $file > /dev/null; then
+        if [ -z "$ret" ]; then
+          echo "Program did not fail to run when compiled from C.";
+        else
+          echo "Successful compilation and run failure from C."
+        fi
+      else
+        if [ -z "$ret" ]; then
+           desired=`tempfile`
+           grep '//>' $file | sed -E 's@^//> ?@@' > $desired
+           diffout=`tempfile`
+           if ! diff -u $coutput $desired > $diffout; then
+             echo "File $file output mismatch when compiled from C.";
+           else
+             echo "Successful compilation from C."
+           fi
+        else
+          echo "Program failed to run when compiled from C.";
+        fi
+      fi
+    else
+      echo "Couldn't run gcc on C from $file."
+    fi
+  else
+    echo "Couldn't compile to C on $file."
+  fi
+  
+  rm -f $output $input $binary $asm $coutput $cbinary $ccode
   if [ ! -z "$diffout" ]; then
     rm -f $diffout $desired;
   fi
