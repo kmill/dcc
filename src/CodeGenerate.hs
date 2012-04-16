@@ -466,6 +466,7 @@ labelToAsmOut macmode graph (lbl, mnlabel)
                  A.Jmp _ _ -> []
                  _ -> [ind $ show c]
 
+dfsSearch :: (NonLocal n) => Graph n C C -> Label -> [Label] -> [Label]
 dfsSearch graph lbl visited = foldl recurseDFS visited (reverse $ successors block)
   where block = lookupLabel graph lbl
         recurseDFS v' nv = if nv `elem` v' then v' else dfsSearch graph nv (v' ++ [nv])
@@ -537,55 +538,55 @@ instance ShowC VarName where
     showC (I.MV s) = tail s
 
 data ExprWrap v = EW (I.Expr v)
-instance (Show v, ShowC v) => Show (ExprWrap v) where
+instance (ShowC v) => Show (ExprWrap v) where
     showsPrec _ (EW (I.Lit pos x)) = shows x
     showsPrec _ (EW (I.LitLabel pos lab)) = showString lab
-    showsPrec _ (EW (I.Var pos v)) = (++) (showC v)
-    showsPrec _ (EW (I.Load pos expr)) = showString "*(" . showsPrec 0 expr . showString ")"
-    showsPrec p (EW (I.UnOp pos op expr)) = showParen (p>0) (shows op . showString " " . showsPrec 1 expr)
+    showsPrec _ (EW (I.Var pos v)) = showString $ showC v
+    showsPrec _ (EW (I.Load pos expr)) = showString "*(" . showsPrec 0 (EW expr) . showString ")"
+    showsPrec p (EW (I.UnOp pos op expr)) = showParen (p>0) (shows op . showString " " . showsPrec 1 (EW expr))
     showsPrec p (EW (I.BinOp pos op ex1 ex2))
-        = showParen (p>0) (showsPrec 1 ex1 . showString " " . shows op . showString " " . showsPrec 1 ex2)
+        = showParen (p>0) (showsPrec 1 (EW ex1) . showString " " . shows op . showString " " . showsPrec 1 (EW ex2))
     showsPrec p (EW (I.Cond pos exc ex1 ex2))
-        = showParen (p>0) (showsPrec 1 exc
-                           . showString " ? " . showsPrec 1 ex1
-                           . showString " : " . showsPrec 1 ex2)
+        = showParen (p>0) (showsPrec 1 (EW exc)
+                           . showString " ? " . showsPrec 1 (EW ex1)
+                           . showString " : " . showsPrec 1 (EW ex2))
 
-instance (Show v, ShowC v) => ShowC (I.Expr v) where
+instance (ShowC v) => ShowC (I.Expr v) where
     showC = show . EW
 
 showT :: (Show a) => a -> String
 showT = tail . show
 
-instance (Show v, ShowC v) => ShowC (I.Inst v e x) where
+instance (ShowC v) => ShowC (I.Inst v e x) where
     showC (I.Label pos lbl)
         = printf "%s: // {%s}"
           (showC lbl) (showPos pos)
     showC (I.Enter pos lbl args)
-        = printf "int %s; // {%s}"
-          (intercalate ", " (map showC args)) (showPos pos)
+        = printf "%s: // {%s}"
+          (showC lbl) (showPos pos)
     showC (I.PostEnter pos lbl)
         = printf "%s: // {%s}"
           (showC lbl) (showPos pos)
     showC (I.Store pos var expr)
-        = printf "int %s = %s; // {%s}"
+        = printf "%s = %s; // {%s}"
           (showC var) (showC expr) (showPos pos)
     showC (I.DivStore pos var op expr1 expr2)
-        = printf "int %s = (%s) %s (%s); // {%s}"
+        = printf "%s = (%s) %s (%s); // {%s}"
           (showC var) (showC expr1) (show op) (showC expr2) (showPos pos)
     showC (I.IndStore pos dest expr)
         = printf "*(%s) = %s; // {%s}"
           (showC dest) (showC expr) (showPos pos)
     showC (I.Call pos dest name args)
-        = printf "int %s = method_%s(%s); // {%s}"
+        = printf "%s = %s(%s); // {%s}"
           (showC dest) name (intercalate ", " $ map showC args) (showPos pos)
     showC (I.Callout pos dest name args)
-        = printf "int %s = %s(%s); // {%s}"
+        = printf "%s = %s(%s); // {%s}"
           (showC dest) name (intercalate ", " $ map showC args) (showPos pos)
     showC (I.Branch pos lbl)
         = printf "goto %s; // {%s}"
           (showC lbl) (showPos pos)
     showC (I.CondBranch pos expr tlbl flbl)
-        = printf "if (%s) // {%s}\n  goto %s;\nelse\n  goto %s;"
+        = printf "if (%s) // {%s}\n      goto %s;\n    else\n      goto %s;"
           (showC expr) (showPos pos) (showC tlbl) (showC flbl)
     showC (I.Return pos for mexpr)
         = printf "return %s; // {%s, %s}"
@@ -594,21 +595,51 @@ instance (Show v, ShowC v) => ShowC (I.Inst v e x) where
         = printf "fail; // {%s}"
           (showPos pos)
 
+variablesUsed :: Block (I.Inst v) C C -> [v]
+variablesUsed block = catMaybes $ map getVar instrs
+    where (_, instrs, _) = blockToNodeList block
+          getVar :: (I.Inst v e x) -> Maybe v
+          getVar (I.Store _ var _) = Just var
+          getVar (I.DivStore _ var _ _ _) = Just var
+          getVar (I.Call _ var _ _) = Just var
+          getVar (I.Callout _ var _ _) = Just var
+          getVar _ = Nothing
+
+extractInsts :: (MaybeC C (n C O), [n O O], MaybeC C (n O C))
+                -> (n C O, [n O O], n O C)
+extractInsts (JustC e, nodes, JustC x) = (e, nodes, x)
+
+extractArgs :: Block (I.Inst v) C C -> [v]
+extractArgs block =
+    case (extractInsts $ blockToNodeList block) of
+        (I.Enter _ _ args, _, _) -> args
+        _ -> error "shouldn't be extracting args here :-O"
+
+midIRToC :: I.MidIRRepr -> String
 midIRToC m = (showFields (I.midIRFields m))
              ++ (showStrings (I.midIRStrings m))
-             ++ "void main()\n{\n"
+             -- ++ "void main()\n{\n"
              ++ (showMethods (I.midIRMethods m))
              -- ++ graphToC showC (graph)
-             ++ "}"
+             -- ++ "}"
  
     where graph = I.midIRGraph m
           showMethod (I.Method pos name entry postenter)
-              = "\n" ++ name ++ ":\n"
-                ++ (intercalate "\n" $ concatMap (labelToC graph) (zip visited nvisited))
+              = printf "void %s(%s) {\n%s\n%s\n}\n\n"
+                name argString varString instString
               where visited = dfsSearch graph entry [entry]
                     nvisited = case visited of
                                    [] -> []
                                    _ -> map Just (tail visited) ++ [Nothing]
+                    entryBlock = lookupLabel graph entry
+                    argString = intercalate ", " (map (("int " ++) . showC) (extractArgs entryBlock))
+                    vars = concatMap (variablesUsed . lookupLabel graph) visited
+                    varString :: String
+                    varString = 
+                        case vars of
+                            [] -> "  // no locals"
+                            _ -> printf "  int %s;" (intercalate ", " (map showC vars))
+                    instString = (intercalate "\n" $ concatMap (labelToC graph) (zip visited nvisited))
           showMethods methods = "/* begin methods */\n" 
                                 ++ (concatMap showMethod methods) ++ "\n"
           showField (I.MidIRField pos name msize)
@@ -624,40 +655,21 @@ midIRToC m = (showFields (I.midIRFields m))
 
 labelToC :: Graph I.MidIRInst C C -> (Label, Maybe Label) -> [String]
 labelToC graph (lbl, mnlabel)
-    = [show a]
+    = ["  " ++ (showC a) ++ " // (a)"]
       ++ (map (show') bs)
       ++ mjmp
       ++ (if not (null children) && not fallthrough
           then nextJmp else [])
-  where f :: (MaybeC C (n C O), [n O O], MaybeC C (n O C))
-             -> (n C O, [n O O], n O C)
-        f (JustC e, nodes, JustC x) = (e, nodes, x)
-        (a, bs, c) = f (blockToNodeList block)
+  where (a, bs, c) = extractInsts (blockToNodeList block)
         block = lookupLabel graph lbl
         children = successors block
-        ind = ("   " ++)
+        ind = ("    " ++)
         show' :: I.MidIRInst e x -> String
-        show' = ind . showC
+        show' x = (ind $ showC x) ++ " // (bs)"
         fallthrough = case mnlabel of
                         Just l -> l == head (reverse children)
                         Nothing -> False
         nextJmp = [ind $ "goto " ++ (show $ head $ reverse children) ++ ";"]
         mjmp :: [String]
         mjmp = case c of
-                 _ -> [show' c]
-
-
-
-graphToC :: NonLocal n => Showing n -> Graph n C C -> String
-graphToC node (GMany _ g_blocks _) = concatMap bviz (mapElems g_blocks)
-  where bviz block = lab ++ ": \n"
-                     ++ b block ++ "\n"
-                     ++ (concatMap (showEdge lab) (successors block))
-            where lab = showC $ entryLabel block
-                  showEdge e x = printf "%s %s\n" (show e) (show x)
-        b block = node a ++ "\n" ++ unlines (map node bs) ++ node c ++ "\n"
-            where f :: (MaybeC C (n C O), [n O O], MaybeC C (n O C))
-                    -> (n C O, [n O O], n O C)
-                  f (JustC e, nodes, JustC x) = (e, nodes, x)
-                  (a, bs, c) = f (blockToNodeList block)
-
+                 _ -> [(show' c) ++ " // (c)"]
