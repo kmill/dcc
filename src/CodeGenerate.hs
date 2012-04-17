@@ -540,9 +540,9 @@ instance ShowC VarName where
 data ExprWrap v = EW (I.Expr v)
 instance (ShowC v) => Show (ExprWrap v) where
     showsPrec _ (EW (I.Lit pos x)) = shows x
-    showsPrec _ (EW (I.LitLabel pos lab)) = showString "(long)" . showString lab
+    showsPrec _ (EW (I.LitLabel pos lab)) = showString "(int64_t)" . showString lab
     showsPrec _ (EW (I.Var pos v)) = showString $ showC v
-    showsPrec _ (EW (I.Load pos expr)) = showString "*(long *)(" . showsPrec 0 (EW expr) . showString ")"
+    showsPrec _ (EW (I.Load pos expr)) = showString "*(int64_t *)(" . showsPrec 0 (EW expr) . showString ")"
     showsPrec p (EW (I.UnOp pos op expr)) = showParen (p>0) (shows op . showString " " . showsPrec 1 (EW expr))
     showsPrec p (EW (I.BinOp pos op ex1 ex2))
         = showParen (p>0) (showsPrec 1 (EW ex1) . showString " " . shows op . showString " " . showsPrec 1 (EW ex2))
@@ -574,7 +574,7 @@ instance (ShowC v) => ShowC (I.Inst v e x) where
         = printf "%s = (%s) %s (%s); // {%s}"
           (showC var) (showC expr1) (show op) (showC expr2) (showPos pos)
     showC (I.IndStore pos dest expr)
-        = printf "*((long *)(%s)) = %s; // {%s}"
+        = printf "*((int64_t *)(%s)) = %s; // {%s}"
           (showC dest) (showC expr) (showPos pos)
     showC (I.Call pos dest name args)
         = printf "%s = %s(%s); // {%s}"
@@ -624,7 +624,7 @@ hasReturn block =
     where instTriple = extractInsts $ blockToNodeList block
 
 midIRToC :: I.MidIRRepr -> String
-midIRToC m = "#include <stdio.h>\n#include <stdlib.h>\n"
+midIRToC m = "#include <stdio.h>\n#include <stdlib.h>\n#include <stdint.h>\n"
              ++ (showFields (I.midIRFields m))
              ++ (showStrings (I.midIRStrings m))
              -- ++ "void main()\n{\n"
@@ -642,23 +642,25 @@ midIRToC m = "#include <stdio.h>\n#include <stdlib.h>\n"
                                    _ -> map Just (tail visited) ++ [Nothing]
                     entryBlock = lookupLabel graph entry
                     args = extractArgs entryBlock
-                    argString = intercalate ", " (map (("long " ++) . showC) args)
+                    argString = intercalate ", " (map (("int64_t " ++) . showC) args)
                     varSet = foldl1 S.union $ map (variablesUsed . lookupLabel graph) visited
                     vars = S.toList (S.difference varSet $ S.fromList args)
                     varString :: String
                     varString = 
                         case vars of
                             [] -> "  // no locals"
-                            _ -> printf "  long %s;" (intercalate ", " (map showC vars))
+                            _ -> printf "  int64_t %s;" (intercalate ", " (map showC vars))
                     instString = (intercalate "\n" $ intercalate [""] $ map (labelToC graph) (zip visited nvisited))
-                    returnType = "long"
+                    returnType 
+                        | name == "method_main" = "int"
+                        | otherwise = "int64_t"
                     cName
                         | name == "method_main" = "main"
                         | otherwise = name
           showMethods methods = "/* begin methods */\n" 
                                 ++ (intercalate "\n\n" $ map showMethod methods)
           showField (I.MidIRField pos name msize)
-              = "long " ++ name ++ (showSize msize) ++ ";\n"
+              = "int64_t " ++ name ++ (showSize msize) ++ ";\n"
           showSize (Just n) = printf "[%s]" (show n)
           showSize (Nothing) = "[1]"
           showFields fields = "/* begin fields */\n" 
