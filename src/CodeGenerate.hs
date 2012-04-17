@@ -630,7 +630,9 @@ hasReturn block =
     where instTriple = extractInsts $ blockToNodeList block
 
 midIRToC :: I.MidIRRepr -> String
-midIRToC m = "#include <stdio.h>\n#include <stdlib.h>\n#include <stdint.h>\n"
+midIRToC m = "#include <stdio.h>\n#include <stdlib.h>\n#include <stdint.h>\n\n"
+             ++ "/* function prototypes for lib6035 */\n"
+             ++ "int get_int_035();\nint get_int();\n\n"
              ++ (showFields (I.midIRFields m))
              ++ (showStrings (I.midIRStrings m))
              -- ++ "void main()\n{\n"
