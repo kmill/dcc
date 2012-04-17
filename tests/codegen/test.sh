@@ -139,7 +139,7 @@ for file in `find $base -iname '*.dcf'`; do
       cat $coutput
     fi
     if [ ! -z "$gccerrs" ]; then
-      cat $gccerrs | grep -v "warning:" | grep -v "note:"
+      cat $gccerrs | grep -v "warning:" | grep -v "note:" | (while read x; do echo "    $x"; done)
     fi
     echo "  $cmsg"
   fi
