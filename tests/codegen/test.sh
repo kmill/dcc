@@ -92,7 +92,9 @@ for file in `find $base -iname '*.dcf'`; do
   ccode=`tempfile`
   if runcompilertoc $file $ccode; then
     cbinary=`tempfile`
-    if gcc -x c -o $cbinary $ccode 2>/dev/null; then
+    gccerrs=`tempfile`
+    gcccmd="gcc $lib -x c -o $cbinary $ccode"
+    if $gcccmd 2>$gccerrs; then
       coutput=`tempfile`
       input=`tempfile`
       grep '//<' $file | sed -E 's@^//< ?@@' > $input
@@ -123,7 +125,7 @@ for file in `find $base -iname '*.dcf'`; do
         fi
       fi
     else
-      cmsg="Couldn't run gcc."
+      cmsg="Couldn't run gcc. ($gcccmd)"
     fi
   else
     cmsg="Couldn't compile to C."
@@ -135,6 +137,9 @@ for file in `find $base -iname '*.dcf'`; do
       cat $diffout
     elif [ ! -z "$coutput" ]; then
       cat $coutput
+    fi
+    if [ ! -z "$gccerrs" ]; then
+      cat $gccerrs | grep -v "warning:" | grep -v "note:"
     fi
     echo "  $cmsg"
   fi
