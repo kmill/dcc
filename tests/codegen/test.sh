@@ -93,7 +93,7 @@ for file in `find $base -iname '*.dcf'`; do
   if runcompilertoc $file $ccode; then
     cbinary=`tempfile`
     gccerrs=`tempfile`
-    gcccmd="gcc $lib -x c -o $cbinary $ccode"
+    gcccmd="gcc -x c -o $cbinary $ccode $lib"
     if $gcccmd 2>$gccerrs; then
       coutput=`tempfile`
       input=`tempfile`
