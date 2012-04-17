@@ -586,8 +586,8 @@ instance (ShowC v) => ShowC (I.Inst v e x) where
         = printf "%s = %s(%s); // {%s}"
           (showC dest) name (intercalate ", " $ map showC args) (showPos pos)
     showC (I.Callout pos dest name args)
-        = printf "%s = %s(%s); // {%s}"
-          (showC dest) name (intercalate ", " $ map showC args) (showPos pos)
+        = printf "{ int64_t (*magic_f)() = %s; %s = magic_f(%s); } // {%s}"
+          name (showC dest) (intercalate ", " $ map showC args) (showPos pos)
     showC (I.Branch pos lbl)
         = printf "goto %s; // {%s}"
           (showC lbl) (showPos pos)
