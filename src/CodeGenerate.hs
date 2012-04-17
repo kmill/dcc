@@ -540,9 +540,9 @@ instance ShowC VarName where
 data ExprWrap v = EW (I.Expr v)
 instance (ShowC v) => Show (ExprWrap v) where
     showsPrec _ (EW (I.Lit pos x)) = shows x
-    showsPrec _ (EW (I.LitLabel pos lab)) = showString lab
+    showsPrec _ (EW (I.LitLabel pos lab)) = showString "(long)" . showString lab
     showsPrec _ (EW (I.Var pos v)) = showString $ showC v
-    showsPrec _ (EW (I.Load pos expr)) = showString "*(int *)(" . showsPrec 0 (EW expr) . showString ")"
+    showsPrec _ (EW (I.Load pos expr)) = showString "*(long *)(" . showsPrec 0 (EW expr) . showString ")"
     showsPrec p (EW (I.UnOp pos op expr)) = showParen (p>0) (shows op . showString " " . showsPrec 1 (EW expr))
     showsPrec p (EW (I.BinOp pos op ex1 ex2))
         = showParen (p>0) (showsPrec 1 (EW ex1) . showString " " . shows op . showString " " . showsPrec 1 (EW ex2))
@@ -574,7 +574,7 @@ instance (ShowC v) => ShowC (I.Inst v e x) where
         = printf "%s = (%s) %s (%s); // {%s}"
           (showC var) (showC expr1) (show op) (showC expr2) (showPos pos)
     showC (I.IndStore pos dest expr)
-        = printf "*((int *)(%s)) = %s; // {%s}"
+        = printf "*((long *)(%s)) = %s; // {%s}"
           (showC dest) (showC expr) (showPos pos)
     showC (I.Call pos dest name args)
         = printf "%s = %s(%s); // {%s}"
@@ -642,23 +642,23 @@ midIRToC m = "#include <stdio.h>\n#include <stdlib.h>\n"
                                    _ -> map Just (tail visited) ++ [Nothing]
                     entryBlock = lookupLabel graph entry
                     args = extractArgs entryBlock
-                    argString = intercalate ", " (map (("int " ++) . showC) args)
+                    argString = intercalate ", " (map (("long " ++) . showC) args)
                     varSet = foldl1 S.union $ map (variablesUsed . lookupLabel graph) visited
                     vars = S.toList (S.difference varSet $ S.fromList args)
                     varString :: String
                     varString = 
                         case vars of
                             [] -> "  // no locals"
-                            _ -> printf "  int %s;" (intercalate ", " (map showC vars))
+                            _ -> printf "  long %s;" (intercalate ", " (map showC vars))
                     instString = (intercalate "\n" $ intercalate [""] $ map (labelToC graph) (zip visited nvisited))
-                    returnType = "int"
+                    returnType = "long"
                     cName
                         | name == "method_main" = "main"
                         | otherwise = name
           showMethods methods = "/* begin methods */\n" 
                                 ++ (intercalate "\n\n" $ map showMethod methods)
           showField (I.MidIRField pos name msize)
-              = "int " ++ name ++ (showSize msize) ++ ";\n"
+              = "long " ++ name ++ (showSize msize) ++ ";\n"
           showSize (Just n) = printf "[%s]" (show n)
           showSize (Nothing) = "[1]"
           showFields fields = "/* begin fields */\n" 
