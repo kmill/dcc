@@ -530,6 +530,8 @@ lowIRToGraphViz m = "digraph name {\n"
 --- Map everything to C
 class ShowC a where
     showC :: a -> String
+    showsC :: a -> ShowS
+    showsC = showString . showC
 
 instance ShowC Label where
     showC lbl = "label_" ++ (show lbl)
@@ -537,13 +539,17 @@ instance ShowC Label where
 instance ShowC VarName where
     showC (I.MV s) = tail s
 
+instance ShowC I.UnOp where
+    showC I.OpNeg = "-"
+    showC I.OpNot = "!"
+
 data ExprWrap v = EW (I.Expr v)
 instance (ShowC v) => Show (ExprWrap v) where
     showsPrec _ (EW (I.Lit pos x)) = shows x
     showsPrec _ (EW (I.LitLabel pos lab)) = showString "(int64_t)" . showString lab
-    showsPrec _ (EW (I.Var pos v)) = showString $ showC v
+    showsPrec _ (EW (I.Var pos v)) = showsC v
     showsPrec _ (EW (I.Load pos expr)) = showString "*(int64_t *)(" . showsPrec 0 (EW expr) . showString ")"
-    showsPrec p (EW (I.UnOp pos op expr)) = showParen (p>0) (shows op . showString " " . showsPrec 1 (EW expr))
+    showsPrec p (EW (I.UnOp pos op expr)) = showParen (p>0) (showsC op . showString " " . showsPrec 1 (EW expr))
     showsPrec p (EW (I.BinOp pos op ex1 ex2))
         = showParen (p>0) (showsPrec 1 (EW ex1) . showString " " . shows op . showString " " . showsPrec 1 (EW ex2))
     showsPrec p (EW (I.Cond pos exc ex1 ex2))
