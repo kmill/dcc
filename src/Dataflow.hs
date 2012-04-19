@@ -67,46 +67,32 @@ instance FuelMonadT StupidFuelMonadT where
 
 ---
 
+data DFA = DFA
+    { dfaOptCheck :: OptFlags -> Bool
+    , dfaPerform :: MidIRRepr -> RM MidIRRepr }
+
+individualAnalysis :: OptFlags -> DFA -> MidIRRepr -> RM MidIRRepr
+individualAnalysis opts (DFA optCheck perform) midir
+    = if optCheck opts then perform midir else return midir
+
+dataflows :: [DFA]
+dataflows
+    = [ DFA optConstProp performConstPropPass
+      -- , DFA optNZP performNZPPass
+      , DFA optTailcall performTailcallPass
+      , DFA optDeadCode performDeadCodePass
+      , DFA optBlockElim performBlockElimPass
+      , DFA (\opts -> optCommonSubElim opts || optFlat opts) performFlattenPass
+      , DFA optCommonSubElim performCSEPass
+      , DFA optCopyProp performCopyPropPass
+      , DFA optTailcall performTailcallPass
+      -- , DFA optNZP performNZPPass
+      , DFA optDeadCode performDeadCodePass
+      , DFA optBlockElim performBlockElimPass ]
 
 performDataflowAnalysis :: OptFlags -> MidIRRepr -> RM MidIRRepr 
-performDataflowAnalysis opts midir = do 
-  midir <- if optConstProp opts 
-           then performConstPropPass midir 
-           else return midir
---  midir <- if optNZP opts
---           then performNZPPass midir
---           else return midir
-  midir <- if optTailcall opts 
-           then performTailcallPass midir 
-           else return midir
-  midir <- if optDeadCode opts 
-           then performDeadCodePass midir 
-           else return midir
-  midir <- if optBlockElim opts
-           then performBlockElimPass midir 
-           else return midir
-  midir <- if (optCommonSubElim opts || optFlat opts)
-           then performFlattenPass midir 
-           else return midir
-  midir <- if optCommonSubElim opts
-           then performCSEPass midir 
-           else return midir
-  midir <- if optCopyProp opts
-           then performCopyPropPass midir 
-           else return midir
-  midir <- if optTailcall opts 
-           then performTailcallPass midir 
-           else return midir
---  midir <- if optNZP opts
---           then performNZPPass midir
---           else return midir
-  midir <- if optDeadCode opts
-           then performDeadCodePass midir
-           else return midir
-  midir <- if optBlockElim opts
-           then performBlockElimPass midir 
-           else return midir
-  return midir
+performDataflowAnalysis opts midir
+    = foldl (>>=) (return midir) (map (individualAnalysis opts) dataflows)
 
 performConstPropPass midir = performFwdPass constPropPass midir emptyFact
 performCopyPropPass midir = performFwdPass copyPropPass midir emptyCopyFact
