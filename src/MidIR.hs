@@ -285,26 +285,22 @@ handleBinaryOp env pos opstr expr1 expr2
       where orExpr = do t <- genTmpVar
                         (gex1, ex1) <- expressionToMidIR env expr1
                         (gex2, ex2) <- expressionToMidIR env expr2
-                        [ifex2l, iffalsel, donel] <- replicateM 3 freshLabel
-                        let g = ((mkMiddle $ Store pos t (Lit pos bTrue))
-                                 <*> gex1 <*> (mkLast $ CondBranch pos ex1 donel ifex2l))
-                              |*><*| (mkFirst (Label pos ifex2l) <*> gex2
-                                      <*> (mkLast $ CondBranch pos ex2 donel iffalsel))
-                              |*><*| (mkFirst (Label pos iffalsel)
-                                      <*> (mkMiddle $ Store pos t (Lit pos bFalse))
+                        [iffalsel, donel] <- replicateM 2 freshLabel
+                        let g = (gex1 <*> (mkMiddle $ Store pos t ex1)
+                                 <*> (mkLast $ CondBranch pos (Var pos t) donel iffalsel))
+                              |*><*| (mkFirst (Label pos iffalsel) <*> gex2
+                                      <*> (mkMiddle $ Store pos t ex2)
                                       <*> (mkLast $ Branch pos donel))
                               |*><*| mkFirst (Label pos donel)
                         return (g, Var pos t)
             andExpr = do t <- genTmpVar
                          (gex1, ex1) <- expressionToMidIR env expr1
                          (gex2, ex2) <- expressionToMidIR env expr2
-                         [ifex2l, iftruel, donel] <- replicateM 3 freshLabel
-                         let g = ((mkMiddle $ Store pos t (Lit pos bFalse))
-                                  <*> gex1 <*> (mkLast $ CondBranch pos ex1 ifex2l donel))
-                               |*><*| (mkFirst (Label pos ifex2l) <*> gex2
-                                       <*> (mkLast $ CondBranch pos ex2 iftruel donel))
-                               |*><*| (mkFirst (Label pos iftruel)
-                                       <*> (mkMiddle $ Store pos t (Lit pos bTrue))
+                         [iftruel, donel] <- replicateM 2 freshLabel
+                         let g = (gex1 <*> (mkMiddle $ Store pos t ex1)
+                                  <*> (mkLast $ CondBranch pos (Var pos t) iftruel donel))
+                               |*><*| (mkFirst (Label pos iftruel) <*> gex2
+                                       <*> (mkMiddle $ Store pos t ex2)
                                        <*> (mkLast $ Branch pos donel))
                                |*><*| mkFirst (Label pos donel)
                          return (g, Var pos t)
@@ -393,56 +389,3 @@ expressionToMidIR env (HExprMethod _ _ call)
                       = (\e -> (GNil, LitLabel pos e)) `fmap` genStr pos (tokenString s)
                   evalArg (HCArgExpr _ ex)
                       = expressionToMidIR env ex
-
----
---- Show MidIRRepr!
----
-
--- instance Show MidIRRepr where
---   show = render . pp
-
-
-
--- instance PP MidIRRepr where
---     pp m = text "MidIR"
---            $+$ (nest 3 ((text "fields" $+$ (nest 3 fields))
---                         $+$ (text "methods" $+$ (nest 3 methods))))
---       where fields = vcat (map showField $ midIRFields m)
---             showField (MidIRField pos s Nothing)
---                 = text s
---                   <+> text ("{" ++ show pos ++ "}")
---             showField (MidIRField pos s (Just l))
---               = text s
---                 <+> text ("[" ++ show l ++ "]")
---                 <+> text ("{" ++ show pos ++ "}")
---             methods = vcat [pp m | m <- midIRMethods m]
-
--- instance PP MidIRMethod where
---     pp (MidIRMethod pos retp name args ir)
---         = text ("{" ++ show pos ++ "}")
---            $+$ (if retp then text "ret" else text "void") <+> text name
---            <+> parens (hsep $ punctuate comma [text a | a <- args])
---            $+$ (text $ "start = " ++ show (startVertex ir))
---            $+$ (nest 3 (vcat [showVertex v | v <- labels ir]))
---         where showVertex (i,bb) = text (show i)
---                                    <+> (nest 3 (pp bb))
---                                    $+$ (nest 5 (vcat (map showEdge outedges)))
---                   where outedges = adjEdges ir i
---                         showEdge (b,y) = text (show b ++ " -> " ++ show y)
-                        
-
--- midIRToGraphViz m = "digraph name {\n"
---                     ++ (showFields (midIRFields m))
---                     ++ (concatMap showMethod (midIRMethods m))
---                     ++ "}"
---   where showMethod (MidIRMethod pos retp name args g)
---             = graphToGraphVizSubgraph g (name ++ "_")
---               (name ++ " [shape=doubleoctagon,label="++show mlabel++"];\n"
---               ++ name ++ " -> " ++ name ++ "_" ++ show (startVertex g) ++ ";\n")
---             where mlabel = (if retp then "ret " else "void ")
---                            ++ name ++ " (" ++ intercalate ", " args ++ ")"
---         showField (MidIRField pos name msize)
---             = "{" ++ name ++ "|" ++ fromMaybe "val" (msize >>= return . show) ++ "}"
---         showFields fields = "_fields_ [shape=record,label=\"fields|{"
---                             ++ intercalate "|" (map showField fields)
---                             ++ "}\"];\n"
