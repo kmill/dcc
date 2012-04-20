@@ -249,11 +249,11 @@ statementToMidIR fname env c b (HAssignSt senv pos loc op expr)
                               A.DecAssign -> BinOp pos OpSub (Load pos (arrptr i')) ex
                   [checkhighl, okl, faill] <- replicateM 3 freshLabel
                   return $ ((mkMiddle $ Store pos i' i)
-                            <*> (mkLast $ CondBranch pos (BinOp pos CmpGTE (Var pos i') (Lit pos 0))
-                                             checkhighl faill))
+                            <*> (mkLast $ CondBranch pos (BinOp pos CmpLT (Var pos i') (Lit pos 0))
+                                             faill checkhighl))
                       |*><*| (mkFirst (Label pos checkhighl)
-                              <*> (mkLast $ CondBranch pos (BinOp pos CmpLT (Var pos i') (Lit pos len))
-                                               okl faill))
+                              <*> (mkLast $ CondBranch pos (BinOp pos CmpGTE (Var pos i') (Lit pos len))
+                                               faill okl))
                       |*><*| (mkFirst (Label pos faill)
                               <*> (mkMiddle $ Callout pos deadv "printf" [LitLabel pos errl]) -- maybe stderr?
                               <*> (mkLast $ Fail pos))
@@ -360,11 +360,11 @@ expressionToMidIR env (HLoadLoc senv pos loc)
                   errl <- genStr pos $ "Array index out of bounds at " ++ show pos ++ "\n"
                   [checkhighl, okl, faill] <- replicateM 3 freshLabel
                   let g = ((mkMiddle $ Store pos i' i)
-                           <*> (mkLast $ CondBranch pos (BinOp pos CmpGTE (Var pos i') (Lit pos 0))
-                                            checkhighl faill))
+                           <*> (mkLast $ CondBranch pos (BinOp pos CmpLT (Var pos i') (Lit pos 0))
+                                            faill checkhighl))
                         |*><*| (mkFirst (Label pos checkhighl)
-                                <*> (mkLast $ CondBranch pos (BinOp pos CmpLT (Var pos i') (Lit pos len))
-                                                 okl faill))
+                                <*> (mkLast $ CondBranch pos (BinOp pos CmpGTE (Var pos i') (Lit pos len))
+                                                 faill okl))
                         |*><*| (mkFirst (Label pos faill)
                                 <*> (mkMiddle $ Callout pos deadv "printf" [LitLabel pos errl]) -- maybe stderr?
                                 <*> (mkLast $ Fail pos))

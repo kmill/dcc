@@ -241,6 +241,7 @@ mapRR f a@(JCond{}) = a
 mapRR f (ALU_IRMtoR p op irm r) = ALU_IRMtoR p op (map_IRM f irm) (f r)
 mapRR f (ALU_IRtoM p op ir m) = ALU_IRtoM p op (map_IR f ir) (map_M f m)
 mapRR f (Cmp p ir rm) = Cmp p (map_IR f ir) (map_RM f rm)
+mapRR f (Test p ir rm) = Test p (map_IR f ir) (map_RM f rm)
 mapRR f (Inc p rm) = Inc p (map_RM f rm)
 mapRR f (Dec p rm) = Dec p (map_RM f rm)
 mapRR f (Neg p rm) = Neg p (map_RM f rm)
@@ -285,6 +286,7 @@ getAliveDead expr
         ALU_IRMtoR _ _ irm r -> getRSrc irm <+> getRSrc r <+> getRDst r
         ALU_IRtoM _ _ ir m -> getRSrc ir <+> getRSrc m <+> getRDst m
         Cmp _ ir rm -> getRSrc ir <+> getRSrc rm
+        Test _ ir rm -> getRSrc ir <+> getRSrc rm
         Inc _ rm -> getRSrc rm <+> getRDst rm
         Dec _ rm -> getRSrc rm <+> getRDst rm
         Neg _ rm -> getRSrc rm <+> getRDst rm

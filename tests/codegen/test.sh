@@ -1,5 +1,6 @@
 #!/bin/sh
 
+domidirc=0
 optstring="--opt=all"
 
 base=`dirname $0`
@@ -43,6 +44,7 @@ for file in `find $base -iname '*.dcf'`; do
   output=""
   asm=`tempfile --suffix=.s`
   msg=""
+  cmsg=""
   desired="blargle this shouldn't match anything"
   if runcompiler $file $asm; then
     binary=`tempfile`
@@ -89,59 +91,61 @@ for file in `find $base -iname '*.dcf'`; do
     echo $msg
   fi
 
-  ccode=`tempfile`
-  if runcompilertoc $file $ccode; then
-    cbinary=`tempfile`
-    gccerrs=`tempfile`
-    gcccmd="gcc -x c -o $cbinary $ccode $lib"
-    if $gcccmd 2>$gccerrs; then
-      coutput=`tempfile`
-      input=`tempfile`
-      grep '//<' $file | sed -E 's@^//< ?@@' > $input
+  if [ "$domidirc" -ne 0 ]; then
+      ccode=`tempfile`
+      if runcompilertoc $file $ccode; then
+	  cbinary=`tempfile`
+	  gccerrs=`tempfile`
+	  gcccmd="gcc -x c -o $cbinary $ccode $lib"
+	  if $gcccmd 2>$gccerrs; then
+	      coutput=`tempfile`
+	      input=`tempfile`
+	      grep '//<' $file | sed -E 's@^//< ?@@' > $input
+	      
+	      if $cbinary < $input > $coutput 2>&1; then
+		  ret=""
+	      else
+		  ret="fail"
+	      fi
+	      if grep '//!' $file > /dev/null; then
+		  if [ -z "$ret" ]; then
+		      cmsg="Program should have failed.";
+		  else
+		      cmsg=""
+		  fi
+	      else
+		  if [ -z "$ret" ]; then
+		      desired=`tempfile`
+		      grep '//>' $file | sed -E 's@^//> ?@@' > $desired
+		      diffout=`tempfile`
+		      if ! diff -u $coutput $desired > $diffout; then
+			  cmsg="File output mismatch.";
+		      else
+			  cmsg=""
+		      fi
+		  else
+		      cmsg="Program failed to run.";
+		  fi
+	      fi
+	  else
+	      cmsg="Couldn't run gcc. ($gcccmd)"
+	  fi
+      else
+	  cmsg="Couldn't compile to C."
+      fi
       
-      if $cbinary < $input > $coutput 2>&1; then
-        ret=""
-      else
-        ret="fail"
+      if [ ! -z "$cmsg" ]; then
+	  echo "Compilation via C failed on $file:"
+	  if [ ! -z "$diffout" ]; then
+	      cat $diffout
+	  elif [ ! -z "$coutput" ]; then
+	      cat $coutput
+	  fi
+	  if [ ! -z "$gccerrs" ]; then
+	      cat $gccerrs | grep -v "warning:" | grep -v "note:" | (while read x; do echo "    $x"; done)
+	  fi
+	  echo "  $cmsg"
       fi
-      if grep '//!' $file > /dev/null; then
-        if [ -z "$ret" ]; then
-          cmsg="Program should have failed.";
-        else
-          cmsg=""
-        fi
-      else
-        if [ -z "$ret" ]; then
-           desired=`tempfile`
-           grep '//>' $file | sed -E 's@^//> ?@@' > $desired
-           diffout=`tempfile`
-           if ! diff -u $coutput $desired > $diffout; then
-             cmsg="File output mismatch.";
-           else
-             cmsg=""
-           fi
-        else
-          cmsg="Program failed to run.";
-        fi
-      fi
-    else
-      cmsg="Couldn't run gcc. ($gcccmd)"
-    fi
-  else
-    cmsg="Couldn't compile to C."
-  fi
-  
-  if [ ! -z "$cmsg" ]; then
-    echo "Compilation via C failed on $file:"
-    if [ ! -z "$diffout" ]; then
-      cat $diffout
-    elif [ ! -z "$coutput" ]; then
-      cat $coutput
-    fi
-    if [ ! -z "$gccerrs" ]; then
-      cat $gccerrs | grep -v "warning:" | grep -v "note:" | (while read x; do echo "    $x"; done)
-    fi
-    echo "  $cmsg"
   fi
 
   rm -f $output $input $binary $asm $coutput $cbinary $ccode

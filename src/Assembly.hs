@@ -270,6 +270,7 @@ data Asm e x where
   ALU_IRMtoR :: SourcePos -> ALUOp -> OperIRM -> Reg -> Asm O O
   ALU_IRtoM :: SourcePos -> ALUOp -> OperIR -> MemAddr -> Asm O O
   Cmp :: SourcePos -> OperIR -> OperRM -> Asm O O
+  Test :: SourcePos -> OperIR -> OperRM -> Asm O O
 
   Inc :: SourcePos -> OperRM -> Asm O O
   Dec :: SourcePos -> OperRM -> Asm O O
@@ -362,6 +363,7 @@ instance Show (Asm e x) where
   show (ALU_IRMtoR pos op a b) = showBinOp ((show op) ++ "q") pos a b
   show (ALU_IRtoM pos op a b) = showBinOp ((show op) ++ "q") pos a b
   show (Cmp pos a b) = showBinOp "cmpq" pos a b
+  show (Test pos a b) = showBinOp "testq" pos a b
 
   show (Inc pos oper) = showUnOp "incq" pos oper
   show (Dec pos oper) = showUnOp "decq" pos oper

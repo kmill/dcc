@@ -62,7 +62,7 @@ instance Monad CGM where
     ma >>= f = CGM $ do as <- rCGM ma
                         as' <- sequence (map (rCGM . f) as)
                         return $ concat as'
-    fail _ = mzero
+    fail msg = mzero
 
 instance Functor CGM where
     fmap f ma = do a <- ma
@@ -227,6 +227,7 @@ expToI e = mcut $ msum rules
 expToR :: MidIRExpr -> CGM (Graph A.Asm O O, A.Reg)
 expToR e = mcut $ msum rules
     where
+      msum' rs = msum [trace (". " ++ show e) r | r <- rs]
       rules = [ -- Rules for putting the value of the expression into
                 -- a register
         
@@ -236,12 +237,11 @@ expToR e = mcut $ msum rules
                    return ( mkMiddle $ A.ALU_IRMtoR pos A.Xor
                                          (A.IRM_R $ dr) dr
                           , dr )
-              , do I.Lit pos i <- withNode e
-                   guard $ checkIf32Bit i
+                -- Put literal into register
+              , do i <- expToI e
                    dr <- genTmpReg
-                   let src = A.Imm32 $ fromIntegral i
-                   return ( mkMiddle $ A.mov pos src dr
-                          , dr )
+                   return (mkMiddle $ A.mov noPosition i dr, dr)
+                -- Put a 64-bit literal into register
               , do I.Lit pos i <- withNode e
                    dr <- genTmpReg
                    return ( mkMiddle $ A.Mov64toR pos (A.Imm64 i) dr
@@ -288,20 +288,35 @@ expToR e = mcut $ msum rules
                             <*> gb
                             <*> mkMiddle (A.ALU_IRMtoR pos op' b dr)
                           , dr )
+--               , do I.BinOp pos op expa expb <- withNode e
+--                    guard $ op `elem` [ I.CmpLT, I.CmpGT, I.CmpLTE
+--                                      , I.CmpGTE, I.CmpEQ, I.CmpNEQ ]
+--                    let flag = cmpToFlag op
+--                    (gb, b) <- expToIR expb
+--                    (ga, a) <- expToRM expa
+--                    dr <- genTmpReg
+--                    true <- genTmpReg
+--                    return ( ga <*> gb
+--                             <*> mkMiddle (A.mov pos (A.Imm32 $
+--                                                       fromIntegral I.bTrue) true)
+--                             <*> mkMiddle (A.mov pos (A.Imm32 $
+--                                                       fromIntegral I.bFalse) dr)
+--                             <*> mkMiddle (A.Cmp pos b a)
+--                             <*> mkMiddle (A.CMovRMtoR pos flag
+--                                            (A.RM_R $ true) dr)
+--                           , dr )
+
               , do I.BinOp pos op expa expb <- withNode e
                    guard $ op `elem` [ I.CmpLT, I.CmpGT, I.CmpLTE
                                      , I.CmpGTE, I.CmpEQ, I.CmpNEQ ]
-                   let flag = cmpToFlag op
-                   (gb, b) <- expToIR expb
-                   (ga, a) <- expToRM expa
+                   (gflag, flag) <- cmpBinOpToFlag e
                    dr <- genTmpReg
                    true <- genTmpReg
-                   return ( ga <*> gb
-                            <*> mkMiddle (A.mov pos (A.Imm32 $
-                                                      fromIntegral I.bTrue) true)
+                   return ( mkMiddle (A.mov pos (A.Imm32 $
+                                                  fromIntegral I.bTrue) true)
                             <*> mkMiddle (A.mov pos (A.Imm32 $
                                                       fromIntegral I.bFalse) dr)
-                            <*> mkMiddle (A.Cmp pos b a)
+                            <*> gflag
                             <*> mkMiddle (A.CMovRMtoR pos flag
                                            (A.RM_R $ true) dr)
                           , dr )
@@ -334,26 +349,6 @@ expToR e = mcut $ msum rules
                             <*> mkMiddle (A.MovIRMtoR pos a dr)
                             <*> mkMiddle (A.IMulRM pos b dr)
                           , dr )
-              -- , do I.BinOp pos I.OpDiv expa expb <- withNode e
-              --      (ga, a) <- expToIRM expa
-              --      (gb, b) <- expToRM expb
-              --      dr <- genTmpReg
-              --      return ( ga <*> gb
-              --               <*> mkMiddle (A.MovIRMtoR pos a (A.MReg A.RAX))
-              --               <*> mkMiddle (A.mov pos (A.Imm32 0) (A.MReg A.RDX))
-              --               <*> mkMiddle (A.IDiv pos b)
-              --               <*> mkMiddle (A.mov pos (A.MReg A.RAX) dr)
-              --             , dr )
-              -- , do I.BinOp pos I.OpMod expa expb <- withNode e
-              --      (ga, a) <- expToIRM expa
-              --      (gb, b) <- expToRM expb
-              --      dr <- genTmpReg
-              --      return ( ga <*> gb
-              --               <*> mkMiddle (A.MovIRMtoR pos a (A.MReg A.RAX))
-              --               <*> mkMiddle (A.mov pos (A.Imm32 0) (A.MReg A.RDX))
-              --               <*> mkMiddle (A.IDiv pos b)
-              --               <*> mkMiddle (A.mov pos (A.MReg A.RDX) dr)
-              --             , dr )
               , do I.Cond pos cexp texp fexp <- withNode e
                    (gflag, flag) <- expToFlag cexp
                    (gt, t) <- expToRM texp
@@ -389,7 +384,35 @@ expToM e = fail ("Mem not a load: " ++ show e)
 expToFlag :: MidIRExpr -> CGM (Graph A.Asm O O, A.Flag)
 expToFlag e = mcut $ msum rules
     where
-      rules = [ do I.BinOp pos op expa expb <- withNode e
+      rules = [ cmpBinOpToFlag e
+                --- Use testq to see if it's bTrue (which should be non-zero).
+              , do (g, r) <- expToRM e
+                   return ( g
+                            <*> mkMiddle (A.Test noPosition
+                                               (A.IR_I $ A.Imm32 $
+                                                 fromIntegral I.bTrue)
+                                               r)
+                          , A.FlagNZ )
+              ]
+
+cmpBinOpToFlag :: MidIRExpr -> CGM (Graph A.Asm O O, A.Flag)
+cmpBinOpToFlag e = mcut $ msum rules
+    where
+      rules = [ --- make equality to zero be testq
+                do I.BinOp pos I.CmpEQ expa expb <- withNode e
+                   I.Lit _ 0 <- withNode expb
+                   (ga, a) <- expToRM expa
+                   return ( ga <*> mkMiddle(A.Test pos
+                                            (A.IR_I $ A.Imm32 (-1)) a)
+                          , A.FlagZ )
+                --- make inequality to zero be testq
+              , do I.BinOp pos I.CmpNEQ expa expb <- withNode e
+                   I.Lit _ 0 <- withNode expb
+                   (ga, a) <- expToRM expa
+                   return ( ga <*> mkMiddle(A.Test pos
+                                            (A.IR_I $ A.Imm32 (-1)) a)
+                          , A.FlagNZ )--- by for binop comparisons, just use cmp
+              , do I.BinOp pos op expa expb <- withNode e
                    guard $ op `elem` [ I.CmpLT, I.CmpGT, I.CmpLTE
                                      , I.CmpGTE, I.CmpEQ, I.CmpNEQ ]
                    let flag = cmpToFlag op
@@ -398,15 +421,7 @@ expToFlag e = mcut $ msum rules
                    return ( ga <*> gb
                             <*> mkMiddle (A.Cmp pos b a)
                           , flag )
-              , do (g, r) <- expToRM e
-                   return ( g
-                            <*> mkMiddle (A.Cmp noPosition
-                                               (A.IR_I $ A.Imm32 $
-                                                 fromIntegral I.bFalse)
-                                               r)
-                          , A.FlagNE )
               ]
-
 
 cmpToFlag :: I.BinOp -> A.Flag
 cmpToFlag I.CmpLT = A.FlagL
