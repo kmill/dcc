@@ -208,7 +208,7 @@ statementToMidIR fname env c b (HBreakSt _ pos)
 -- | Continue
 statementToMidIR fname env c b (HContinueSt _ pos)
     = do dead <- freshLabel
-         return $ mkLast (Branch pos b) |*><*| mkFirst (Label pos dead)
+         return $ mkLast (Branch pos c) |*><*| mkFirst (Label pos dead)
 
 -- | Expression
 statementToMidIR fname env c b (HExprSt _ expr)

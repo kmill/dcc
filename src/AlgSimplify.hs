@@ -69,7 +69,7 @@ simpI e = case e of
                 do exprs' <- simpEMany exprs
                    return $ Callout pos v name exprs'
             CondBranch pos exp tl fl ->
-                do exp' <- simpE exp
+                do exp' <- simpES exp
                    case exp' of
                      Lit _ x ->
                          return $ Branch pos
