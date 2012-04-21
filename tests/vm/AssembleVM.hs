@@ -44,6 +44,7 @@ mnemonics = [ ("lit", 1)
             , ("load", 41)
             , ("print", 50)
             , ("input", 51)
+            , ("debug", 2222)
             ]
 
 data Assembled = Word Int
@@ -80,7 +81,18 @@ data Token = Label SourcePos String
              
 alabel :: Scanner Token
 alabel = Label <$> getPosition
-         <*> try (many alphaNum <* char ':')
+         <*> try (many validchar <* char ':')
+  where validchar = letter <|> char '_' <|> digit  <?> "alphanumeric"
+
+alit :: Scanner Token
+alit = Symbol <$> getPosition
+       <*> ("lit" <$ char '$')
+acall :: Scanner Token
+acall = Symbol <$> getPosition
+       <*> ("call" <$ char '@')
+        
+shorthand = alit <|> acall
+
 anumber :: Scanner Token
 anumber = Number <$> getPosition
           <*> (read <$> many1 digit)
@@ -88,7 +100,7 @@ asymbol :: Scanner Token
 asymbol = Symbol <$> getPosition
           <*> (many1 alphaNum <* notFollowedBy alphaNum)
          
-atoken = alabel <|> anumber <|> asymbol
+atoken = shorthand <|> alabel <|> anumber <|> asymbol
 
 ascanner :: Scanner [Token]
 ascanner = do whitespace

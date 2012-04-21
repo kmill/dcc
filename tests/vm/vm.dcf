@@ -104,11 +104,13 @@ class Program {
   }
   int run() {
     int pc;
+    boolean debug;
+    debug = false;
     pc = 0;
     while(true) {
       int opcode;
       opcode = code[pc];
-      if(false) {
+      if(debug) {
         callout("printf", "\npc=%d, opcode=%d\n", pc, opcode);
 	dump_code(pc, 3);
 	dump_stacks();
@@ -222,6 +224,10 @@ class Program {
       if(opcode == 51) { // input tos
 	callout("printf", "input: ");
 	push(callout("get_int"));
+	continue;
+      }
+      if(opcode == 2222) { // debug
+	debug = true;
 	continue;
       }
       

@@ -1,10 +1,9 @@
 main:
-  lit 5
-  call fact
-  call square
-  lit 120 lit 120 mul
-  sub eqz
+  $5 @fact @square
+  $120 $120 mul
+  sub eqz // check if equal, should print 1
   print
+  $10 @fib print
   exit
 
 square:
@@ -12,6 +11,15 @@ square:
 
 fact:
   dup jnz factNZero
-  drop lit 1 ret
+  drop $1 ret
 factNZero:
-  dup lit 1 sub call fact mul ret
+  dup $1 sub @fact mul ret
+
+fib:
+  dup $2 lt jnz fibSmall
+fibRec:
+  dup $1 sub @fib
+  swap $2 sub @fib
+  add ret
+fibSmall:
+  drop $1 ret
