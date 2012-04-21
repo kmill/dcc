@@ -1,0 +1,241 @@
+// Bootloader is 1) input number of words, to 2) sequentially the words.
+//
+// vm opcodes:
+// 1: push literal
+// 2: negate TOS
+// 3: test if zero (equivalent to "not")
+// 4-11: add/sub/mul/div/mod/</and/or TOS with NOS
+// 20: jmp
+// 21: jump if TOS is not zero
+// 22: call
+// 23: return
+// 24: exit
+// 30: drop TOS
+// 31: swap TOS with NOS
+// 32: dup TOS
+// 40: store NOS to address TOS
+// 41: load from address
+// 50: print tos
+// 51: input integer to tos
+
+class Program {
+  int stack[128];
+  int sp;
+  int rstack[128];
+  int rsp;
+  int code[1024];
+  
+  void init_stacks() {
+    sp = -1;
+    rsp = -1;
+  }
+  void push(int x) {
+    sp += 1;
+    stack[sp] = x;
+  }
+  int peek() {
+    return stack[sp];
+  }
+  int pop() {
+    int x;
+    x = stack[sp];
+    sp -= 1;
+    return x;
+  }
+  void rpush(int x) {
+    rsp += 1;
+    rstack[rsp] = x;
+  }
+  int rpop() {
+    int x;
+    x = rstack[rsp];
+    rsp -= 1;
+    return x;
+  }
+  void dump_stacks() {
+    callout("printf", "Stack:\n");
+    for(i=0; sp+1) {
+      callout("printf", " stack[%i] = %i\n", i, stack[i]);
+    }
+    callout("printf", "Return stack:\n");
+    for(i=0; rsp+1) {
+      callout("printf", " rstack[%i] = %i\n", i, stack[i]);
+    }
+  }
+  int min(int a, int b) {
+    if(a < b) {
+      return a;
+    } else {
+      return b;
+    }
+  }
+  int max(int a, int b) {
+    if(a < b) {
+      return b;
+    } else {
+      return a;
+    }
+  }
+  void dump_code(int pc, int window) {
+    for(i=max(0, pc-window); min(1024, pc+window)) {
+      if(pc == i) {
+	callout("printf", "--> code[%d] = %d;\n", i, code[i]);
+      } else {
+	callout("printf", "    code[%d] = %d;\n", i, code[i]);
+      }
+    }
+  }
+  void load_code() {
+    int numops;
+    numops = callout("get_int");
+    for(i=0; numops) {
+      code[i] = callout("get_int");
+    }
+  }
+  boolean int_to_bool(int x) {
+    return x != 0;
+  }
+  int bool_to_int(boolean x) {
+    if(x) {
+      return 1;
+    } else {
+      return 0;
+    }
+  }
+  int run() {
+    int pc;
+    pc = 0;
+    while(true) {
+      int opcode;
+      opcode = code[pc];
+      if(false) {
+        callout("printf", "\npc=%d, opcode=%d\n", pc, opcode);
+	dump_code(pc, 3);
+	dump_stacks();
+      }
+      pc += 1;
+      if(opcode == 1) { // literal
+	push(code[pc]);
+	pc += 1;
+	continue;
+      }
+      if(opcode == 2) { // negate
+	push(-pop());
+	continue;
+      }
+      if(opcode == 3) { // test if zero
+	push(bool_to_int(pop() == 0));
+	continue;
+      }
+      if(opcode >= 4 && opcode <= 11) { // binary operators
+	int tos, nos;
+	tos = pop();
+	nos = pop();
+	// add/sub/mul/div/mod/</and/or TOS with NOS
+	if(opcode == 4) { // add
+	  push(nos + tos);
+	  continue;
+	}
+	if(opcode == 5) { // sub
+	  push(nos - tos);
+	  continue;
+	}
+	if(opcode == 6) { // mul
+	  push(nos * tos);
+	  continue;
+	}
+	if(opcode == 7) { // div
+	  push(nos / tos);
+	  continue;
+	}
+	if(opcode == 8) { // mod
+	  push(nos % tos);
+	  continue;
+	}
+	if(opcode == 9) { // <
+	  push(bool_to_int(nos < tos));
+	  continue;
+	}
+	if(opcode == 10) { // and
+	  push(bool_to_int(int_to_bool(nos) && int_to_bool(tos)));
+	  continue;
+	}
+	if(opcode == 11) { // or
+	  push(bool_to_int(int_to_bool(nos) || int_to_bool(tos)));
+	  continue;
+	}
+      }
+      if(opcode == 20) { // jmp
+	pc = code[pc];
+	continue;
+      }
+      if(opcode == 21) { // jmp if not zero
+	if(pop() != 0) {
+	  pc = code[pc];
+	} else {
+	  pc += 1;
+	}
+	continue;
+      }
+      if(opcode == 22) { // call
+	rpush(pc + 1);
+	pc = code[pc];
+	continue;
+      }
+      if(opcode == 23) { // return
+	pc = rpop();
+	continue;
+      }
+      if(opcode == 24) { // exit
+	return 0;
+      }
+      if(opcode == 30) { // drop
+        pop();
+	continue;
+      }
+      if(opcode == 31) { // swap
+	int tos, nos;
+	tos = pop(); nos = pop();
+	push(tos); push(nos);
+	continue;
+      }
+      if(opcode == 32) { // dup
+	push(peek());
+	continue;
+      }
+      if(opcode == 40) { // store NOS to address TOS
+	int val, addr;
+	addr = pop();
+	val = pop();
+	code[addr] = val;
+	continue;
+      }
+      if(opcode == 41) { // load from address
+	push(code[pop()]);
+	continue;
+      }
+      if(opcode == 50) { // print tos
+	//	callout("printf", "print: %d (pc=%d)\n", pop(), pc);
+	callout("printf", "print: %d\n", pop());
+	continue;
+      }
+      if(opcode == 51) { // input tos
+	callout("printf", "input: ");
+	push(callout("get_int"));
+	continue;
+      }
+      
+      callout("printf", "Unknown opcode %d at %d\n", opcode, pc-1);
+      dump_stacks();
+      dump_code(pc-1, 10);
+      return -1;
+    }
+  }
+  void main() {
+    init_stacks();
+    load_code();
+    if(run() != 0) {
+      callout("printf", "Exited with failure.");
+    }
+  }
+}

@@ -1,0 +1,17 @@
+main:
+  lit 5
+  call fact
+  call square
+  lit 120 lit 120 mul
+  sub eqz
+  print
+  exit
+
+square:
+  dup mul ret
+
+fact:
+  dup jnz factNZero
+  drop lit 1 ret
+factNZero:
+  dup lit 1 sub call fact mul ret
