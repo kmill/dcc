@@ -23,7 +23,8 @@ Optimizations (Section~\ref{sec:peephole}).
 
 Our test plan (Section~\ref{sec:test}) is designed to test for correctness on many levels and
 to provide us with useful information about the effectiveness of our
-optimizations. 
+optimizations. Finally, the order in which we perform these
+optimizations is discussed in Section~\ref{sec:order}.
 
 \section {Division of Work}
 
@@ -36,6 +37,22 @@ Loop-Invariant Code Motion and be in charge of the test system.
 
 \section {Register Allocator}
 \label{sec:register}
+
+Register allocation is the most important optimization we hope to
+implement for our optimized compiler. Fortunately, it is a very
+well-defined and well-documented problem, so we plan to make use of
+extensive materials while implementing a standard solution. 
+
+The current plan for our register allocator, which operates at nearly
+the lowest level of our compiler, is to implement the
+algorithm as described by Muchnick in the register allocation
+section. The final register allocator will be a combination of
+liveness analysis and graph coloring with a set of heuristics to
+approximate the optimal solution to the graph coloring problem. 
+
+We expect to see the code generator output 20-25\% fewer instructions
+then it currently does, the largest speedup by far. Most instructions
+currently are superfluous moves to and from the stack.
 
 \section {Loop Parallelizer}
 \label{sec:parallel}
@@ -60,9 +77,12 @@ with instructions to parallelize. The code generator will then
 systematically create code to generate extra threads of execution upon encountering
 these annotations.
 
+To find the loops in our mid-ir, we can make use of our dataflow
+framework from the previous project to do ``Dominator Analysis''. 
+
 Since Loop parallelization can be quite tricky, our initial design
 only focuses on a select subset of parallelizable loops. For example,
-our initial design only targets for loops and then only parallelizes
+our initial design only parallelizes
 loops whose iterations are \textbf{completely independent} of each
 other in terms of data used. Such a design hopes to minimize the
 number of locks used and avoid complexity such as message passing in
@@ -148,6 +168,29 @@ while the mid-ir is returned to tree-form.
 \section {Algebraic Simplification}
 \label{sec:algebra}
 
+Algebraic Simplification is the process of simplifying basic algebraic
+identities (such as \begin{verbatim}x := y * 1 \end{verbatim}) to
+produce simpler code. 
+
+Our algebraic simplifier is a basic extension of the constant
+propagator we produced as part of the previous project. We make use of
+Hoopl's graph rewrite functionality to check a given expression
+against a series of simplification rules we define in a separate
+module. Our rules are defined by a DSL and we require a valid
+justification for each rule since some rules can have unintended
+consequences (such as attempting to negate the most negative
+integer). 
+
+To avoid producing incorrect code as a result of algebraic
+simplification, we plan to change the mid-ir so that ``Division
+Operations'' (which include both divides and mods) are instructions
+separate from ``pure'' expressions. The reason for this is that
+division operations are capable of producing side-effects in the form
+of divide by zero exceptions, so our algebraic simplifier is safer
+when it only operates on ``pure'' expressions. 
+
+
+
 \section {Loop Invariant Code Motion}
 \label{sec:codehoist}
 
@@ -173,5 +216,53 @@ our case is a VM for a very simple stack-based programming language.
 
 \subsection {Large ``Real'' Decaf Program}
 
+
+\section {Ordering of Optimizations} 
+\label{sec:order}
+
+The order of the optimizations is important for their
+effectiveness. The general order of our optimizations, which we derived
+in part from Muchnick, is as follows: 
+
+\begin{enumerate}
+
+\item Constant Propagation immediately followed by Algebraic
+  Simplification 
+
+\item Initial Tail Call Optimizations 
+
+\item Elimination of superfluous blocks 
+
+\item Global CSE (with flattening of the mid-ir)
+
+\item Global Copy Propagation
+
+\item Dead Code Elimination
+
+\item Unflattening of the mid-ir 
+
+\item Dead Code Elimination again to remove anything missed by the
+  unflattener 
+
+\item Loop Invariant Code Motion
+
+\item Another Tail Call pass 
+
+\item Another Dead Code Elimination pass 
+
+\item Another Block elimination pass 
+
+\item Loop Parallelization
+
+\item Initial Peephole Optimizations including peephole instruction selection
+
+\item Register Allocation
+
+\item Peephole Optimizations again including more instruction selection
+
+\end{enumerate}
+
+\noindent It is our goal with this ordering to produce the best possible use of
+our individual optimizations. 
 
 \end{document}
