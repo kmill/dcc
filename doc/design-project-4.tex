@@ -11,25 +11,127 @@
 \section {Overview} 
 
 For the final optimization project of our compiler, we plan to split
-the work into 
+the work into several significant chunks of optimizations to make good
+use of the large size of our team. The two major optimizations we plan
+to implement include a Register Allocator (Section~\ref{sec:register}) and a Loop
+Parallelizer (Section~\ref{sec:parallel}). Smaller optimizations we plan to implement include
+Loop-Invariant Code Motion (Section~\ref{sec:codehoist}), Algebraic
+Simplification (Section~\ref{sec:algebra}), an Expression
+Unflattener (Section~\ref{sec:unflatten}), and a variety of Peephole
+Optimizations (Section~\ref{sec:peephole}). 
+
+Our test plan (Section~\ref{sec:test}) is designed to test for correctness on many levels and
+to provide us with useful information about the effectiveness of our
+optimizations. 
 
 \section {Division of Work}
 
-\section {Register Allocator}
+Right now, our plan is to split the optimizations amongst ourselves as
+follows: Kyle Miller will design and implement the Register
+Allocator and Algebraic Simplifications. Alec Thomson will design and implement the Loop
+Parallelizer and the Expression Unflattener. Steven Valdez will design and implement the Peephole
+Optimizations. Finally, Patrick Hulin will design and implement
+Loop-Invariant Code Motion and be in charge of the test system. 
 
-\section {Parallelizer}
+\section {Register Allocator}
+\label{sec:register}
+
+\section {Loop Parallelizer}
+\label{sec:parallel}
+
+\section {Expression Unflattener}
+\label{sec:unflatten}
+
+The Expression Unflattener is an optimization that returns the
+Control-Flow Graph to ``Tree-form'' after CSE is performed. As
+explained in our previous project writeup, the mid-ir is initially constructed
+in tree-form (where expressions are not flattened into simple unary
+and binary op forms) because the code generator can pattern match over
+expression trees to determine the best possible assembly
+instruction to use for certain expressions. Tree-form is particularly
+useful for memory addressing as the code generator can make use of
+complex x86 move instructions when possible.\\
+
+To perform CSE during the last project, the mid-ir had to first be
+``Flattened'' so that common subexpressions could be identified. For
+example, an expression such as 
+
+\begin{verbatim}
+x := i + (j * y)
+\end{verbatim} 
+
+\noindent would be flattened to 
+
+\begin{verbatim}
+t := j * y 
+x := i + t
+\end{verbatim}
+
+To make effective use of our code generator and to reap the full
+benefits of CSE, this flattened form of the mid-ir should be restored
+to tree-form while maintaining all of the benefits achieved by CSE. 
+
+To do so, our design first makes use of the liveness information
+provided by dead-code elimination to determine which variables are
+live at any given block in the mid-ir control flow graph. Once this
+information is obtained, unflattening can be performed at the block
+level.\\
+
+
+\noindent Each block is then re-written according to the following algorithm: 
+
+\begin{verbatim}
+UnflattenBlock(block):
+
+1. Determine the number of uses of each variable in this block 
+2. Determine the reaching definitions of each variable defined in this
+block
+3. For each variable of each expression in this block: 
+   1. If the variable is not live at any of this blocks successors 
+      AND the variable is only used once in this entire block 
+      (i.e. this is the only use)
+      AND the variable is mapped to a reaching definition from this block 
+   4. THEN replace the use of this variable with the expression from
+its reaching definition
+\end{verbatim}
+
+\noindent The UnflattenBlock function is run on the same block until that block
+reaches a fixed point. The general purpose of this algorithm is to
+discover variables that are ``temporary'' in a given block and to replace
+their uses with the expressions they were assigned to represent during
+the flattening phase. Since the algorithm doesn't consider a variable
+``temporary'' if it is used more than once (or if it is live in a
+successor of this block), the benefits of CSE should be preserved
+while the mid-ir is returned to tree-form. 
+
+
+\section {Algebraic Simplification}
+\label{sec:algebra}
 
 \section {Loop Invariant Code Motion}
+\label{sec:codehoist}
 
 \section {Peephole Optimizations and other Small Optimizations}
+\label{sec:peephole}
 
 \section {Test Plan}
+\label{sec:test}
+
+Our test plan consists of several redundant factors to increase the
+probability that we catch any errors with our compiler. First, our
+test suite includes a set of shell scripts that make use of every test
+we've written inside a certain ``testing directory''. We also plan to
+implement a ``Decaf to C'' compiler that produces valid C code from a
+valid decaf program and uses GCC to produce the expected
+output. Finally, to test correctness of our compiler even further, we
+also plan to implement a complex and ``Real'' decaf program, which in
+our case is a VM for a very simple stack-based programming language. 
+
+\subsection {Testing Scripts}
 
 \subsection {Decaf to C Converter} 
 
 \subsection {Large ``Real'' Decaf Program}
-
-\subsection {Testing Scripts}
 
 
 \end{document}
