@@ -1,0 +1,10 @@
+//!
+//Should output "*** RUNTIME ERROR ***: No return value from non-void
+// method "f" at "./falloff.dcf" (line 3, column 7)"
+class Program {
+  int f() {
+  }
+  void main() {
+    f();
+  }
+}
