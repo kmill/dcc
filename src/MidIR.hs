@@ -117,15 +117,20 @@ methodToMidIR env (HMethodDecl _ pos typ tok args st)
          graph <- statementToMidIR mname env' no no st
          startl <- freshLabel
          pl <- freshLabel
+         errl <- genStr pos $ "*** RUNTIME ERROR ***: No return value from non-void method "
+                 ++ show name ++ " at " ++ show pos' ++ "\n"
+         deadv <- genTmpVar
          let graph' = withBranch (mkFirst (Enter pos' startl args')) pos' pl
                       |*><*| mkFirst (PostEnter pos' pl)
                       <*> graph
-                      <*> mkLast (Return pos' mname defret)
+                      <*> defret deadv errl
          return (Method (tokenPos tok) mname startl pl, graph')
     where name = (tokenString tok)
-          defret = case typ of
-                     A.MethodVoid -> Nothing
-                     _ -> Just (Lit (tokenPos tok) 0)
+          defret deadv errl
+              = case typ of
+                  A.MethodVoid -> mkLast $ Return pos' mname Nothing
+                  _ -> (mkMiddle $ Callout pos deadv "printf" [LitLabel pos errl]) -- maybe stderr?
+                       <*> (mkLast $ Fail pos')
           pos' = tokenPos tok
           mname = ("method_" ++ name)
           no = error "continue/break used when converting to MidIR :-("
