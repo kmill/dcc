@@ -227,6 +227,7 @@ expToI e = mcut $ msum rules
 expToR :: MidIRExpr -> CGM (Graph A.Asm O O, A.Reg)
 expToR e = mcut $ msum rules
     where
+      msum' :: [CGM (Graph A.Asm O O, A.Reg)] -> CGM (Graph A.Asm O O, A.Reg)
       msum' rs = msum [trace (". " ++ show e) r | r <- rs]
       rules = [ -- Rules for putting the value of the expression into
                 -- a register
