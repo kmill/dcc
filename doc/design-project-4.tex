@@ -16,7 +16,8 @@ use of the large size of our team. The two major optimizations we plan
 to implement include a Register Allocator (Section~\ref{sec:register}) and a Loop
 Parallelizer (Section~\ref{sec:parallel}). Smaller optimizations we plan to implement include
 Loop-Invariant Code Motion (Section~\ref{sec:codehoist}), Algebraic
-Simplification (Section~\ref{sec:algebra}), an Expression
+Simplification (Section~\ref{sec:algebra}), Tailcall Optimizations
+(Section~\ref{sec:tailcall}), an Expression
 Unflattener (Section~\ref{sec:unflatten}), and a variety of Peephole
 Optimizations (Section~\ref{sec:peephole}). 
 
@@ -28,7 +29,7 @@ optimizations.
 
 Right now, our plan is to split the optimizations amongst ourselves as
 follows: Kyle Miller will design and implement the Register
-Allocator and Algebraic Simplifications. Alec Thomson will design and implement the Loop
+Allocator, Tailcall Optimizer, and Algebraic Simplifications. Alec Thomson will design and implement the Loop
 Parallelizer and the Expression Unflattener. Steven Valdez will design and implement the Peephole
 Optimizations. Finally, Patrick Hulin will design and implement
 Loop-Invariant Code Motion and be in charge of the test system. 
@@ -38,6 +39,43 @@ Loop-Invariant Code Motion and be in charge of the test system.
 
 \section {Loop Parallelizer}
 \label{sec:parallel}
+
+The purpose of the Loop Parallelizer is to make better use of a multicore
+system by splitting up independent loops into multiple threads of
+execution. The general idea is that if each iteration of a loop does
+not depend on any of the other iterations, the order of execution of
+the iterations does not matter and each iteration can be run on a
+different core of the system. For example, the following loop could be
+parallelized 
+
+\begin{verbatim}
+for (i = 0 : N) {
+  A[i] = i; 
+}
+\end{verbatim} 
+
+Our loop parallelizer will operate on the mid-ir by first determining
+which loops can be parallelized and then annotating appropriate blocks
+with instructions to parallelize. The code generator will then
+systematically create code to generate extra threads of execution upon encountering
+these annotations.
+
+Since Loop parallelization can be quite tricky, our initial design
+only focuses on a select subset of parallelizable loops. For example,
+our initial design only targets for loops and then only parallelizes
+loops whose iterations are \textbf{completely independent} of each
+other in terms of data used. Such a design hopes to minimize the
+number of locks used and avoid complexity such as message passing in
+between dependent iterations.\\
+
+Finally, since the decaf language doesn't allow the arbitrary use of
+pointers, variable alias analysis (where variables are analyzed to
+determine if they represent the same memory location) will not be
+necessary, further simplifying the analysis of loop parallelization. 
+
+In terms of implementation, we plan to make use of the provided C
+libraries to perform the actual generation of threads and locking of
+shared memory structures.  
 
 \section {Expression Unflattener}
 \label{sec:unflatten}
@@ -104,6 +142,8 @@ the flattening phase. Since the algorithm doesn't consider a variable
 successor of this block), the benefits of CSE should be preserved
 while the mid-ir is returned to tree-form. 
 
+\section {Tail-Call Recursion}
+\label{sec:tailcall}
 
 \section {Algebraic Simplification}
 \label{sec:algebra}

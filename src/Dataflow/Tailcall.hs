@@ -26,7 +26,7 @@ data LastReturn = RUnknown
                   
 combine RUnknown x = x
 combine (RJust from v) RUnknown = RJust from v
-combine (RJust from v) (RJust from' v') = if v == v' then RJust from v else RMulti
+combine (RJust from v) (RJust from' v') = if v == v' && from == from' then RJust from v else RMulti
 combine (RJust from v) (RAnything _) = RJust from v -- :-O basically should be an error
 combine (RJust from v) RMulti = RMulti
 combine (RAnything from) RUnknown = RAnything from
@@ -81,8 +81,8 @@ tailcallElim fname postentry argvars = mkBRewrite tc
       tc CondBranch{} _ = return Nothing
       tc (Call pos v name args) f
           = case f of
-	     RJust funcname _
-                | name == fname && name == funcname  -> makeTailCall pos args
+	     RJust funcname v'
+                | name == fname && name == funcname && v == v' -> makeTailCall pos args
                 | otherwise -> return Nothing
 	     RAnything funcname
                 | name == fname && name == funcname  -> makeTailCall pos args
