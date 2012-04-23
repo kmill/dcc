@@ -145,7 +145,7 @@ UnflattenBlock(block):
 2. Determine the reaching definitions of each variable defined in this
 block
 3. For each variable of each expression in this block: 
-   1. If the variable is not live at any of this blocks successors 
+   1. If the variable is not live at any of this block's successors 
       AND the variable is only used once in this entire block 
       (i.e. this is the only use)
       AND the variable is mapped to a reaching definition from this block 
@@ -169,12 +169,12 @@ The Tail-Call Recursion optimization is an optimization that avoids
 allocating a new frame in the stack because the caller will simply
 return the value of the call. In the ``tree-form'' of the MidIR, this
 optimization would eliminate calls of this form, and instead create an
-edge between the caller and inside the callee.\\
+edge between the caller and inside the callee.
 
 Since Tail-Call Recursion can have side effects, and is inherently
 difficult to construct a lattice for across multiple methods, our
 initial design focuses on only Tail-Call Recursion across calls with
-the \textbf{same caller and callee methods}. In future revisions of
+the \textbf{same caller and callee method}. In future revisions of
 this optimization, we hope to increase the optimization across
 seperate methods in order to take more advantage of this optimization
 in non-self recursive methods.
@@ -233,12 +233,12 @@ then we can move the assignment.
 In addition to the above major optimizations, we additionally plan to
 implement various Peephole Optimizations and other smaller
 optimizations to further improve the performance of the assembled
-code.\\
+code.
 
 The Peephole optimizations that we intend to perform include Strength
 Reduction, Constant Folding, Null Sequence optimizations. Strength
 Reduction is the optimization where slower optimizations are replaced
-by faster optimizations, such as replacing:\\
+by faster optimizations, such as replacing:
 
 \begin{verbatim}
 a = b * 4;
