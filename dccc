@@ -1,7 +1,8 @@
 #!/bin/sh
 
-optstring="--opt=constprop --opt=deadcode --opt=blockelim"
-optstring="--opt=none"
+#optstring="--opt=constprop --opt=deadcode --opt=blockelim"
+#optstring="--opt=none"
+optstring="--opt=all"
 
 file=$1
 out=$2
