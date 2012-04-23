@@ -371,6 +371,10 @@ expToMem e = mcut $ msum rules
                    a <- expToI expa
                    (gb, b) <- expToR expb
                    return (gb, A.MemAddr (Just b) a Nothing A.SOne)
+              , do I.BinOp pos I.OpAdd expa (I.BinOp _ I.OpMul (I.Lit _ 8) expi) <- withNode e
+                   (gb, b) <- expToR expi
+                   (ga, a) <- expToR expa
+                   return (ga <*> gb, A.MemAddr (Just a) (A.Imm32 0) (Just b) A.SEight)
               , do I.BinOp pos I.OpAdd expa expb <- withNode e
                    (gb, b) <- expToR expb
                    (ga, a) <- expToR expa
