@@ -231,6 +231,8 @@ mapRR f a@(Callout{}) = a
 mapRR f a@(Ret{}) = a
 mapRR f a@(RetPop{}) = a
 mapRR f a@(ExitFail{}) = a
+mapRR f a@(Realign{}) = a
+mapRR f a@(Unrealign{}) = a
 mapRR f (Lea p m r) = Lea p (map_M f m) (f r)
 mapRR f (Push p irm) = Push p (map_IRM f irm)
 mapRR f (Pop p rm) = Pop p (map_RM f rm)
@@ -239,6 +241,7 @@ mapRR f a@(JCond{}) = a
 mapRR f (ALU_IRMtoR p op irm r) = ALU_IRMtoR p op (map_IRM f irm) (f r)
 mapRR f (ALU_IRtoM p op ir m) = ALU_IRtoM p op (map_IR f ir) (map_M f m)
 mapRR f (Cmp p ir rm) = Cmp p (map_IR f ir) (map_RM f rm)
+mapRR f (Test p ir rm) = Test p (map_IR f ir) (map_RM f rm)
 mapRR f (Inc p rm) = Inc p (map_RM f rm)
 mapRR f (Dec p rm) = Dec p (map_RM f rm)
 mapRR f (Neg p rm) = Neg p (map_RM f rm)
@@ -246,6 +249,7 @@ mapRR f (IMulRAX p rm) = IMulRAX p (map_RM f rm)
 mapRR f (IMulRM p rm r) = IMulRM p (map_RM f rm) (f r)
 mapRR f (IMulImm p i rm r) = IMulImm p i (map_RM f rm) (f r)
 mapRR f (IDiv p rm) = IDiv p (map_RM f rm)
+mapRR f (Cqo p) = Cqo p
 mapRR f (Shl p i rm) = Shl p i (map_RM f rm)
 mapRR f (Shr p i rm) = Shr p i (map_RM f rm)
 mapRR f (Sar p i rm) = Sar p i (map_RM f rm)
@@ -272,6 +276,8 @@ getAliveDead expr
         Ret p rets -> (if rets then [MReg RAX] else [], [])
         RetPop p rets num -> (if rets then [MReg RAX] else [], [])
         ExitFail{} -> emptyAD
+        Realign{} -> emptyAD
+        Unrealign{} -> emptyAD
         Lea p m r -> getRSrc m <+> getRDst r
         Push p irm -> getRSrc irm
         Pop p rm -> getRDst rm
@@ -280,6 +286,7 @@ getAliveDead expr
         ALU_IRMtoR _ _ irm r -> getRSrc irm <+> getRSrc r <+> getRDst r
         ALU_IRtoM _ _ ir m -> getRSrc ir <+> getRSrc m <+> getRDst m
         Cmp _ ir rm -> getRSrc ir <+> getRSrc rm
+        Test _ ir rm -> getRSrc ir <+> getRSrc rm
         Inc _ rm -> getRSrc rm <+> getRDst rm
         Dec _ rm -> getRSrc rm <+> getRDst rm
         Neg _ rm -> getRSrc rm <+> getRDst rm
@@ -287,6 +294,7 @@ getAliveDead expr
         IMulRM _ rm r -> getRSrc rm <+> getRSrc r <+> getRDst r
         IMulImm _ i rm r -> getRSrc rm <+> getRDst r
         IDiv _ rm -> getRSrc rm <+> ([MReg RDX, MReg RAX], [MReg RAX, MReg RDX])
+        Cqo _ -> ([MReg RAX], [MReg RDX])
         Shl _ _ rm -> getRSrc rm <+> getRDst rm
         Shr _ _ rm -> getRSrc rm <+> getRDst rm
         Sar _ _ rm -> getRSrc rm <+> getRDst rm

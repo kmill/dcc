@@ -49,6 +49,11 @@ mapEN _ (Label _ _) = Nothing
 mapEN _ (PostEnter _ _) = Nothing 
 mapEN _ (Enter _ _ _) = Nothing 
 mapEN f (Store pos var expr) = liftM (Store pos var) $ f expr
+mapEN f (DivStore pos d op num den) =
+    case (f num, f den) of
+      (Nothing, Nothing) -> Nothing
+      (num', den') -> Just $ DivStore pos d op
+                      (fromMaybe num num') (fromMaybe den den')
 mapEN f (IndStore pos e1 e2) = 
     case (f e1, f e2) of 
         (Nothing, Nothing) -> Nothing 
@@ -79,6 +84,7 @@ insnToG n@(Label _ _) = mkFirst n
 insnToG n@(PostEnter _ _) = mkFirst n
 insnToG n@(Enter _ _ _) = mkFirst n
 insnToG n@(Store _ _ _) = mkMiddle n 
+insnToG n@DivStore{} = mkMiddle n
 insnToG n@(IndStore _ _ _) = mkMiddle n 
 insnToG n@(Call _ _ _ _) = mkMiddle n 
 insnToG n@(Callout _ _ _ _) = mkMiddle n 
@@ -103,6 +109,7 @@ fold_EN _ z (Label _ _) = z
 fold_EN _ z (PostEnter _ _) = z
 fold_EN _ z (Enter _ _ _) = z
 fold_EN f z (Store _ _ expr) = f z expr 
+fold_EN f z (DivStore _ _ _ expr1 expr2) = f (f z expr2) expr1
 fold_EN f z (IndStore _ expr1 expr2) = f (f z expr2) expr1
 fold_EN f z (Call _ _ _ es) = foldl f z es 
 fold_EN f z (Callout _ _ _ es) = foldl f z es 

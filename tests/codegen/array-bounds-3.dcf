@@ -1,0 +1,7 @@
+//!
+class Program {
+  int a[22];
+  void main() {
+    callout("printf", "%d", a[-1]);
+  }
+}

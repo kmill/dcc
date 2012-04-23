@@ -1,0 +1,24 @@
+//<0
+//<5
+//>true
+//>true
+//>false
+class Program {
+  void pb(boolean b) {
+    if(b) {
+      callout("printf", "true\n");
+    } else {
+      callout("printf", "false\n");
+    }
+  }
+  void f(int i) {
+    if(i == 0) {
+      pb(true);
+    }
+    pb(i == 0);
+  }
+  void main() {
+    f(callout("get_int"));
+    f(callout("get_int"));
+  }
+}

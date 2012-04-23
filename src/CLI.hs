@@ -48,6 +48,7 @@ data TargetFlag = TargetScan -- ^ Given by @scan@.
                 | TargetParse -- ^ Given by @parse@.
                 | TargetInter -- ^ Given by @inter@.
                 | TargetMidIR -- ^ Given by @midir@.
+                | TargetMidIRC -- ^ Given by @midirc@
                 | TargetLowIR -- ^ Given by @lowir@.
                 | TargetCodeGen -- ^ Given by @codegen@.
                 | TargetDefault -- ^ The default value if no target is given.
@@ -61,12 +62,13 @@ data OptFlags = OptFlags { touched :: Bool
                          , optBlockElim :: Bool 
                          , optFlat :: Bool
                          , optTailcall :: Bool
+                         , optNZP :: Bool
                          , optRA :: Bool }
               deriving (Show)
 
-optAllD = OptFlags True True True True True True True True True
-optAll = OptFlags False True True True True True True True True
-optNone = OptFlags False False False False False False False False False
+optAllD = OptFlags True True True True True True True True True True
+optAll = OptFlags False True True True True True True True True True
+optNone = OptFlags False False False False False False False False False False
 
 options :: [OptDescr (CompilerOpts -> CompilerOpts)]
 options =
@@ -87,6 +89,7 @@ options =
                                                                       "\t      cse : Constant Subexpression Elimination\n" ++
                                                                       "\t copyprop : Copy Propagation\n" ++
                                                                       "\tconstprop : Constant Propagation\n" ++
+                                                                      "\t      nzp : -/0/+ Analysis\n" ++
                                                                       "\t deadcode : Dead Code Elimination\n" ++
                                                                       "\tblockelim : Block Elimination\n" ++
                                                                       "\t     flat : Flatten Optimization\n" ++
@@ -108,6 +111,7 @@ targetOpt s
         "parse" -> TargetParse
         "inter" -> TargetInter
         "midir" -> TargetMidIR
+        "midirc" -> TargetMidIRC
         "lowir" -> TargetLowIR
         "codegen" -> TargetCodeGen
         "assembly" -> TargetCodeGen
@@ -119,6 +123,7 @@ optOpt opts s
     "all" -> optAll
     "cse" -> oFlags { optCommonSubElim = True }
     "constprop" -> oFlags { optConstProp = True }
+    "nzp" -> oFlags { optNZP = True }
     "copyprop" -> oFlags { optCopyProp = True }
     "deadcode" -> oFlags { optDeadCode = True }  
     "blockelim" -> oFlags { optBlockElim = True }

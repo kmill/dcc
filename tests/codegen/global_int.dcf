@@ -1,0 +1,8 @@
+//>hello 5
+class Program {
+  int i;
+  void main() {
+    i = 5;
+    callout("printf", "hello %d\n", i);
+  }
+}

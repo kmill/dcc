@@ -220,10 +220,11 @@ instance Show Flag where
 
 -- look at cmpxchg?
 
-data ALUOp = Add | Sub | Xor
+data ALUOp = Add | Sub | And | Xor
 instance Show ALUOp where
     show Add = "add"
     show Sub = "sub"
+    show And = "and"
     show Xor = "xor"
 
 data Asm e x where
@@ -252,6 +253,10 @@ data Asm e x where
   -- | This doesn't actually do anything but close off a block. It is
   -- expected that the code has called "exit" before reaching this.
   ExitFail :: SourcePos -> Asm O C
+  
+  -- | For Mac OS X compatibility mode
+  Realign :: SourcePos -> Int -> Asm O O
+  Unrealign :: SourcePos -> Asm O O
 
   Lea :: SourcePos -> MemAddr -> Reg -> Asm O O
 
@@ -265,6 +270,7 @@ data Asm e x where
   ALU_IRMtoR :: SourcePos -> ALUOp -> OperIRM -> Reg -> Asm O O
   ALU_IRtoM :: SourcePos -> ALUOp -> OperIR -> MemAddr -> Asm O O
   Cmp :: SourcePos -> OperIR -> OperRM -> Asm O O
+  Test :: SourcePos -> OperIR -> OperRM -> Asm O O
 
   Inc :: SourcePos -> OperRM -> Asm O O
   Dec :: SourcePos -> OperRM -> Asm O O
@@ -276,6 +282,7 @@ data Asm e x where
   IMulImm :: SourcePos -> Imm32 -> OperRM -> Reg -> Asm O O
 
   IDiv :: SourcePos -> OperRM -> Asm O O
+  Cqo :: SourcePos -> Asm O O
 
   -- shift left/right
   Shl :: SourcePos -> Imm8 -> OperRM -> Asm O O
@@ -337,6 +344,10 @@ instance Show (Asm e x) where
         ++ (if not returns then " (void method)" else "")
   show (ExitFail pos)
       = "# exited by failure. " ++ showPos pos
+  show (Realign pos i)
+       = "# realign goes here for --mac"
+  show (Unrealign pos)
+      = "# unrealign goes here for --mac"
 
   show (Lea pos mem reg) = showBinOp "leaq" pos mem reg
 
@@ -352,6 +363,7 @@ instance Show (Asm e x) where
   show (ALU_IRMtoR pos op a b) = showBinOp ((show op) ++ "q") pos a b
   show (ALU_IRtoM pos op a b) = showBinOp ((show op) ++ "q") pos a b
   show (Cmp pos a b) = showBinOp "cmpq" pos a b
+  show (Test pos a b) = showBinOp "testq" pos a b
 
   show (Inc pos oper) = showUnOp "incq" pos oper
   show (Dec pos oper) = showUnOp "decq" pos oper
@@ -363,6 +375,7 @@ instance Show (Asm e x) where
                              (show a) (show b) (show c) (showPos pos)
 
   show (IDiv pos oper) = showUnOp "idivq" pos oper
+  show (Cqo pos) = showNullOp "cqo" pos
 
   show (Shl pos a b) = showBinOp "shlq" pos a b
   show (Shr pos a b) = showBinOp "shrq" pos a b

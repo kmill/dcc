@@ -179,7 +179,7 @@ instance Ord v => Ord (Expr v) where
 
 data UnOp = OpNeg | OpNot
             deriving (Eq, Ord)
-data BinOp = OpAdd | OpSub | OpMul | OpDiv | OpMod
+data BinOp = OpAdd | OpSub | OpMul -- | OpDiv | OpMod
            | CmpLT | CmpGT | CmpLTE | CmpGTE | CmpEQ | CmpNEQ
              deriving (Eq, Ord)
 
@@ -203,6 +203,7 @@ data Inst v e x where
     Enter      :: SourcePos -> Label -> [v]                    -> Inst v C O
     PostEnter  :: SourcePos -> Label                           -> Inst v C O
     Store      :: SourcePos -> v -> Expr v                     -> Inst v O O
+    DivStore   :: SourcePos -> v -> DivOp -> Expr v -> Expr v  -> Inst v O O
     IndStore   :: SourcePos -> Expr v -> Expr v                -> Inst v O O
     Call       :: SourcePos -> v -> String -> [Expr v]         -> Inst v O O
     Callout    :: SourcePos -> v -> String -> [Expr v]         -> Inst v O O
@@ -210,6 +211,8 @@ data Inst v e x where
     CondBranch :: SourcePos -> Expr v -> Label -> Label        -> Inst v O C
     Return     :: SourcePos -> String -> Maybe (Expr v)        -> Inst v O C
     Fail       :: SourcePos                                    -> Inst v O C
+
+data DivOp = DivQuo | DivRem
 
 instance NonLocal (Inst v) where
     entryLabel (Label _ lbl) = lbl
@@ -227,6 +230,8 @@ mapI f (Label pos l) = Label pos l
 mapI f (PostEnter pos l) = PostEnter pos l
 mapI f (Enter pos l args) = Enter pos l (map f args)
 mapI f (Store pos d exp) = Store pos (f d) (mapE f exp)
+mapI f (DivStore pos d op exp1 exp2) = DivStore pos (f d) op
+                                       (mapE f exp1) (mapE f exp2)
 mapI f (IndStore pos d s) = IndStore pos (mapE f d) (mapE f s)
 mapI f (Call pos d name args) = Call pos (f d) name (map (mapE f) args)
 mapI f (Callout pos d name args) = Callout pos (f d) name (map (mapE f) args)
@@ -261,14 +266,18 @@ instance Show BinOp where
     show OpAdd = "+"
     show OpSub = "-"
     show OpMul = "*"
-    show OpDiv = "/"
-    show OpMod = "%"
+--    show OpDiv = "/"
+--    show OpMod = "%"
     show CmpLT = "<"
     show CmpGT = ">"
     show CmpLTE = "<="
     show CmpGTE = ">="
     show CmpEQ = "=="
     show CmpNEQ = "!="
+
+instance Show DivOp where
+    show DivQuo = "/"
+    show DivRem = "%"
 
 instance Show v => Show (Inst v e x) where
     show (Label pos lbl)
@@ -283,6 +292,10 @@ instance Show v => Show (Inst v e x) where
     show (Store pos var expr)
         = printf "%s := %s  {%s};"
           (show var) (show expr) (showPos pos)
+    show (DivStore pos var op expr1 expr2)
+        = printf "%s := %s %s %s  {%s};"
+          (show var) (showsPrec 1 expr1 "")
+          (show op) (showsPrec 1 expr2 "") (showPos pos)
     show (IndStore pos dest expr)
         = printf "*(%s) := %s  {%s};"
           (show dest) (show expr) (showPos pos)

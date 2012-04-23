@@ -1,0 +1,29 @@
+main:
+  $2 $globali store
+  $5 @fact @square
+  $120 $120 mul
+  sub eqz // check if equal, should print 1
+  print
+  $10 @fib print
+  $globali load print
+  exit
+
+globali: 22
+
+square:
+  dup mul ret
+
+fact:
+  dup jnz factNZero
+  drop $1 ret
+factNZero:
+  dup $1 sub @fact mul ret
+
+fib:
+  dup $2 lt jnz fibSmall
+fibRec:
+  dup $1 sub @fib
+  swap $2 sub @fib
+  add ret
+fibSmall:
+  drop $1 ret

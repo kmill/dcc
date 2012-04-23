@@ -1,0 +1,7 @@
+//!
+class Program {
+  int a[22];
+  void main() {
+    a[22] = 22;
+  }
+}

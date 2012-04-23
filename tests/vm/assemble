@@ -1,0 +1,9 @@
+#!/bin/sh
+file=$1
+if [ -z "$file" ]; then
+    echo "Missing file to assemble"
+fi
+../../dccc vm.dcf vm > /dev/null
+out=`cat $file | ghc AssembleVM.hs -e AssembleVM.main`
+
+echo "$out"

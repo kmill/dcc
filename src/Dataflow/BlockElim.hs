@@ -52,7 +52,8 @@ lastLabelElim = deepBwdRw ll
                         Just $ mkLast $ CondBranch p ce tl' fl'
         where
           fun :: Label -> Maybe Label
-          fun l = fromJust (lookupFact l f) `mplus` (Just l)
+          --fun l = fromJust (lookupFact l f) `mplus` (Just l)
+          fun l = fromMaybe (Just l) (lookupFact l f) `mplus` (Just l)
 --    ll (Enter p l args) (Just l')
 --        = return $ Just (mkFirst (Enter p l args)
 --                         <*> mkLast (Branch p l'))

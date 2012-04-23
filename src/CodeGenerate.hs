@@ -17,6 +17,7 @@ import Data.Int
 import qualified Data.Set as S
 import Dataflow
 import Debug.Trace
+import Text.Printf
 
 type GM = I.GM
 
@@ -61,7 +62,7 @@ instance Monad CGM where
     ma >>= f = CGM $ do as <- rCGM ma
                         as' <- sequence (map (rCGM . f) as)
                         return $ concat as'
-    fail _ = mzero
+    fail msg = mzero
 
 instance Functor CGM where
     fmap f ma = do a <- ma
@@ -104,6 +105,17 @@ instToAsm (I.Enter pos l args)
 instToAsm (I.Store pos d sexp)
     = do (gd, s) <- expToIRM sexp
          return $ gd <*> mkMiddle (A.MovIRMtoR pos s (A.SReg $ show d))
+instToAsm (I.DivStore pos d op expa expb)
+    = do (ga, a) <- expToIRM expa
+         (gb, b) <- expToRM expb
+         return $ ga <*> gb
+                  <*> mkMiddles [ A.MovIRMtoR pos a (A.MReg A.RAX)
+                                , A.Cqo pos -- sign extend %rax into %rdx
+                                , A.IDiv pos b
+                                , A.mov pos (A.MReg src) (A.SReg $ show d)]
+    where src = case op of
+                  I.DivQuo -> A.RAX
+                  I.DivRem -> A.RDX
 instToAsm (I.IndStore pos dexp sexp)
     = do (gd, d) <- expToMem dexp
          (gs, s) <- expToIR sexp
@@ -122,9 +134,11 @@ instToAsm (I.Callout pos d name args)
     = do (gs, vars) <- unzip `fmap` mapM expToIRM args
          return $ catGraphs gs
                     <*> genPushRegs pos A.callerSaved
+                    <*> mkMiddle (A.Realign pos (max 0 ((length args) - 6)))
                     <*> genSetArgs pos vars
                     <*> mkMiddle (A.mov pos (A.Imm32 0) (A.MReg A.RAX))
                     <*> mkMiddle (A.Callout pos (length args) (A.Imm32Label name 0))
+                    <*> mkMiddle (A.Unrealign pos)
                     <*> genResetSP pos args
                     <*> genPopRegs pos A.callerSaved
                     <*> mkMiddle (A.mov pos (A.MReg A.RAX) (A.SReg $ show d))
@@ -145,7 +159,8 @@ instToAsm (I.Return pos fname (Just exp))
                     <*> mkLast (A.Ret pos True)
 instToAsm (I.Fail pos)
     = return $ mkMiddles [ A.mov pos (A.Imm32 1) (A.MReg A.RDI)
-                         , A.mov pos (A.Imm32 1) (A.MReg A.RAX)
+                         , A.mov pos (A.Imm32 0) (A.MReg A.RAX)
+                         , A.Realign pos 0
                          , A.Callout pos 1 (A.Imm32Label "exit" 0) ]
                <*> mkLast (A.ExitFail pos)
 
@@ -212,6 +227,8 @@ expToI e = mcut $ msum rules
 expToR :: MidIRExpr -> CGM (Graph A.Asm O O, A.Reg)
 expToR e = mcut $ msum rules
     where
+      msum' :: [CGM (Graph A.Asm O O, A.Reg)] -> CGM (Graph A.Asm O O, A.Reg)
+      msum' rs = msum [trace (". " ++ show e) r | r <- rs]
       rules = [ -- Rules for putting the value of the expression into
                 -- a register
         
@@ -221,12 +238,11 @@ expToR e = mcut $ msum rules
                    return ( mkMiddle $ A.ALU_IRMtoR pos A.Xor
                                          (A.IRM_R $ dr) dr
                           , dr )
-              , do I.Lit pos i <- withNode e
-                   guard $ checkIf32Bit i
+                -- Put literal into register
+              , do i <- expToI e
                    dr <- genTmpReg
-                   let src = A.Imm32 $ fromIntegral i
-                   return ( mkMiddle $ A.mov pos src dr
-                          , dr )
+                   return (mkMiddle $ A.mov noPosition i dr, dr)
+                -- Put a 64-bit literal into register
               , do I.Lit pos i <- withNode e
                    dr <- genTmpReg
                    return ( mkMiddle $ A.Mov64toR pos (A.Imm64 i) dr
@@ -246,10 +262,10 @@ expToR e = mcut $ msum rules
                             <*> mkMiddle (A.mov pos m dr)
                           , dr )
               , do I.UnOp pos I.OpNeg exp <- withNode e
-                   (g, o) <- expToRM exp
+                   (g, o) <- expToIRM exp
                    dr <- genTmpReg
                    return ( g
-                            <*> mkMiddle (A.MovIRMtoR pos (rmToIRM o) dr)
+                            <*> mkMiddle (A.MovIRMtoR pos o dr)
                             <*> mkMiddle (A.Neg pos (A.RM_R dr))
                           , dr )
               , do I.UnOp pos I.OpNot exp <- withNode e
@@ -273,20 +289,35 @@ expToR e = mcut $ msum rules
                             <*> gb
                             <*> mkMiddle (A.ALU_IRMtoR pos op' b dr)
                           , dr )
+--               , do I.BinOp pos op expa expb <- withNode e
+--                    guard $ op `elem` [ I.CmpLT, I.CmpGT, I.CmpLTE
+--                                      , I.CmpGTE, I.CmpEQ, I.CmpNEQ ]
+--                    let flag = cmpToFlag op
+--                    (gb, b) <- expToIR expb
+--                    (ga, a) <- expToRM expa
+--                    dr <- genTmpReg
+--                    true <- genTmpReg
+--                    return ( ga <*> gb
+--                             <*> mkMiddle (A.mov pos (A.Imm32 $
+--                                                       fromIntegral I.bTrue) true)
+--                             <*> mkMiddle (A.mov pos (A.Imm32 $
+--                                                       fromIntegral I.bFalse) dr)
+--                             <*> mkMiddle (A.Cmp pos b a)
+--                             <*> mkMiddle (A.CMovRMtoR pos flag
+--                                            (A.RM_R $ true) dr)
+--                           , dr )
+
               , do I.BinOp pos op expa expb <- withNode e
                    guard $ op `elem` [ I.CmpLT, I.CmpGT, I.CmpLTE
                                      , I.CmpGTE, I.CmpEQ, I.CmpNEQ ]
-                   let flag = cmpToFlag op
-                   (gb, b) <- expToIR expb
-                   (ga, a) <- expToRM expa
+                   (gflag, flag) <- cmpBinOpToFlag e
                    dr <- genTmpReg
                    true <- genTmpReg
-                   return ( ga <*> gb
-                            <*> mkMiddle (A.mov pos (A.Imm32 $
-                                                      fromIntegral I.bTrue) true)
+                   return ( mkMiddle (A.mov pos (A.Imm32 $
+                                                  fromIntegral I.bTrue) true)
                             <*> mkMiddle (A.mov pos (A.Imm32 $
                                                       fromIntegral I.bFalse) dr)
-                            <*> mkMiddle (A.Cmp pos b a)
+                            <*> gflag
                             <*> mkMiddle (A.CMovRMtoR pos flag
                                            (A.RM_R $ true) dr)
                           , dr )
@@ -319,26 +350,6 @@ expToR e = mcut $ msum rules
                             <*> mkMiddle (A.MovIRMtoR pos a dr)
                             <*> mkMiddle (A.IMulRM pos b dr)
                           , dr )
-              , do I.BinOp pos I.OpDiv expa expb <- withNode e
-                   (ga, a) <- expToIRM expa
-                   (gb, b) <- expToRM expb
-                   dr <- genTmpReg
-                   return ( ga <*> gb
-                            <*> mkMiddle (A.MovIRMtoR pos a (A.MReg A.RAX))
-                            <*> mkMiddle (A.mov pos (A.Imm32 0) (A.MReg A.RDX))
-                            <*> mkMiddle (A.IDiv pos b)
-                            <*> mkMiddle (A.mov pos (A.MReg A.RAX) dr)
-                          , dr )
-              , do I.BinOp pos I.OpMod expa expb <- withNode e
-                   (ga, a) <- expToIRM expa
-                   (gb, b) <- expToRM expb
-                   dr <- genTmpReg
-                   return ( ga <*> gb
-                            <*> mkMiddle (A.MovIRMtoR pos a (A.MReg A.RAX))
-                            <*> mkMiddle (A.mov pos (A.Imm32 0) (A.MReg A.RDX))
-                            <*> mkMiddle (A.IDiv pos b)
-                            <*> mkMiddle (A.mov pos (A.MReg A.RDX) dr)
-                          , dr )
               , do I.Cond pos cexp texp fexp <- withNode e
                    (gflag, flag) <- expToFlag cexp
                    (gt, t) <- expToRM texp
@@ -360,6 +371,10 @@ expToMem e = mcut $ msum rules
                    a <- expToI expa
                    (gb, b) <- expToR expb
                    return (gb, A.MemAddr (Just b) a Nothing A.SOne)
+              , do I.BinOp pos I.OpAdd expa (I.BinOp _ I.OpMul (I.Lit _ 8) expi) <- withNode e
+                   (gb, b) <- expToR expi
+                   (ga, a) <- expToR expa
+                   return (ga <*> gb, A.MemAddr (Just a) (A.Imm32 0) (Just b) A.SEight)
               , do I.BinOp pos I.OpAdd expa expb <- withNode e
                    (gb, b) <- expToR expb
                    (ga, a) <- expToR expa
@@ -374,7 +389,35 @@ expToM e = fail ("Mem not a load: " ++ show e)
 expToFlag :: MidIRExpr -> CGM (Graph A.Asm O O, A.Flag)
 expToFlag e = mcut $ msum rules
     where
-      rules = [ do I.BinOp pos op expa expb <- withNode e
+      rules = [ cmpBinOpToFlag e
+                --- Use testq to see if it's bTrue (which should be non-zero).
+              , do (g, r) <- expToRM e
+                   return ( g
+                            <*> mkMiddle (A.Test noPosition
+                                               (A.IR_I $ A.Imm32 $
+                                                 fromIntegral I.bTrue)
+                                               r)
+                          , A.FlagNZ )
+              ]
+
+cmpBinOpToFlag :: MidIRExpr -> CGM (Graph A.Asm O O, A.Flag)
+cmpBinOpToFlag e = mcut $ msum rules
+    where
+      rules = [ --- make equality to zero be testq
+                do I.BinOp pos I.CmpEQ expa expb <- withNode e
+                   I.Lit _ 0 <- withNode expb
+                   (ga, a) <- expToRM expa
+                   return ( ga <*> mkMiddle(A.Test pos
+                                            (A.IR_I $ A.Imm32 (-1)) a)
+                          , A.FlagZ )
+                --- make inequality to zero be testq
+              , do I.BinOp pos I.CmpNEQ expa expb <- withNode e
+                   I.Lit _ 0 <- withNode expb
+                   (ga, a) <- expToRM expa
+                   return ( ga <*> mkMiddle(A.Test pos
+                                            (A.IR_I $ A.Imm32 (-1)) a)
+                          , A.FlagNZ )--- by for binop comparisons, just use cmp
+              , do I.BinOp pos op expa expb <- withNode e
                    guard $ op `elem` [ I.CmpLT, I.CmpGT, I.CmpLTE
                                      , I.CmpGTE, I.CmpEQ, I.CmpNEQ ]
                    let flag = cmpToFlag op
@@ -383,15 +426,7 @@ expToFlag e = mcut $ msum rules
                    return ( ga <*> gb
                             <*> mkMiddle (A.Cmp pos b a)
                           , flag )
-              , do (g, r) <- expToRM e
-                   return ( g
-                            <*> mkMiddle (A.Cmp noPosition
-                                               (A.IR_I $ A.Imm32 $
-                                                 fromIntegral I.bFalse)
-                                               r)
-                          , A.FlagNE )
               ]
-
 
 cmpToFlag :: I.BinOp -> A.Flag
 cmpToFlag I.CmpLT = A.FlagL
@@ -409,7 +444,7 @@ lookupLabel (GMany _ g_blocks _) lbl = case mapLookup lbl g_blocks of
 labelToAsmOut :: Bool -> Graph A.Asm C C -> (Label, Maybe Label) -> [String]
 labelToAsmOut macmode graph (lbl, mnlabel)
     = [show a]
-      ++ (map (ind . show') bs)
+      ++ (map (show') bs)
       ++ mjmp
       ++ (if not (null children) && not fallthrough
           then nextJmp else [])
@@ -425,8 +460,23 @@ labelToAsmOut macmode graph (lbl, mnlabel)
                   then case x of
                          A.Callout pos args (A.Imm32Label s 0)
                              -> show $ A.Callout pos args (A.Imm32Label ("_" ++ s) 0)
-                         _ -> show x
-                  else show x
+                         A.Realign pos nstackargs
+                             -> let code=[ A.mov pos (A.MReg A.RSP) (A.MReg A.R12)
+                                         , A.ALU_IRMtoR pos A.Sub 
+                                                        (A.IRM_I $ A.Imm32 16)
+                                                        (A.MReg A.RSP)
+                                         , A.ALU_IRMtoR pos A.And
+                                                        (A.IRM_I $ A.Imm32 (-10))
+                                                        (A.MReg A.RSP)
+                                         , A.ALU_IRMtoR pos A.Sub
+                                                        (A.IRM_I $ A.Imm32 $ fromIntegral corr)
+                                                        (A.MReg A.RSP) ]
+                                    corr=(nstackargs `mod` 2) * 8
+                                in intercalate "\n" $ map (ind . show) code
+                         A.Unrealign pos
+                             -> show $ A.mov pos (A.MReg A.R12) (A.MReg A.RSP)
+                         _ -> ind $ show x
+                  else ind $ show x
         fallthrough = case mnlabel of
                         Just l -> l == head (reverse children)
                         Nothing -> False
@@ -436,6 +486,7 @@ labelToAsmOut macmode graph (lbl, mnlabel)
                  A.Jmp _ _ -> []
                  _ -> [ind $ show c]
 
+dfsSearch :: (NonLocal n) => Graph n C C -> Label -> [Label] -> [Label]
 dfsSearch graph lbl visited = foldl recurseDFS visited (reverse $ successors block)
   where block = lookupLabel graph lbl
         recurseDFS v' nv = if nv `elem` v' then v' else dfsSearch graph nv (v' ++ [nv])
@@ -458,7 +509,7 @@ lowIRToAsm m opts
           , "call method_main"
           , "movq $0, %rax"
           , "ret" ]
-      ++ newline
+      ++ ["# methods"]
       ++ (concatMap (showMethod (macMode opts) (lowIRGraph m)) (lowIRMethods m))
   where 
     newline = [""]
@@ -467,7 +518,7 @@ lowIRToAsm m opts
     showString (name, pos, str) = [ name ++ ":\t\t# " ++ showPos pos
                                 , "   .asciz " ++ (show str) ]
     showMethod macmode graph (I.Method pos name entry postenter)
-        = [name ++ ":"]
+        = ["", name ++ ":"]
           ++ concatMap (labelToAsmOut macmode graph) (zip visited nvisited)
       where visited = dfsSearch graph entry [entry]
             nvisited = case visited of
@@ -495,3 +546,174 @@ lowIRToGraphViz m = "digraph name {\n"
                                        ++ intercalate "|" (map showString strings)
                                        ++ "}")
                               ++ "];\n"
+
+--- Map everything to C
+class ShowC a where
+    showC :: a -> String
+    showsC :: a -> ShowS
+    showsC = showString . showC
+
+instance ShowC Label where
+    showC lbl = "label_" ++ (show lbl)
+
+instance ShowC VarName where
+    showC (I.MV s) = tail s
+
+instance ShowC I.UnOp where
+    showC I.OpNeg = "-"
+    showC I.OpNot = "!"
+
+data ExprWrap v = EW (I.Expr v)
+instance (ShowC v) => Show (ExprWrap v) where
+    showsPrec _ (EW (I.Lit pos x)) = shows x
+    showsPrec _ (EW (I.LitLabel pos lab)) = showString "(int64_t)" . showString lab
+    showsPrec _ (EW (I.Var pos v)) = showsC v
+    showsPrec _ (EW (I.Load pos expr)) = showString "*(int64_t *)(" . showsPrec 0 (EW expr) . showString ")"
+    showsPrec p (EW (I.UnOp pos op expr)) = showParen (p>0) (showsC op . showString " " . showsPrec 1 (EW expr))
+    showsPrec p (EW (I.BinOp pos op ex1 ex2))
+        = showParen (p>0) (showsPrec 1 (EW ex1) . showString " " . shows op . showString " " . showsPrec 1 (EW ex2))
+    showsPrec p (EW (I.Cond pos exc ex1 ex2))
+        = showParen (p>0) (showsPrec 1 (EW exc)
+                           . showString " ? " . showsPrec 1 (EW ex1)
+                           . showString " : " . showsPrec 1 (EW ex2))
+
+instance (ShowC v) => ShowC (I.Expr v) where
+    showC = show . EW
+
+showT :: (Show a) => a -> String
+showT = tail . show
+
+instance (ShowC v) => ShowC (I.Inst v e x) where
+    showC (I.Label pos lbl)
+        = printf "%s: // {%s}"
+          (showC lbl) (showPos pos)
+    showC (I.Enter pos lbl args)
+        = printf "%s: // {%s}"
+          (showC lbl) (showPos pos)
+    showC (I.PostEnter pos lbl)
+        = printf "%s: // {%s}"
+          (showC lbl) (showPos pos)
+    showC (I.Store pos var expr)
+        = printf "%s = %s; // {%s}"
+          (showC var) (showC expr) (showPos pos)
+    showC (I.DivStore pos var op expr1 expr2)
+        = printf "%s = (%s) %s (%s); // {%s}"
+          (showC var) (showC expr1) (show op) (showC expr2) (showPos pos)
+    showC (I.IndStore pos dest expr)
+        = printf "*((int64_t *)(%s)) = %s; // {%s}"
+          (showC dest) (showC expr) (showPos pos)
+    showC (I.Call pos dest name args)
+        = printf "%s = %s(%s); // {%s}"
+          (showC dest) name (intercalate ", " $ map showC args) (showPos pos)
+    showC (I.Callout pos dest name args)
+        = printf "{ int64_t (*magic_f)() = %s; %s = magic_f(%s); } // {%s}"
+          name (showC dest) (intercalate ", " $ map showC args) (showPos pos)
+    showC (I.Branch pos lbl)
+        = printf "goto %s; // {%s}"
+          (showC lbl) (showPos pos)
+    showC (I.CondBranch pos expr tlbl flbl)
+        = printf "if (%s) // {%s}\n      goto %s;\n    else\n      goto %s;"
+          (showC expr) (showPos pos) (showC tlbl) (showC flbl)
+    showC (I.Return pos for mexpr)
+        = printf "return %s; // {%s, %s}"
+          (maybe "0" showC mexpr) for (showPos pos)
+    showC (I.Fail pos)
+        = printf "exit(1); // {%s}"
+          (showPos pos)
+
+variablesUsed :: Block I.MidIRInst C C -> S.Set I.VarName
+variablesUsed block = S.fromList $ map fromJust $ filter isJust $ map getVar instrs
+    where (_, instrs, _) = blockToNodeList block
+          getVar :: (I.Inst v e x) -> Maybe v
+          getVar (I.Store _ var _) = Just var
+          getVar (I.DivStore _ var _ _ _) = Just var
+          getVar (I.Call _ var _ _) = Just var
+          getVar (I.Callout _ var _ _) = Just var
+          getVar _ = Nothing
+
+extractInsts :: (MaybeC C (n C O), [n O O], MaybeC C (n O C))
+                -> (n C O, [n O O], n O C)
+extractInsts (JustC e, nodes, JustC x) = (e, nodes, x)
+
+extractArgs :: Block I.MidIRInst C C -> [VarName]
+extractArgs block =
+    case instTriple of
+        (I.Enter _ _ args, _, _) -> args
+        _ -> error "shouldn't be extracting args here :-O"
+    where instTriple = extractInsts $ blockToNodeList block
+
+hasReturn :: Block I.MidIRInst C C -> Bool
+hasReturn block =
+    case instTriple of
+        (_, _, I.Return _ _ returnVal) -> isJust returnVal
+        _ -> False
+    where instTriple = extractInsts $ blockToNodeList block
+
+midIRToC :: I.MidIRRepr -> String
+midIRToC m = "#include <stdio.h>\n#include <stdlib.h>\n#include <stdint.h>\n\n"
+             ++ "/* function prototypes for lib6035 */\n"
+             ++ "int get_int_035();\nint get_int();\n\n"
+             ++ (showFields (I.midIRFields m))
+             ++ (showStrings (I.midIRStrings m))
+             -- ++ "void main()\n{\n"
+             ++ (showMethods (I.midIRMethods m))
+             -- ++ graphToC showC (graph)
+             -- ++ "}"
+ 
+    where graph = I.midIRGraph m
+          showMethod (I.Method pos name entry postenter)
+              = printf "%s %s(%s)\n{\n%s\n\n%s\n}"
+                returnType cName argString varString instString
+              where visited = dfsSearch graph entry [entry]
+                    nvisited = case visited of
+                                   [] -> []
+                                   _ -> map Just (tail visited) ++ [Nothing]
+                    entryBlock = lookupLabel graph entry
+                    args = extractArgs entryBlock
+                    argString = intercalate ", " (map (("int64_t " ++) . showC) args)
+                    varSet = foldl1 S.union $ map (variablesUsed . lookupLabel graph) visited
+                    vars = S.toList (S.difference varSet $ S.fromList args)
+                    varString :: String
+                    varString = 
+                        case vars of
+                            [] -> "  // no locals"
+                            _ -> printf "  int64_t %s;" (intercalate ", " (map showC vars))
+                    instString = (intercalate "\n" $ intercalate [""] $ map (labelToC graph) (zip visited nvisited))
+                    returnType 
+                        | name == "method_main" = "int"
+                        | otherwise = "int64_t"
+                    cName
+                        | name == "method_main" = "main"
+                        | otherwise = name
+          showMethods methods = "/* begin methods */\n" 
+                                ++ (intercalate "\n\n" $ map showMethod methods)
+          showField (I.MidIRField pos name msize)
+              = "int64_t " ++ name ++ (showSize msize) ++ ";\n"
+          showSize (Just n) = printf "[%s]" (show n)
+          showSize (Nothing) = "[1]"
+          showFields fields = "/* begin fields */\n" 
+                              ++ (concatMap showField fields) ++ "\n"
+          showString (name, pos, str) = printf "char *%s = %s;\n" name (show str)
+          showStrings strings = "/* begin strings */\n"
+                                ++ (concatMap showString strings) ++ "\n"
+
+labelToC :: Graph I.MidIRInst C C -> (Label, Maybe Label) -> [String]
+labelToC graph (lbl, mnlabel)
+    = ["  " ++ (showC a) ++ " // (a)"]
+      ++ (map (show') bs)
+      ++ mjmp
+      ++ (if not (null children) && not fallthrough
+          then nextJmp else [])
+  where (a, bs, c) = extractInsts (blockToNodeList block)
+        block = lookupLabel graph lbl
+        children = successors block
+        ind = ("    " ++)
+        show' :: I.MidIRInst e x -> String
+        show' x = (ind $ showC x) ++ " // (bs)"
+        fallthrough = case mnlabel of
+                        Just l -> l == head (reverse children)
+                        Nothing -> False
+        nextJmp = [ind $ "goto " ++ (showC $ head $ reverse children) ++ ";"]
+        mjmp :: [String]
+        mjmp = case c of
+                 _ -> [(ind $ showC c) ++ " // (c)"]
