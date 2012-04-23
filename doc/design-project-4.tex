@@ -221,6 +221,17 @@ we are planning to run at the Assembly level in order to remove any
 remaining dead code that is produced from the conversion of the midir
 graph to the Assembly Code.
 
+Another ``optimization'' that we're doing is Instruction Selection,
+where we select instructions at the Assembly level that are faster
+than other generalized forms of these instructions. While similar to
+Strength Reduction, this level of ``optimization'' is one that is
+specific to the assembly level implementation of the instructions,
+whether using ``xor \%rax, \%rax'' rather than ``mov 0, \%rax''. Or,
+using various forms of ``lea'' rather than ``mov'', ``cmov''.  These
+optimizations, while not very effective overall, still form a critical
+part of the code generation, since it allows us to eliminate assembly
+instructions that would end up stalling the pipeline at the CPU level.
+
 \section {Test Plan}
 \label{sec:test}
 
