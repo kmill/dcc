@@ -82,7 +82,8 @@ data Token = Label SourcePos String
 alabel :: Scanner Token
 alabel = Label <$> getPosition
          <*> try (many validchar <* char ':')
-  where validchar = letter <|> char '_' <|> digit  <?> "alphanumeric"
+
+validchar = letter <|> char '_' <|> digit  <?> "alphanumeric"
 
 alit :: Scanner Token
 alit = Symbol <$> getPosition
@@ -98,7 +99,7 @@ anumber = Number <$> getPosition
           <*> (read <$> many1 digit)
 asymbol :: Scanner Token
 asymbol = Symbol <$> getPosition
-          <*> (many1 alphaNum <* notFollowedBy alphaNum)
+          <*> (many1 validchar <* notFollowedBy validchar)
          
 atoken = shorthand <|> alabel <|> anumber <|> asymbol
 
