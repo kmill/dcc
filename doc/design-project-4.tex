@@ -121,15 +121,26 @@ Our test plan consists of several redundant factors to increase the
 probability that we catch any errors with our compiler. First, our
 test suite includes a set of shell scripts that make use of every test
 we've written inside a certain ``testing directory''. We also plan to
-implement a ``Decaf to C'' compiler that produces valid C code from a
-valid decaf program and uses GCC to produce the expected
+implement a ``Mid-IR to C'' compiler that produces valid C code from a
+valid decaf program's middle IR and uses GCC to produce the expected
 output. Finally, to test correctness of our compiler even further, we
 also plan to implement a complex and ``Real'' decaf program, which in
-our case is a VM for a very simple stack-based programming language. 
+our case is a VM for a very simple stack-based programming language.
 
 \subsection {Testing Scripts}
 
-\subsection {Decaf to C Converter} 
+All the tests from each stage have been compiled into a single
+directory with a single testing script. This script will run the test,
+and if that test fails, it will run the Mid-IR to C converter with no
+optimizations to determine whether the problem is a result of
+optimizations or a result of code generation. 
+
+\subsection {Mid-IR to C Converter} 
+
+The Mid-IR to C converter converts from our middle IR to C. The Mid-IR
+preserves the function call abstraction, but not internal control
+flow. The C code is human readable, and enables us to see the results
+of programs before we do register allocation and code generation.
 
 \subsection {Large ``Real'' Decaf Program}
 
