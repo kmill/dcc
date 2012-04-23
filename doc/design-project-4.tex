@@ -23,7 +23,8 @@ Optimizations (Section~\ref{sec:peephole}).
 
 Our test plan (Section~\ref{sec:test}) is designed to test for correctness on many levels and
 to provide us with useful information about the effectiveness of our
-optimizations. 
+optimizations. Finally, the order in which we perform these
+optimizations is discussed in Section~\ref{sec:order}.
 
 \section {Division of Work}
 
@@ -36,6 +37,22 @@ Loop-Invariant Code Motion and be in charge of the test system.
 
 \section {Register Allocator}
 \label{sec:register}
+
+Register allocation is the most important optimization we hope to
+implement for our optimized compiler. Fortunately, it is a very
+well-defined and well-documented problem, so we plan to make use of
+extensive materials while implementing a standard solution. 
+
+The current plan for our register allocator, which operates at nearly
+the lowest level of our compiler, is to implement the
+algorithm as described by Muchnick in the register allocation
+section. The final register allocator will be a combination of
+liveness analysis and graph coloring with a set of heuristics to
+approximate the optimal solution to the graph coloring problem. 
+
+We expect to see the code generator output 20-25\% fewer instructions
+then it currently does, the largest speedup by far. Most instructions
+currently are superfluous moves to and from the stack.
 
 \section {Loop Parallelizer}
 \label{sec:parallel}
@@ -60,9 +77,12 @@ with instructions to parallelize. The code generator will then
 systematically create code to generate extra threads of execution upon encountering
 these annotations.
 
+To find the loops in our mid-ir, we can make use of our dataflow
+framework from the previous project to do ``Dominator Analysis''. 
+
 Since Loop parallelization can be quite tricky, our initial design
 only focuses on a select subset of parallelizable loops. For example,
-our initial design only targets for loops and then only parallelizes
+our initial design only parallelizes
 loops whose iterations are \textbf{completely independent} of each
 other in terms of data used. Such a design hopes to minimize the
 number of locks used and avoid complexity such as message passing in
@@ -145,8 +165,56 @@ while the mid-ir is returned to tree-form.
 \section {Tail-Call Recursion}
 \label{sec:tailcall}
 
+The Tail-Call Recursion optimization is an optimization that avoids
+allocating a new frame in the stack because the caller will simply
+return the value of the call. In the ``tree-form'' of the MidIR, this
+optimization would eliminate calls of this form, and instead create an
+edge between the caller and inside the callee.\\
+
+Since Tail-Call Recursion can have side effects, and is inherently
+difficult to construct a lattice for across multiple methods, our
+initial design focuses on only Tail-Call Recursion across calls with
+the \textbf{same caller and callee methods}. In future revisions of
+this optimization, we hope to increase the optimization across
+seperate methods in order to take more advantage of this optimization
+in non-self recursive methods.
+
+To perform this optimization, for each method in the program, we keep
+track of the returns from each method, and create a Lattice with the
+Return type of each method, and then apply the Tail-Call optimization
+to calls at the end of methods that match the form where the caller
+and callee are both the same method, and the current pass over the
+Lattice is focusing on that function. Once we've found a location
+where a Tail-Call optimization can be performed, we reconstruct the
+midir graph to remove the call from that block, and add an edge
+between the node with the caller, and a node with the callee.
+
+
 \section {Algebraic Simplification}
 \label{sec:algebra}
+
+Algebraic Simplification is the process of simplifying basic algebraic
+identities (such as $x := y * 1$) to
+produce simpler code. 
+
+Our algebraic simplifier is a basic extension of the constant
+propagator we produced as part of the previous project. We make use of
+Hoopl's graph rewrite functionality to check a given expression
+against a series of simplification rules we define in a separate
+module. Our rules are defined by a DSL and we require a valid
+justification for each rule since some rules can have unintended
+consequences (such as attempting to negate the most negative
+integer). 
+
+To avoid producing incorrect code as a result of algebraic
+simplification, we plan to change the mid-ir so that ``Division
+Operations'' (which include both divides and mods) are instructions
+separate from ``pure'' expressions. The reason for this is that
+division operations are capable of producing side-effects in the form
+of divide by zero exceptions, so our algebraic simplifier is safer
+when it only operates on ``pure'' expressions. 
+
+
 
 \section {Loop Invariant Code Motion}
 \label{sec:codehoist}
@@ -162,6 +230,59 @@ then we can move the assignment.
 
 \section {Peephole Optimizations and other Small Optimizations}
 \label{sec:peephole}
+In addition to the above major optimizations, we additionally plan to
+implement various Peephole Optimizations and other smaller
+optimizations to further improve the performance of the assembled
+code.\\
+
+The Peephole optimizations that we intend to perform include Strength
+Reduction, Constant Folding, Null Sequence optimizations. Strength
+Reduction is the optimization where slower optimizations are replaced
+by faster optimizations, such as replacing:\\
+
+\begin{verbatim}
+a = b * 4;
+t = 0;
+for(i=0;10)
+  t += i * a;
+\end{verbatim}
+
+with:\\
+
+\begin{verbatim}
+a = b >> 2;
+t = 0;
+k = 0;
+for(i=0;10)
+{
+  t += k;
+  k += a;
+}
+\end{verbatim}
+
+Meanwhile, Constant Folding is the optimization where $10*2*30$ is
+immediately evaluated as $600$. This would reduce the amount of
+arithmetic operations that need to be done at run-time and rather move
+as many of them as possible to compile-time.
+
+The Null Sequence optimization, which we already partially do, is an
+optimization that would remove any code that has no effect on the
+running code, and that has no side-effects throughout the
+program. This is a lower level version of Dead Code Elimination, which
+we are planning to run at the Assembly level in order to remove any
+remaining dead code that is produced from the conversion of the midir
+graph to the Assembly Code.
+
+Another ``optimization'' that we're doing is Instruction Selection,
+where we select instructions at the Assembly level that are faster
+than other generalized forms of these instructions. While similar to
+Strength Reduction, this level of ``optimization'' is one that is
+specific to the assembly level implementation of the instructions,
+whether using ``xor \%rax, \%rax'' rather than ``mov 0, \%rax''. Or,
+using various forms of ``lea'' rather than ``mov'', ``cmov''.  These
+optimizations, while not very effective overall, still form a critical
+part of the code generation, since it allows us to eliminate assembly
+instructions that would end up stalling the pipeline at the CPU level.
 
 \section {Test Plan}
 \label{sec:test}
@@ -194,4 +315,53 @@ of programs before we do register allocation and code generation.
 \subsection {Large ``Real'' Decaf Program}
 
 
+\section {Ordering of Optimizations} 
+\label{sec:order}
+
+The order of the optimizations is important for their
+effectiveness. The general order of our optimizations, which we derived
+in part from Muchnick, is as follows: 
+
+\begin{enumerate}
+
+\item Constant Propagation immediately followed by Algebraic
+  Simplification 
+
+\item Initial Tail Call Optimizations 
+
+\item Elimination of superfluous blocks 
+
+\item Global CSE (with flattening of the mid-ir)
+
+\item Global Copy Propagation
+
+\item Dead Code Elimination
+
+\item Unflattening of the mid-ir 
+
+\item Dead Code Elimination again to remove anything missed by the
+  unflattener 
+
+\item Loop Invariant Code Motion
+
+\item Another Tail Call pass 
+
+\item Another Dead Code Elimination pass 
+
+\item Another Block elimination pass 
+
+\item Loop Parallelization
+
+\item Initial Peephole Optimizations including peephole instruction selection
+
+\item Register Allocation
+
+\item Peephole Optimizations again including more instruction selection
+
+\end{enumerate}
+
+\noindent It is our goal with this ordering to produce the best possible use of
+our individual optimizations. 
+
 \end{document}
+

@@ -227,15 +227,13 @@ simpBinOp pos op sex1 sex2 = traceM ("bin", op, sex1, sex2) $ msum rules
 --               simpES $ BinOp binpos OpDiv
 --                          (BinOp pos OpMul sex1 num)
 --                          denom
-          -- We may distribute multiplication by zero over addition or
-          -- subtraction
+
+          -- Multiplication by zero is definitely zero (no need to
+          -- worry about removing a division because that's in
+          -- DivStore)
           , do guard $ op == OpMul
                Lit _ 0 <- withExpr sex1
-               BinOp binpos op' a b <- withExpr sex2
-               guard $ op' `elem` [OpAdd, OpSub]
-               simpES $ BinOp binpos op'
-                          (BinOp pos OpMul sex1 a)
-                          (BinOp pos OpMul sex1 b)
+               return sex1
           -- If we are multiplying a literal by the negation of
           -- something, we can move the negation to the literal as
           -- long as the literal isn't the most negative number.
