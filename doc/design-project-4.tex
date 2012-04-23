@@ -151,6 +151,15 @@ while the mid-ir is returned to tree-form.
 \section {Loop Invariant Code Motion}
 \label{sec:codehoist}
 
+When a single variable is assigned the same value repeatedly in a
+loop, it is a good idea to move that assignment outside the loop.
+Specifically, our Loop Invariant Code Motion optimization moves
+statements which are invariant over loop evaluations to the previous
+basic block. This invariant determination can be easily made using
+reaching definitions analysis: if the reaching definitions for all the
+variables on the right-hand side of an assignment are before the loop,
+then we can move the assignment. 
+
 \section {Peephole Optimizations and other Small Optimizations}
 \label{sec:peephole}
 
