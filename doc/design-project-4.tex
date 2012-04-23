@@ -165,11 +165,36 @@ while the mid-ir is returned to tree-form.
 \section {Tail-Call Recursion}
 \label{sec:tailcall}
 
+The Tail-Call Recursion optimization is an optimization that avoids
+allocating a new frame in the stack because the caller will simply
+return the value of the call. In the ``tree-form'' of the MidIR, this
+optimization would eliminate calls of this form, and instead create an
+edge between the caller and inside the callee.\\
+
+Since Tail-Call Recursion can have side effects, and is inherently
+difficult to construct a lattice for across multiple methods, our
+initial design focuses on only Tail-Call Recursion across calls with
+the \textbf{same caller and callee methods}. In future revisions of
+this optimization, we hope to increase the optimization across
+seperate methods in order to take more advantage of this optimization
+in non-self recursive methods.
+
+To perform this optimization, for each method in the program, we keep
+track of the returns from each method, and create a Lattice with the
+Return type of each method, and then apply the Tail-Call optimization
+to calls at the end of methods that match the form where the caller
+and callee are both the same method, and the current pass over the
+Lattice is focusing on that function. Once we've found a location
+where a Tail-Call optimization can be performed, we reconstruct the
+midir graph to remove the call from that block, and add an edge
+between the node with the caller, and a node with the callee.
+
+
 \section {Algebraic Simplification}
 \label{sec:algebra}
 
 Algebraic Simplification is the process of simplifying basic algebraic
-identities (such as \begin{verbatim}x := y * 1 \end{verbatim}) to
+identities (such as $x := y * 1$) to
 produce simpler code. 
 
 Our algebraic simplifier is a basic extension of the constant
@@ -196,6 +221,48 @@ when it only operates on ``pure'' expressions.
 
 \section {Peephole Optimizations and other Small Optimizations}
 \label{sec:peephole}
+In addition to the above major optimizations, we additionally plan to
+implement various Peephole Optimizations and other smaller
+optimizations to further improve the performance of the assembled
+code.\\
+
+The Peephole optimizations that we intend to perform include Strength
+Reduction, Constant Folding, Null Sequence optimizations. Strength
+Reduction is the optimization where slower optimizations are replaced
+by faster optimizations, such as replacing:\\
+
+\begin{verbatim}
+a = b * 4;
+t = 0;
+for(i=0;10)
+  t += i * a;
+\end{verbatim}
+
+with:\\
+
+\begin{verbatim}
+a = b >> 2;
+t = 0;
+k = 0;
+for(i=0;10)
+{
+  t += k;
+  k += a;
+}
+\end{verbatim}
+
+Meanwhile, Constant Folding is the optimization where $10*2*30$ is
+immediately evaluated as $600$. This would reduce the amount of
+arithmetic operations that need to be done at run-time and rather move
+as many of them as possible to compile-time.
+
+The Null Sequence optimization, which we already partially do, is an
+optimization that would remove any code that has no effect on the
+running code, and that has no side-effects throughout the
+program. This is a lower level version of Dead Code Elimination, which
+we are planning to run at the Assembly level in order to remove any
+remaining dead code that is produced from the conversion of the midir
+graph to the Assembly Code.
 
 \section {Test Plan}
 \label{sec:test}
@@ -204,15 +271,26 @@ Our test plan consists of several redundant factors to increase the
 probability that we catch any errors with our compiler. First, our
 test suite includes a set of shell scripts that make use of every test
 we've written inside a certain ``testing directory''. We also plan to
-implement a ``Decaf to C'' compiler that produces valid C code from a
-valid decaf program and uses GCC to produce the expected
+implement a ``Mid-IR to C'' compiler that produces valid C code from a
+valid decaf program's middle IR and uses GCC to produce the expected
 output. Finally, to test correctness of our compiler even further, we
 also plan to implement a complex and ``Real'' decaf program, which in
-our case is a VM for a very simple stack-based programming language. 
+our case is a VM for a very simple stack-based programming language.
 
 \subsection {Testing Scripts}
 
-\subsection {Decaf to C Converter} 
+All the tests from each stage have been compiled into a single
+directory with a single testing script. This script will run the test,
+and if that test fails, it will run the Mid-IR to C converter with no
+optimizations to determine whether the problem is a result of
+optimizations or a result of code generation. 
+
+\subsection {Mid-IR to C Converter} 
+
+The Mid-IR to C converter converts from our middle IR to C. The Mid-IR
+preserves the function call abstraction, but not internal control
+flow. The C code is human readable, and enables us to see the results
+of programs before we do register allocation and code generation.
 
 \subsection {Large ``Real'' Decaf Program}
 
@@ -266,3 +344,4 @@ in part from Muchnick, is as follows:
 our individual optimizations. 
 
 \end{document}
+
