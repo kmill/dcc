@@ -1,0 +1,14 @@
+//>0
+class Program {
+
+int f(int a, int b, int c, int d, int e, int f, int g)
+{
+	return a*b + c - d*e*f + g;
+}
+
+void main()
+{
+callout("printf", "%d\n", f(0, 0, 0, 0, 0, 0, 0));
+}
+
+}

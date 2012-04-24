@@ -1,0 +1,13 @@
+//>-24
+class Program {
+
+  int f(int a, int b, int c, int d) {
+    return a-b-c-d;
+  }
+
+  void main() {
+    callout("printf", "%d\n", f(2, 22, 0, 4)); 
+  }
+
+}
+

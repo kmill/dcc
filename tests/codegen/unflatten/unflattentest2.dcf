@@ -1,0 +1,19 @@
+//>1265
+class Program {
+  
+  int f(int a, int b) {
+    int c; 
+    for (i = 0 ; 22) { 
+      int j, k;
+      j = a + b;
+      k = a + b; 
+      c = c + i * j + k; 
+    }
+    return c; 
+  }
+
+  void main() {
+    callout("printf", "%d\n", f(2, 3));
+  }
+
+}

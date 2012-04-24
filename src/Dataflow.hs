@@ -89,7 +89,7 @@ dataflows
       , DFA optCommonSubElim performCSEPass
       , DFA optCopyProp performCopyPropPass
       , DFA optDeadCode performDeadCodePass 
-      , DFA (\opts -> optCommonSubElim opts || optFlat opts) performUnflattenPass 
+      , DFA (\opts -> optCommonSubElim opts || optFlat opts || optUnflat opts ) performUnflattenPass 
       , DFA optDeadCode performDeadCodePass
       , DFA optTailcall performTailcallPass 
       --, DFA optNZP performNZPPass

@@ -1,0 +1,17 @@
+//>Correct
+class Program {
+
+  boolean f(boolean a, boolean b, boolean c) {
+    return (a || (b && c) || b);
+  }
+
+  void main() {
+    if (f(false, true, false)) {
+      callout("printf", "Correct\n");
+    }
+    else {
+      callout("printf", "Incorrect\n");
+    }
+  }
+
+}
