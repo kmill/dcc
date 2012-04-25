@@ -325,7 +325,8 @@ instance Show (Asm e x) where
         (show sname) (show reg) (showPos pos)
   show (MovIRMtoR pos a b) = showBinOp "movq" pos a b
   show (MovIRtoM pos a b) = showBinOp "movq" pos a b
-  show (Mov64toR pos a b) = showBinOp "movq" pos a b
+  show (Mov64toR pos a b) = printf "%s $%s, %s      # %s"
+                            "movq" (show a) (show b) (showPos pos)
 
   show (CMovRMtoR pos flag a b) = showBinOp opcode pos a b
             where opcode = "cmov" ++ show flag ++ "q"
