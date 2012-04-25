@@ -1,0 +1,20 @@
+//>0 -1 -2 -3 
+//>1 0 -1 -2 
+//>2 1 0 -1 
+//>3 2 1 0 
+class Program {
+  int a[16];
+  void main() {
+    for(col=0;4) {
+      for(row=0;4) {
+	a[4*row+col] = row-col;
+      }
+    }
+    for(row=0;4) {
+      for(col=0;4) {
+	callout("printf", "%d ", a[4*row+col]);
+      }
+      callout("printf", "\n");
+    }
+  }
+}
