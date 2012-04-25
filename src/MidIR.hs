@@ -253,7 +253,7 @@ statementToMidIR fname env c b (HAssignSt senv pos loc op expr)
                               A.IncAssign -> BinOp pos OpAdd (Load pos (arrptr i')) ex
                               A.DecAssign -> BinOp pos OpSub (Load pos (arrptr i')) ex
                   [checkhighl, okl, faill] <- replicateM 3 freshLabel
-                  return $ ((mkMiddle $ Store pos i' i)
+                  return $ (gi <*> (mkMiddle $ Store pos i' i)
                             <*> (mkLast $ CondBranch pos (BinOp pos CmpLT (Var pos i') (Lit pos 0))
                                              faill checkhighl))
                       |*><*| (mkFirst (Label pos checkhighl)
@@ -364,7 +364,7 @@ expressionToMidIR env (HLoadLoc senv pos loc)
                   deadv <- genTmpVar
                   errl <- genStr pos $ "Array index out of bounds at " ++ show pos ++ "\n"
                   [checkhighl, okl, faill] <- replicateM 3 freshLabel
-                  let g = ((mkMiddle $ Store pos i' i)
+                  let g = (gi <*> (mkMiddle $ Store pos i' i)
                            <*> (mkLast $ CondBranch pos (BinOp pos CmpLT (Var pos i') (Lit pos 0))
                                             faill checkhighl))
                         |*><*| (mkFirst (Label pos checkhighl)
