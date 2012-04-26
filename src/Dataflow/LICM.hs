@@ -38,7 +38,7 @@ motionLattice = DataflowLattice { fact_name = "Code Motion Lattice"
     where intersectMaps :: Label -> OldFact MotionFact -> NewFact MotionFact -> (ChangeFlag, MotionFact)
           intersectMaps _ (OldFact oldSet) (NewFact newSet)
               = (c, res)
-              where c = SomeChange
+              where c = changeIf $ not (res == oldSet && res == newSet)
                     res = S.intersection newSet oldSet
 
 emptyMotionFact :: MotionFact
