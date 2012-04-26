@@ -8,6 +8,7 @@ import Dataflow.BlockElim
 import Dataflow.Flatten
 import Dataflow.CopyProp
 import Dataflow.Tailcall
+import Dataflow.LICM
 import Dataflow.OptSupport
 --import Dataflow.NZP
 
@@ -86,6 +87,7 @@ dataflows
       , DFA optDeadCode performDeadCodePass
       , DFA optBlockElim performBlockElimPass 
       , DFA (\opts -> optCommonSubElim opts || optFlat opts) performFlattenPass
+      , DFA optLICM performLICMPass
       , DFA optCommonSubElim performCSEPass
       , DFA optCopyProp performCopyPropPass
       , DFA optDeadCode performDeadCodePass 
@@ -106,10 +108,13 @@ performDeadCodePass midir = performBwdPass deadCodePass midir S.empty
 performBlockElimPass midir = performBwdPass blockElimPass midir Nothing
 performFlattenPass midir = performFwdPass flattenPass midir ()
 --performNZPPass midir = performFwdPass nzpPass midir emptyNZPFact
+performLICMPass midir = performBwdPass licmPass midir emptyMotionFact
 
-performFwdPass :: (FwdPass (StupidFuelMonadT GM) MidIRInst a) -> MidIRRepr -> a -> RM MidIRRepr
-performFwdPass pass midir eFact
-  = do (graph', factBase, _) <- analyzeAndRewriteFwd
+-- Type of analyzeAndRewrite*
+type AnalyzeFun p a = (p (StupidFuelMonadT GM) MidIRInst a) -> MaybeC C [Label] -> Graph MidIRInst C C -> Fact C a -> (StupidFuelMonadT GM) (Graph MidIRInst C C, FactBase a, MaybeO C a)
+performPass :: AnalyzeFun p a -> (p (StupidFuelMonadT GM) MidIRInst a) -> MidIRRepr -> a -> RM MidIRRepr
+performPass analyzeAndRewrite pass midir eFact
+  = do (graph', factBase, _) <- analyzeAndRewrite
                                 pass
                                 (JustC mlabels)
                                 graph
@@ -118,29 +123,17 @@ performFwdPass pass midir eFact
     where graph = midIRGraph midir
           mlabels = (map methodEntry $ midIRMethods midir)
 
+performFwdPass :: (FwdPass (StupidFuelMonadT GM) MidIRInst a) -> MidIRRepr -> a -> RM MidIRRepr
+performFwdPass = performPass analyzeAndRewriteFwd
+
 performBwdPass :: (BwdPass (StupidFuelMonadT GM) MidIRInst a) -> MidIRRepr -> a -> RM MidIRRepr 
-performBwdPass pass midir eFact
-    = do (graph', factBase, _) <- analyzeAndRewriteBwd 
-                                  pass
-                                  (JustC mlabels)
-                                  graph
-                                  (mapFromList (map (\l -> (l, eFact) ) mlabels))
-         return $ midir { midIRGraph = graph' }
-    where graph = midIRGraph midir 
-          mlabels = (map methodEntry $ midIRMethods midir)
+performBwdPass = performPass analyzeAndRewriteBwd
 
 performCSEPass :: MidIRRepr -> RM MidIRRepr 
 performCSEPass midir 
     = do nonTemps <- getVariables midir
          let nonTemps' = S.unions $ mapElems nonTemps
-         (graph', factBase, _) <- analyzeAndRewriteFwd
-                                  (csePass nonTemps')
-                                  (JustC mlabels)
-                                  graph
-                                  (mapFromList (map (\l -> (l, emptyExprFact) ) mlabels))
-         return $ midir { midIRGraph = graph'}
-    where graph = midIRGraph midir 
-          mlabels = (map methodEntry $ midIRMethods midir)
+         performFwdPass (csePass nonTemps') midir emptyExprFact
 
 performUnflattenPass :: MidIRRepr -> RM MidIRRepr 
 performUnflattenPass midir
@@ -152,9 +145,6 @@ performUnflattenPass midir
          unFlatten factBase midir
     where graph = midIRGraph midir
           mlabels = (map methodEntry $ midIRMethods midir)
-
-
-                                   
 
 -- (trace (map (show . entryLabel) (forwardBlockList mlabels body)) body)
 
@@ -209,6 +199,13 @@ csePass nonTemps = FwdPass
                    { fp_lattice = exprLattice
                    , fp_transfer = exprAvailable nonTemps
                    , fp_rewrite = cseRewrite nonTemps }
+
+licmPass :: (CheckpointMonad m, FuelMonad m, UniqueNameMonad m)
+            => BwdPass m MidIRInst MotionFact
+licmPass = BwdPass
+           { bp_lattice = motionLattice
+           , bp_transfer = motionTransfer
+           , bp_rewrite = motionRewrite }
                    
 performTailcallPass :: MidIRRepr -> RM MidIRRepr
 performTailcallPass midir
