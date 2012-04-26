@@ -86,12 +86,12 @@ to32Imm (Imm64Label s x) = Imm32Label s $ fromIntegral x
 checkIfScalar :: Int64 -> Bool
 checkIfScalar x = x `elem` [1,2,4,8]
 
-intToScalar :: Int64 -> Scalar
-intToScalar 1 = SOne
-intToScalar 2 = STwo
-intToScalar 4 = SFour
-intToScalar 8 = SEight
-intToScalar _ = error "Not a scalar"
+intToScalar :: Int64 -> Maybe Scalar
+intToScalar 1 = Just SOne
+intToScalar 2 = Just STwo
+intToScalar 4 = Just SFour
+intToScalar 8 = Just SEight
+intToScalar _ = Nothing
 
 instance Show Reg where
     show (MReg reg) = show reg
@@ -125,7 +125,7 @@ instance Show Scalar where
 
 instance Show MemAddr where
     show (MemAddr Nothing lit Nothing _)
-        -- Rip-relative addressing is cheaper!
+        -- Rip-relative addressing!
         -- http://www.x86-64.org/documentation/assembly.html
         = show lit ++ "(%rip)"
     show (MemAddr (Just base) lit Nothing _)
@@ -325,7 +325,8 @@ instance Show (Asm e x) where
         (show sname) (show reg) (showPos pos)
   show (MovIRMtoR pos a b) = showBinOp "movq" pos a b
   show (MovIRtoM pos a b) = showBinOp "movq" pos a b
-  show (Mov64toR pos a b) = showBinOp "movq" pos a b
+  show (Mov64toR pos a b) = printf "%s $%s, %s      # %s"
+                            "movq" (show a) (show b) (showPos pos)
 
   show (CMovRMtoR pos flag a b) = showBinOp opcode pos a b
             where opcode = "cmov" ++ show flag ++ "q"

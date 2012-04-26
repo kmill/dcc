@@ -1,0 +1,6 @@
+//>22222222222222
+class Program {
+  void main() {
+    callout("printf", "%lld\n", 22222222222222);
+  }
+}

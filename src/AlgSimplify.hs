@@ -3,7 +3,7 @@
 -- | It is imperative to justify all rules put into the simplifier.
 -- For instance, you can't negate the most negative integer safely!
 
-module AlgSimplify(algSimplifyInst) where
+module AlgSimplify(algSimplifyInst, flattenOp) where
 
 import IR
 import Control.Monad

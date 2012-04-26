@@ -7,6 +7,7 @@ import Compiler.Hoopl
 import Compiler.Hoopl.Fuel
 import qualified Assembly as A
 import Assembly(checkIf32Bit, rmToIRM, LowIRRepr(..), LowIRField(..))
+import AlgSimplify
 import qualified IR as I
 import IR(MidIRExpr, VarName, Showing)
 import AST(noPosition, SourcePos, showPos)
@@ -362,26 +363,60 @@ expToR e = mcut $ msum rules
               ]
 
 expToMem :: MidIRExpr -> CGM (Graph A.Asm O O, A.MemAddr)
-expToMem e = mcut $ msum rules
+expToMem e = do let exp = flattenOp I.OpAdd e
+                (exp', disp) <- disp exp
+                (exp'', gind, ind, sc) <- getScalar exp'
+                (gbase, base) <- getBase exp''
+                let mem = A.MemAddr base disp ind sc
+                return (gind <*> gbase, mem)
     where
-      rules = [ do I.LitLabel pos s <- withNode e
-                   return ( GNil
-                          , A.MemAddr Nothing (A.Imm32Label s 0) Nothing A.SOne )
-              , do I.BinOp pos I.OpAdd expa expb <- withNode e
-                   a <- expToI expa
-                   (gb, b) <- expToR expb
-                   return (gb, A.MemAddr (Just b) a Nothing A.SOne)
-              , do I.BinOp pos I.OpAdd expa (I.BinOp _ I.OpMul (I.Lit _ 8) expi) <- withNode e
-                   (gb, b) <- expToR expi
-                   (ga, a) <- expToR expa
-                   return (ga <*> gb, A.MemAddr (Just a) (A.Imm32 0) (Just b) A.SEight)
-              , do I.BinOp pos I.OpAdd expa expb <- withNode e
-                   (gb, b) <- expToR expb
-                   (ga, a) <- expToR expa
-                   return (ga <*> gb, A.MemAddr (Just a) (A.Imm32 0) (Just b) A.SOne)
-              , do (g, r) <- expToR e
-                   return (g, A.MemAddr (Just r) (A.Imm32 0) Nothing A.SOne)
-              ]
+      disp exp = msum
+                 [ -- do not deal with labels here.  They should be leaq'd to work on macs.
+                 -- [disp]
+                  do (I.Lit _ i):xs <- return exp
+                     guard $ checkIf32Bit i
+                     return (xs, A.Imm32 $ fromIntegral i)
+                 -- nothing
+                 ,do return (exp, A.Imm32 0)
+                 ]
+      goodScalar (I.BinOp _ I.OpMul (I.Lit _ s) expb) = isJust $ A.intToScalar s
+      goodScalar _ = False
+      justReg (I.Var _ s) = True
+      justReg _ = False
+      getScalar exp = msum
+                      [
+                      -- [{1,2,4,8} * something] (1*something won't happen because of alg simplify)
+                       do Just ix <- return $ findIndex goodScalar exp
+                          let I.BinOp _ I.OpMul (I.Lit _ s) expb  = exp !! ix
+                          let exp' = take ix exp ++ drop (ix+1) exp
+                          let Just sc = A.intToScalar s
+                          (gb, b) <- expToR expb
+                          return (exp', gb, Just b, sc)
+                      -- [register]
+                      ,do Just ix <- return $ findIndex justReg exp
+                          let I.Var _ v  = exp !! ix
+                          let exp' = take ix exp ++ drop (ix+1) exp
+                          return (exp', GNil, Just $ A.SReg $ show v, A.SOne)
+                      -- [something] if there's more than one thing left
+                      ,do guard $ length exp > 1
+                          let expb = last exp
+                          let exp' = init exp
+                          (gb, b) <- expToR expb
+                          return (exp', gb, Just b, A.SOne)
+                      -- nothing
+                      ,do return (exp, GNil, Nothing, A.SOne)
+                      ]
+      getBase exp = msum
+                    [
+                    -- [something+...]
+                     do guard $ not $ null exp
+                        let added = foldl1 (I.BinOp noPosition I.OpAdd) exp
+                        (ga, a) <- expToR added
+                        return (ga, Just a)
+                    -- nothing
+                    ,do return (GNil, Nothing)
+                    ]
+              
 expToM :: MidIRExpr -> CGM (Graph A.Asm O O, A.MemAddr)
 expToM e@(I.Load _ exp) = mcut $ expToMem exp
 expToM e = fail ("Mem not a load: " ++ show e)
