@@ -84,17 +84,22 @@ dataflows
       -- , DFA optNZP performNZPPass
       , DFA optTailcall performTailcallPass
       , DFA optDeadCode performDeadCodePass
-      , DFA optBlockElim performBlockElimPass 
+      , DFA optBlockElim performBlockElimPass
       , DFA (\opts -> optCommonSubElim opts || optFlat opts) performFlattenPass
       , DFA optCommonSubElim performCSEPass
       , DFA optCopyProp performCopyPropPass
-      , DFA optDeadCode performDeadCodePass 
+      -- doing constprop after flatten/cse does great good! see tests/codegen/fig18.6.dcf
+      , DFA optConstProp performConstPropPass
+      , DFA optDeadCode performDeadCodePass
       , DFA (\opts -> optCommonSubElim opts || optFlat opts || optUnflat opts ) performUnflattenPass 
       , DFA optDeadCode performDeadCodePass
       , DFA optTailcall performTailcallPass 
       --, DFA optNZP performNZPPass
       , DFA optDeadCode performDeadCodePass 
-      , DFA optBlockElim performBlockElimPass ]
+      , DFA optBlockElim performBlockElimPass 
+      -- It's good to end with this for good measure (and removes dead blocks)
+      , DFA optDeadCode performDeadCodePass
+      ]
 
 performDataflowAnalysis :: OptFlags -> MidIRRepr -> RM MidIRRepr 
 performDataflowAnalysis opts midir

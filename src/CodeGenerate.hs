@@ -233,14 +233,14 @@ expToR e = mcut $ msum rules
       rules = [ -- Rules for putting the value of the expression into
                 -- a register
         
-                -- a <- 0 is the same as a <- a xor a
-                do I.Lit pos 0 <- withNode e
-                   dr <- genTmpReg
-                   return ( mkMiddle $ A.ALU_IRMtoR pos A.Xor
-                                         (A.IRM_R $ dr) dr
-                          , dr )
+--                -- a <- 0 is the same as a <- a xor a
+--                do I.Lit pos 0 <- withNode e
+--                   dr <- genTmpReg
+--                   return ( mkMiddle $ A.ALU_IRMtoR pos A.Xor
+--                                         (A.IRM_R $ dr) dr
+--                          , dr )
                 -- Put literal into register
-              , do i <- expToI e
+                do i <- expToI e
                    dr <- genTmpReg
                    return (mkMiddle $ A.mov noPosition i dr, dr)
                 -- Put a 64-bit literal into register

@@ -1,0 +1,25 @@
+//fig 18.7 in muchnick for "if simplifications"
+//>12
+class Program {
+  int get_int(int x) {
+    return x;
+  }
+  void main() {
+    int a, b, c, d, e;
+    boolean bool;
+    a = get_int(6);
+    d = get_int(2);
+    bool = get_int(1) > 0;
+    if(a>d) {
+      b = a; // 6
+      c = 4 * b; // 24
+      if((a > d) || bool) {
+	d = b;
+      } else {
+	d = c;
+      }
+      e = a + d; // 12
+    }
+    callout("printf", "%d\n", e);
+  }
+}
