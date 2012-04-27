@@ -101,7 +101,7 @@ instToAsm (I.Label pos l) = return $ mkFirst $ A.Label pos l
 instToAsm (I.PostEnter pos l) = return $ mkFirst $ A.Label pos l
 instToAsm (I.Enter pos l args)
     = do return $ mkFirst (A.Enter pos l 0)
-                    <*> (genPushRegs pos A.calleeSaved)
+--                    <*> (genPushRegs pos A.calleeSaved)
                     <*> (genLoadArgs pos args)
 instToAsm (I.Store pos d sexp)
     = do (gd, s) <- expToIRM sexp
@@ -125,23 +125,23 @@ instToAsm (I.IndStore pos dexp sexp)
 instToAsm (I.Call pos d name args)
     = do (gs, vars) <- unzip `fmap` mapM expToIRM args
          return $ catGraphs gs
-                    <*> genPushRegs pos A.callerSaved
+--                    <*> genPushRegs pos A.callerSaved
                     <*> genSetArgs pos vars
                     <*> mkMiddle (A.Call pos (length args) (A.Imm32Label name 0))
                     <*> genResetSP pos args
-                    <*> genPopRegs pos A.callerSaved
+--                    <*> genPopRegs pos A.callerSaved
                     <*> mkMiddle (A.mov pos (A.MReg A.RAX) (A.SReg $ show d))
 instToAsm (I.Callout pos d name args)
     = do (gs, vars) <- unzip `fmap` mapM expToIRM args
          return $ catGraphs gs
-                    <*> genPushRegs pos A.callerSaved
+--                    <*> genPushRegs pos A.callerSaved
                     <*> mkMiddle (A.Realign pos (max 0 ((length args) - 6)))
                     <*> genSetArgs pos vars
                     <*> mkMiddle (A.mov pos (A.Imm32 0) (A.MReg A.RAX))
                     <*> mkMiddle (A.Callout pos (length args) (A.Imm32Label name 0))
                     <*> mkMiddle (A.Unrealign pos)
                     <*> genResetSP pos args
-                    <*> genPopRegs pos A.callerSaved
+--                    <*> genPopRegs pos A.callerSaved
                     <*> mkMiddle (A.mov pos (A.MReg A.RAX) (A.SReg $ show d))
 instToAsm (I.Branch pos l)
     = return $ mkLast $ A.Jmp pos (A.Imm32BlockLabel l 0)
@@ -149,13 +149,13 @@ instToAsm (I.CondBranch pos cexp tl fl)
     = do (g, flag) <- expToFlag cexp
          return $ g <*> (mkLast $ A.JCond pos flag (A.Imm32BlockLabel tl 0) fl)
 instToAsm (I.Return pos fname Nothing)
-    = return $ genPopRegs pos A.calleeSaved
-               <*> (mkMiddle $ A.Leave pos)
+    = return $ --genPopRegs pos A.calleeSaved
+               (mkMiddle $ A.Leave pos)
                <*> (mkLast $ A.Ret pos False)
 instToAsm (I.Return pos fname (Just exp))
     = do (g, irm) <- expToIRM exp
          return $ g <*> mkMiddle (A.MovIRMtoR pos irm (A.MReg A.RAX))
-                    <*> genPopRegs pos A.calleeSaved
+--                    <*> genPopRegs pos A.calleeSaved
                     <*> (mkMiddle $ A.Leave pos)
                     <*> mkLast (A.Ret pos True)
 instToAsm (I.Fail pos)
