@@ -52,6 +52,10 @@ rmToIRM :: OperRM -> OperIRM
 rmToIRM (RM_R r) = IRM_R r
 rmToIRM (RM_M m) = IRM_M m
 
+irToIRM :: OperIR -> OperIRM
+irToIRM (IR_I i) = IRM_I i
+irToIRM (IR_R r) = IRM_R r
+
 instance Show OperIRM where
     show (IRM_I imm) = "$" ++ show imm
     show (IRM_R reg) = show reg
@@ -240,8 +244,10 @@ data Asm e x where
 
   CMovRMtoR :: SourcePos -> Flag -> OperRM -> Reg -> Asm O O
 
-  Enter :: SourcePos -> Label -> Int -> Asm C O
-  Leave :: SourcePos -> Asm O O
+  -- Takes 1) the number of arguments and 2) the amount of stack
+  -- space.  Not actually "enter" instruction!
+  Enter :: SourcePos -> Label -> Int -> Int -> Asm C O
+  Leave :: SourcePos -> Int -> Asm O O
 
   -- | Int is the number of arguments (to know which registers are
   -- used)
@@ -256,8 +262,8 @@ data Asm e x where
   ExitFail :: SourcePos -> Asm O C
   
   -- | For Mac OS X compatibility mode
-  Realign :: SourcePos -> Int -> Asm O O
-  Unrealign :: SourcePos -> Asm O O
+--  Realign :: SourcePos -> Int -> Asm O O
+--  Unrealign :: SourcePos -> Asm O O
 
   Lea :: SourcePos -> MemAddr -> Reg -> Asm O O
 
@@ -295,7 +301,7 @@ data Asm e x where
   
 instance NonLocal Asm where
   entryLabel (Label _ lbl) = lbl
-  entryLabel (Enter _ lbl _) = lbl
+  entryLabel (Enter _ lbl _ _) = lbl
   successors (Jmp _ (Imm32BlockLabel l 0)) = [l]
   successors (Jmp _ _) = []
   successors (JCond _ _ (Imm32BlockLabel tr 0) fa) = [tr, fa]
@@ -332,9 +338,10 @@ instance Show (Asm e x) where
   show (CMovRMtoR pos flag a b) = showBinOp opcode pos a b
             where opcode = "cmov" ++ show flag ++ "q"
 
-  show (Enter pos lbl st) = printf "%s: enter $%d, $0  # %s"
-                            (show lbl) st (showPos pos)
-  show (Leave pos) = showNullOp "leave" pos
+  show (Enter pos lbl nargs st) = printf "%s: subq $%d, %s  # %d args  %s"
+                                  (show lbl) st (show (MReg RSP)) nargs (showPos pos)
+  show (Leave pos st) = printf "addq $%d, %s  #  %s"
+                        st (show (MReg RSP)) (showPos pos)
 
   show (Call pos nargs func) = showUnOp "call" pos func
   show (Callout pos nargs func) = showUnOp "call" pos func
@@ -346,10 +353,10 @@ instance Show (Asm e x) where
         ++ (if not returns then " (void method)" else "")
   show (ExitFail pos)
       = "# exited by failure. " ++ showPos pos
-  show (Realign pos i)
-       = "# realign goes here for --mac"
-  show (Unrealign pos)
-      = "# unrealign goes here for --mac"
+--   show (Realign pos i)
+--        = "# realign goes here for --mac"
+--   show (Unrealign pos)
+--       = "# unrealign goes here for --mac"
 
   show (Lea pos mem reg) = showBinOp "leaq" pos mem reg
 
@@ -409,6 +416,11 @@ argOrder :: [Maybe X86Reg]
 argOrder = (map Just [RDI, RSI, RDX, RCX, R8, R9]) ++ nothings
     where nothings = Nothing:nothings
 
+argStoreLocations :: [Either MemAddr Reg]
+argStoreLocations = map (Right . MReg) [RDI, RSI, RDX, RCX, R8, R9]
+                    ++ map (Left . makeMem) [0, 0-8..]
+    where makeMem d = MemAddr (Just $ MReg RSP) (Imm32 d) Nothing SOne
+
 argStackDepth :: [Int]
 argStackDepth = [no, no, no, no, no, no] ++ [16, 16+8..]
     where no = error "argStackDepth for non-stack-arg :-("
@@ -416,7 +428,7 @@ argStackDepth = [no, no, no, no, no, no] ++ [16, 16+8..]
 argLocation :: [Either MemAddr Reg]
 argLocation = map (Right . MReg) [RDI, RSI, RDX, RCX, R8, R9]
               ++ map (Left . makeMem) [16,16+8..]
-    where makeMem d = MemAddr (Just $ MReg RBP) (Imm32 d) Nothing SOne
+    where makeMem d = MemAddr (Just $ MReg RSP) (Imm32 d) Nothing SOne
 
 ---- | Gives a midir expression for getting any particular argument.
 --argExprs :: SourcePos -> [Expr VarName]
@@ -428,14 +440,14 @@ callerSaved :: [X86Reg]
 callerSaved = [R10, R11]
 
 calleeSaved :: [X86Reg]
-calleeSaved = [RBX, R12, R13, R14, R15]
+calleeSaved = [RBX, R12, R13, R14, R15, RBP]
 
 data X86Reg = RAX -- temp reg, return value
             | RBX -- callee-saved
             | RCX -- 4th arg
             | RDX -- 3rd arg
             | RSP -- stack pointer
-            | RBP -- base pointer (callee-saved)
+            | RBP -- "base pointer" (callee-saved)
             | RSI -- 2nd argument
             | RDI -- 1st argument
             | R8 -- 5th argument

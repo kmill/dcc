@@ -110,7 +110,7 @@ rewriteSpillPass fb = FwdPass
           sTransfer = mkFTransfer3 g g' g''
               where 
                 g :: Asm C O -> S.Set String -> S.Set String
-                g (Enter p l _) _ = fromMaybe S.empty (lookupFact l fb)
+                g (Enter p l _ _) _ = fromMaybe S.empty (lookupFact l fb)
                 g e f = f
                 g' e f = f
                 g'' e f = mkFactBase noLattice $ zip (successors e) (repeat f)
@@ -133,10 +133,10 @@ rewriteSpillPass fb = FwdPass
                             mem = A.MemAddr (Just $ A.MReg A.RBP)
                                   (A.Imm32 $ fromIntegral offset)
                                   Nothing A.SOne
-                d (A.Enter pos l x) f = if x' == x
-                                        then return Nothing
-                                        else return $ Just $ mkFirst $
-                                             A.Enter pos l x'
+                d (A.Enter pos l n x) f = if x' == x
+                                          then return Nothing
+                                          else return $ Just $ mkFirst $
+                                               A.Enter pos l n x'
                     where x' = fromIntegral $ 8 * (S.size f) + 8
                 d _ f = return Nothing
 
@@ -360,7 +360,7 @@ coalesceRegisters mlabels graph
                                  return (i, web)
                     rrm = rrmm M.! lab
                     canCoalesce :: (NodePtr, Reg, Reg) -> Bool
-                    canCoalesce (l, sreg, dreg) = not interferes
+                    canCoalesce (l, sreg, dreg) = trace (show (l, sreg, dreg)) $ not interferes
                         where (di, _) = webD l dreg
                               (si, _) = webU l sreg
                               interferes = si `S.member` (ig M.! di)
@@ -465,8 +465,8 @@ mapRR f a@(Callout{}) = a
 mapRR f a@(Ret{}) = a
 mapRR f a@(RetPop{}) = a
 mapRR f a@(ExitFail{}) = a
-mapRR f a@(Realign{}) = a
-mapRR f a@(Unrealign{}) = a
+--mapRR f a@(Realign{}) = a
+--mapRR f a@(Unrealign{}) = a
 mapRR f (Lea p m r) = Lea p (map_M f m) (f r)
 mapRR f (Push p irm) = Push p (map_IRM f irm)
 mapRR f (Pop p rm) = Pop p (map_RM f rm)
@@ -502,22 +502,22 @@ getAliveDead expr
         MovIRtoM _ ir m -> getRSrc ir <+> getRDst m
         Mov64toR _ i r -> getRDst r
         CMovRMtoR _ _ rm r -> getRSrc rm <+> getRSrc r <+> getRDst r
-        Enter _ _ i -> (x, x) <+> ([], map MReg A.calleeSaved)
+        Enter _ _ i _ -> ([], x) <+> ([], map MReg A.calleeSaved ++ [MReg RSP])
                 where x = map MReg (catMaybes $ take i argOrder)
-        Leave{} -> emptyAD
-        Call p nargs i -> (x, [MReg RAX]) <+> ([], map MReg A.callerSaved)
+        Leave{} -> ([MReg RSP], [MReg RSP])
+        Call p nargs i -> (x, [MReg RAX]) <+> ([MReg RSP], map MReg A.callerSaved ++ [MReg RSP])
                 where x = map MReg (catMaybes $ take nargs argOrder)
-        Callout p nargs i -> (x ++ [MReg RAX], [MReg RAX]) <+> ([], map MReg A.callerSaved)
+        Callout p nargs i -> (x ++ [MReg RAX], [MReg RAX]) <+> ([MReg RSP], map MReg A.callerSaved ++ [MReg RSP])
                              -- :-O  should add Caller-saved registers
                 where x = map MReg (catMaybes $ take nargs argOrder)
-        Ret p rets -> (if rets then [MReg RAX] else [], []) <+> (map MReg A.calleeSaved, [])
-        RetPop p rets num -> (if rets then [MReg RAX] else [], []) <+> (map MReg A.calleeSaved, [])
+        Ret p rets -> (if rets then [MReg RAX] else [], []) <+> (map MReg A.calleeSaved ++ [MReg RSP], [])
+        RetPop p rets num -> (if rets then [MReg RAX] else [], []) <+> (map MReg A.calleeSaved ++ [MReg RSP], [])
         ExitFail{} -> emptyAD
-        Realign{} -> emptyAD
-        Unrealign{} -> emptyAD
+--        Realign{} -> ([MReg RSP], [MReg RSP])
+--        Unrealign{} -> ([MReg RSP], [MReg RSP])
         Lea p m r -> getRSrc m <+> getRDst r
-        Push p irm -> getRSrc irm
-        Pop p rm -> getRDst rm
+        Push p irm -> getRSrc irm <+> ([MReg RSP], [MReg RSP])
+        Pop p rm -> getRDst rm <+> ([MReg RSP], [MReg RSP])
         Jmp{} -> emptyAD
         JCond{} -> emptyAD
         ALU_IRMtoR _ _ irm r -> getRSrc irm <+> getRSrc r <+> getRDst r
@@ -539,8 +539,8 @@ getAliveDead expr
 
 -- | Gets the registers which are "pinned" by the instruction.  That
 -- is, those registers which are both used and defined by the
--- instruction and two registers cannot be used.  For instance, %rax
--- in "addq $5, %rax".
+-- instruction, and two registers cannot be used instead.  For
+-- instance, %rax in "addq $5, %rax".
 getPinned :: forall e x. Asm e x -> [Reg]
 getPinned expr
     = case expr of
@@ -551,15 +551,15 @@ getPinned expr
         MovIRtoM _ ir m -> []
         Mov64toR _ i r -> []
         CMovRMtoR _ _ rm r -> [r]
-        Enter _ _ i -> []
-        Leave{} -> []
+        Enter _ _ _ _ -> []
+        Leave{} -> [MReg RSP]
         Call p nargs i -> []
         Callout p nargs i -> []
         Ret p rets -> []
         RetPop p rets num -> []
         ExitFail{} -> []
-        Realign{} -> []
-        Unrealign{} -> []
+--        Realign{} -> []
+--        Unrealign{} -> []
         Lea p m r -> []
         Push p irm -> []
         Pop p rm -> []
@@ -581,3 +581,51 @@ getPinned expr
         Shr _ _ rm -> snd $ getRDst rm
         Sar _ _ rm -> snd $ getRDst rm
         Nop _ -> []
+
+
+-- | Gets those registers which are fixed by the instruction, such as
+-- %rax for ret.
+getFixed :: forall e x. Asm e x -> ([Reg], [Reg]) -- ^ (used, defined)
+getFixed expr
+    = case expr of
+        Label{} -> noFixed
+        Spill _ r d -> noFixed
+        Reload _ s r -> noFixed
+        MovIRMtoR _ irm r -> noFixed
+        MovIRtoM _ ir m -> noFixed
+        Mov64toR _ i r -> noFixed
+        CMovRMtoR _ _ rm r -> noFixed
+        Enter _ _ i _ -> ([], x ++ map MReg A.calleeSaved ++ [MReg RSP]) 
+            where x = map MReg (catMaybes $ take i argOrder)
+        Leave{} -> ([MReg RSP], [MReg RSP])
+        Call p nargs i -> (x, [MReg RAX]) <+> ([MReg RSP], map MReg A.callerSaved ++ [MReg RSP])
+            where x = map MReg (catMaybes $ take nargs argOrder)
+        Callout p nargs i -> (x, [MReg RAX]) <+> ([MReg RSP], map MReg A.callerSaved ++ [MReg RSP])
+            where x = map MReg (catMaybes $ take nargs argOrder)
+        Ret p rets -> (if rets then [MReg RAX] else [], []) <+> (map MReg A.calleeSaved ++ [MReg RSP], [])
+        RetPop p rets num -> (if rets then [MReg RAX] else [], []) <+> (map MReg A.calleeSaved ++ [MReg RSP], [])
+        ExitFail{} -> noFixed
+--        Realign{} -> []
+--        Unrealign{} -> []
+        Lea p m r -> noFixed
+        Push p irm -> noFixed
+        Pop p rm -> ([MReg RSP], [MReg RSP])
+        Jmp{} -> noFixed
+        JCond{} -> noFixed
+        ALU_IRMtoR _ _ irm r -> noFixed
+        ALU_IRtoM _ _ ir m -> noFixed
+        Cmp _ ir rm -> noFixed
+        Test _ ir rm -> noFixed
+        Inc _ rm -> noFixed
+        Dec _ rm -> noFixed
+        Neg _ rm -> noFixed
+        IMulRAX _ rm -> ([MReg RAX], [MReg RAX, MReg RDX])
+        IMulRM _ rm r -> noFixed
+        IMulImm _ i rm r -> noFixed
+        IDiv _ rm -> ([MReg RDX, MReg RAX], [MReg RDX, MReg RAX])
+        Cqo _ -> ([MReg RAX], [MReg RDX])
+        Shl _ _ rm -> noFixed
+        Shr _ _ rm -> noFixed
+        Sar _ _ rm -> noFixed
+        Nop _ -> noFixed
+      where noFixed = ([], [])

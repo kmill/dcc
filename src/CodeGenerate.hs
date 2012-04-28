@@ -100,7 +100,7 @@ instToAsm :: forall e x. I.MidIRInst e x -> CGM (Graph A.Asm e x)
 instToAsm (I.Label pos l) = return $ mkFirst $ A.Label pos l
 instToAsm (I.PostEnter pos l) = return $ mkFirst $ A.Label pos l
 instToAsm (I.Enter pos l args)
-    = do return $ mkFirst (A.Enter pos l 0)
+    = do return $ mkFirst (A.Enter pos l (length args) 0)
 --                    <*> (genPushRegs pos A.calleeSaved)
                     <*> (genLoadArgs pos args)
 instToAsm (I.Store pos d sexp)
@@ -123,23 +123,20 @@ instToAsm (I.IndStore pos dexp sexp)
          return $ gd <*> gs
                     <*> mkMiddle (A.MovIRtoM pos s d)
 instToAsm (I.Call pos d name args)
-    = do (gs, vars) <- unzip `fmap` mapM expToIRM args
-         return $ catGraphs gs
---                    <*> genPushRegs pos A.callerSaved
-                    <*> genSetArgs pos vars
+    = do gargs <- genSetArgs pos args
+         return $ gargs
+                    <*> genSetSP pos args
                     <*> mkMiddle (A.Call pos (length args) (A.Imm32Label name 0))
                     <*> genResetSP pos args
---                    <*> genPopRegs pos A.callerSaved
                     <*> mkMiddle (A.mov pos (A.MReg A.RAX) (A.SReg $ show d))
 instToAsm (I.Callout pos d name args)
-    = do (gs, vars) <- unzip `fmap` mapM expToIRM args
-         return $ catGraphs gs
---                    <*> genPushRegs pos A.callerSaved
-                    <*> mkMiddle (A.Realign pos (max 0 ((length args) - 6)))
-                    <*> genSetArgs pos vars
+    = do gargs <- genSetArgs pos args
+         return $ gargs
+--                    <*> mkMiddle (A.Realign pos (max 0 ((length args) - 6)))
                     <*> mkMiddle (A.mov pos (A.Imm32 0) (A.MReg A.RAX))
+                    <*> genSetSP pos args
                     <*> mkMiddle (A.Callout pos (length args) (A.Imm32Label name 0))
-                    <*> mkMiddle (A.Unrealign pos)
+--                    <*> mkMiddle (A.Unrealign pos)
                     <*> genResetSP pos args
 --                    <*> genPopRegs pos A.callerSaved
                     <*> mkMiddle (A.mov pos (A.MReg A.RAX) (A.SReg $ show d))
@@ -150,25 +147,37 @@ instToAsm (I.CondBranch pos cexp tl fl)
          return $ g <*> (mkLast $ A.JCond pos flag (A.Imm32BlockLabel tl 0) fl)
 instToAsm (I.Return pos fname Nothing)
     = return $ --genPopRegs pos A.calleeSaved
-               (mkMiddle $ A.Leave pos)
+               (mkMiddle $ A.Leave pos 0)
                <*> (mkLast $ A.Ret pos False)
 instToAsm (I.Return pos fname (Just exp))
     = do (g, irm) <- expToIRM exp
          return $ g <*> mkMiddle (A.MovIRMtoR pos irm (A.MReg A.RAX))
 --                    <*> genPopRegs pos A.calleeSaved
-                    <*> (mkMiddle $ A.Leave pos)
+                    <*> (mkMiddle $ A.Leave pos 0)
                     <*> mkLast (A.Ret pos True)
 instToAsm (I.Fail pos)
     = return $ mkMiddles [ A.mov pos (A.Imm32 1) (A.MReg A.RDI)
                          , A.mov pos (A.Imm32 0) (A.MReg A.RAX)
-                         , A.Realign pos 0
+--                         , A.Realign pos 0
                          , A.Callout pos 1 (A.Imm32Label "exit" 0) ]
                <*> mkLast (A.ExitFail pos)
 
-genSetArgs :: SourcePos -> [A.OperIRM] -> Graph A.Asm O O
-genSetArgs pos args = catGraphs $ map genset $ reverse (zip args A.argOrder)
-    where genset (a, Nothing) = mkMiddle $ A.Push pos a
-          genset (a, Just d) = mkMiddle $ A.MovIRMtoR pos a (A.MReg d)
+genSetArgs :: SourcePos -> [MidIRExpr] -> CGM (Graph A.Asm O O)
+genSetArgs pos args = do gs <- mapM genset $ reverse (zip args A.argStoreLocations)
+                         return $ catGraphs gs
+    where genset (arg, Left m) = do (gs, a) <- expToIR arg
+                                    return $ gs <*> (mkMiddle $ A.MovIRtoM pos a m)
+          genset (arg, Right r) = do (gs, a) <- expToIRM arg
+                                     return $ gs <*> (mkMiddle $ A.MovIRMtoR pos a r)
+
+genSetSP :: SourcePos -> [MidIRExpr] -> Graph A.Asm O O
+genSetSP pos args = if length args - 6 > 0
+                    then mkMiddle $
+                         A.ALU_IRMtoR pos A.Sub
+                              (A.IRM_I $ A.Imm32 $
+                                fromIntegral $ 8 * (length args - 6))
+                              (A.MReg A.RSP)
+                    else GNil
 genResetSP :: SourcePos -> [MidIRExpr] -> Graph A.Asm O O
 genResetSP pos args = if length args - 6 > 0
                       then mkMiddle $
@@ -495,21 +504,21 @@ labelToAsmOut macmode graph (lbl, mnlabel)
                   then case x of
                          A.Callout pos args (A.Imm32Label s 0)
                              -> show $ A.Callout pos args (A.Imm32Label ("_" ++ s) 0)
-                         A.Realign pos nstackargs
-                             -> let code=[ A.mov pos (A.MReg A.RSP) (A.MReg A.R12)
-                                         , A.ALU_IRMtoR pos A.Sub 
-                                                        (A.IRM_I $ A.Imm32 16)
-                                                        (A.MReg A.RSP)
-                                         , A.ALU_IRMtoR pos A.And
-                                                        (A.IRM_I $ A.Imm32 (-10))
-                                                        (A.MReg A.RSP)
-                                         , A.ALU_IRMtoR pos A.Sub
-                                                        (A.IRM_I $ A.Imm32 $ fromIntegral corr)
-                                                        (A.MReg A.RSP) ]
-                                    corr=(nstackargs `mod` 2) * 8
-                                in intercalate "\n" $ map (ind . show) code
-                         A.Unrealign pos
-                             -> show $ A.mov pos (A.MReg A.R12) (A.MReg A.RSP)
+--                          A.Realign pos nstackargs
+--                              -> let code=[ A.mov pos (A.MReg A.RSP) (A.MReg A.R12)
+--                                          , A.ALU_IRMtoR pos A.Sub 
+--                                                         (A.IRM_I $ A.Imm32 16)
+--                                                         (A.MReg A.RSP)
+--                                          , A.ALU_IRMtoR pos A.And
+--                                                         (A.IRM_I $ A.Imm32 (-10))
+--                                                         (A.MReg A.RSP)
+--                                          , A.ALU_IRMtoR pos A.Sub
+--                                                         (A.IRM_I $ A.Imm32 $ fromIntegral corr)
+--                                                         (A.MReg A.RSP) ]
+--                                     corr=(nstackargs `mod` 2) * 8
+--                                 in intercalate "\n" $ map (ind . show) code
+--                          A.Unrealign pos
+--                              -> show $ A.mov pos (A.MReg A.R12) (A.MReg A.RSP)
                          _ -> ind $ show x
                   else ind $ show x
         fallthrough = case mnlabel of
