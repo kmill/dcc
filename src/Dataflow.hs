@@ -174,6 +174,14 @@ testDominatorPass midir
     where graph = midIRGraph midir
           mlabels = (map methodEntry $ midIRMethods midir)
 
+data Loop = Loop { loop_header :: Label 
+                 , loop_body :: S.Set Label
+                 , loop_variable :: VarName }
+
+analyzeParallelizationPass :: MidIRRepr -> S.Set Loop 
+analyzeParallelizationPass = error "Not yet implemented :-{"
+
+
 -- (trace (map (show . entryLabel) (forwardBlockList mlabels body)) body)
 
 constPropPass :: (CheckpointMonad m, FuelMonad m) => FwdPass m MidIRInst ConstFact 
