@@ -1,0 +1,156 @@
+[+] ./illegal/hidden-illegal-01.dcf
+[+] ./illegal/hidden-illegal-02.dcf
+[+] ./illegal/hidden-illegal-03.dcf
+[+] ./illegal/hidden-illegal-04.dcf
+[+] ./illegal/hidden-illegal-05.dcf
+[+] ./illegal/hidden-illegal-06.dcf
+[+] ./illegal/hidden-illegal-07.dcf
+[+] ./illegal/hidden-illegal-08.dcf
+[+] ./illegal/hidden-illegal-09.dcf
+[+] ./illegal/hidden-illegal-10.dcf
+[+] ./illegal/hidden-illegal-11.dcf
+[+] ./illegal/hidden-illegal-12.dcf
+[ ] Illegal file ./illegal/hidden-illegal-13.dcf incorrectly parsed successfully.
+[+] ./illegal/hidden-illegal-14.dcf
+[+] ./illegal/hidden-illegal-15.dcf
+[+] ./illegal/hidden-illegal-16.dcf
+[+] ./illegal/hidden-illegal-17.dcf
+[+] ./illegal/hidden-illegal-18.dcf
+[+] ./illegal/hidden-illegal-19.dcf
+[+] ./illegal/hidden-illegal-20.dcf
+[+] ./illegal/hidden-illegal-21.dcf
+[+] ./illegal/hidden-illegal-22.dcf
+[+] ./illegal/hidden-illegal-23.dcf
+[+] ./illegal/hidden-illegal-24.dcf
+[+] ./illegal/hidden-illegal-25.dcf
+[+] ./illegal/hidden-illegal-26.dcf
+[+] ./illegal/hidden-illegal-27.dcf
+[+] ./illegal/hidden-illegal-28.dcf
+[+] ./illegal/hidden-illegal-29.dcf
+[+] ./illegal/hidden-illegal-30.dcf
+[+] ./illegal/hidden-illegal-31.dcf
+[+] ./illegal/hidden-illegal-32.dcf
+[+] ./illegal/hidden-illegal-33.dcf
+[+] ./illegal/hidden-illegal-34.dcf
+[+] ./illegal/hidden-illegal-35.dcf
+[+] ./illegal/hidden-illegal-36.dcf
+[+] ./illegal/hidden-illegal-37.dcf
+[+] ./illegal/hidden-illegal-38.dcf
+[+] ./illegal/hidden-illegal-39.dcf
+[+] ./illegal/hidden-illegal-40.dcf
+[ ] Illegal file ./illegal/hidden-illegal-41.dcf incorrectly parsed successfully.
+[+] ./illegal/hidden-illegal-42.dcf
+[ ] Illegal file ./illegal/hidden-illegal-43.dcf incorrectly parsed successfully.
+[ ] Illegal file ./illegal/hidden-illegal-44.dcf incorrectly parsed successfully.
+[+] ./illegal/hidden-illegal-45.dcf
+[+] ./illegal/hidden-illegal-46.dcf
+[+] ./illegal/hidden-illegal-47.dcf
+[+] ./illegal/hidden-illegal-48.dcf
+[+] ./illegal/hidden-illegal-49.dcf
+[ ] Illegal file ./illegal/hidden-illegal-50.dcf incorrectly parsed successfully.
+[+] ./illegal/hidden-illegal-51.dcf
+[ ] Illegal file ./illegal/hidden-illegal-52.dcf incorrectly parsed successfully.
+[+] ./illegal/method_shadowing1.dcf
+[+] ./illegal/method_shadowing2.dcf
+[+] ./illegal/no_main.dcf
+[+] ./illegal/wrong_main_type.dcf
+[+] ./legal/block_local_shadowing.dcf
+[+] ./legal/hidden-legal-01.dcf
+[+] ./legal/hidden-legal-02.dcf
+[+] ./legal/hidden-legal-03.dcf
+[+] ./legal/hidden-legal-04.dcf
+[+] ./legal/hidden-legal-05.dcf
+[+] ./legal/hidden-legal-06.dcf
+[+] ./legal/hidden-legal-07.dcf
+[+] ./legal/hidden-legal-08.dcf
+[+] ./legal/hidden-legal-09.dcf
+[+] ./legal/hidden-legal-10.dcf
+[+] ./legal/hidden-legal-11.dcf
+[+] ./legal/hidden-legal-12.dcf
+[+] ./legal/hidden-legal-13.dcf
+[+] ./legal/hidden-legal-14.dcf
+[+] ./legal/hidden-legal-15.dcf
+[+] ./legal/hidden-legal-16.dcf
+[+] ./legal/hidden-legal-17.dcf
+[+] ./legal/hidden-legal-18.dcf
+[+] ./legal/method_shadowing1.dcf
+
+Failed
+[+] ./illegal/hidden-illegal-01.dcf
+[+] ./illegal/hidden-illegal-02.dcf
+[+] ./illegal/hidden-illegal-03.dcf
+[+] ./illegal/hidden-illegal-04.dcf
+[+] ./illegal/hidden-illegal-05.dcf
+[+] ./illegal/hidden-illegal-06.dcf
+[+] ./illegal/hidden-illegal-07.dcf
+[+] ./illegal/hidden-illegal-08.dcf
+[+] ./illegal/hidden-illegal-09.dcf
+[+] ./illegal/hidden-illegal-10.dcf
+[+] ./illegal/hidden-illegal-11.dcf
+[+] ./illegal/hidden-illegal-12.dcf
+[ ] Illegal file ./illegal/hidden-illegal-13.dcf incorrectly parsed successfully.
+[+] ./illegal/hidden-illegal-14.dcf
+[+] ./illegal/hidden-illegal-15.dcf
+[+] ./illegal/hidden-illegal-16.dcf
+[+] ./illegal/hidden-illegal-17.dcf
+[+] ./illegal/hidden-illegal-18.dcf
+[+] ./illegal/hidden-illegal-19.dcf
+[+] ./illegal/hidden-illegal-20.dcf
+[+] ./illegal/hidden-illegal-21.dcf
+[+] ./illegal/hidden-illegal-22.dcf
+[+] ./illegal/hidden-illegal-23.dcf
+[+] ./illegal/hidden-illegal-24.dcf
+[+] ./illegal/hidden-illegal-25.dcf
+[+] ./illegal/hidden-illegal-26.dcf
+[+] ./illegal/hidden-illegal-27.dcf
+[+] ./illegal/hidden-illegal-28.dcf
+[+] ./illegal/hidden-illegal-29.dcf
+[+] ./illegal/hidden-illegal-30.dcf
+[+] ./illegal/hidden-illegal-31.dcf
+[+] ./illegal/hidden-illegal-32.dcf
+[+] ./illegal/hidden-illegal-33.dcf
+[+] ./illegal/hidden-illegal-34.dcf
+[+] ./illegal/hidden-illegal-35.dcf
+[+] ./illegal/hidden-illegal-36.dcf
+[+] ./illegal/hidden-illegal-37.dcf
+[+] ./illegal/hidden-illegal-38.dcf
+[+] ./illegal/hidden-illegal-39.dcf
+[+] ./illegal/hidden-illegal-40.dcf
+[ ] Illegal file ./illegal/hidden-illegal-41.dcf incorrectly parsed successfully.
+[+] ./illegal/hidden-illegal-42.dcf
+[ ] Illegal file ./illegal/hidden-illegal-43.dcf incorrectly parsed successfully.
+[ ] Illegal file ./illegal/hidden-illegal-44.dcf incorrectly parsed successfully.
+[+] ./illegal/hidden-illegal-45.dcf
+[+] ./illegal/hidden-illegal-46.dcf
+[+] ./illegal/hidden-illegal-47.dcf
+[+] ./illegal/hidden-illegal-48.dcf
+[+] ./illegal/hidden-illegal-49.dcf
+[ ] Illegal file ./illegal/hidden-illegal-50.dcf incorrectly parsed successfully.
+[+] ./illegal/hidden-illegal-51.dcf
+[ ] Illegal file ./illegal/hidden-illegal-52.dcf incorrectly parsed successfully.
+[+] ./illegal/method_shadowing1.dcf
+[+] ./illegal/method_shadowing2.dcf
+[+] ./illegal/no_main.dcf
+[+] ./illegal/wrong_main_type.dcf
+[+] ./legal/block_local_shadowing.dcf
+[+] ./legal/hidden-legal-01.dcf
+[+] ./legal/hidden-legal-02.dcf
+[+] ./legal/hidden-legal-03.dcf
+[+] ./legal/hidden-legal-04.dcf
+[+] ./legal/hidden-legal-05.dcf
+[+] ./legal/hidden-legal-06.dcf
+[+] ./legal/hidden-legal-07.dcf
+[+] ./legal/hidden-legal-08.dcf
+[+] ./legal/hidden-legal-09.dcf
+[+] ./legal/hidden-legal-10.dcf
+[+] ./legal/hidden-legal-11.dcf
+[+] ./legal/hidden-legal-12.dcf
+[+] ./legal/hidden-legal-13.dcf
+[+] ./legal/hidden-legal-14.dcf
+[+] ./legal/hidden-legal-15.dcf
+[+] ./legal/hidden-legal-16.dcf
+[+] ./legal/hidden-legal-17.dcf
+[+] ./legal/hidden-legal-18.dcf
+[+] ./legal/method_shadowing1.dcf
+
+Failed

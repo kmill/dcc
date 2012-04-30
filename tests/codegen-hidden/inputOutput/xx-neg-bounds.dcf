@@ -1,0 +1,16 @@
+//!
+//> *** RUNTIME ERROR ***: Array out of Bounds access in method "test"
+// This should produce a runtime error
+class Program {
+  int a[10];
+
+  void test() {
+    a[-1] = 1;
+    callout("printf", "%d\n", a[-1]);
+  }
+
+  void main() {
+    test();
+    callout("printf", "Should never reach here.\n");
+  }
+}

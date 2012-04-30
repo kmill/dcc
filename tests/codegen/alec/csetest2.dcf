@@ -1,0 +1,19 @@
+//!
+class Program { 
+
+void main() {
+int i;
+int x;
+
+i = 1/0;
+
+x = i + 2;
+while (true) {
+i = i + 2;
+x = x + i;
+callout("printf", "X: %d\n", x);
+}
+
+}
+
+} 

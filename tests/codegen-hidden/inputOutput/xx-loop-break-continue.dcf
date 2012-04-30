@@ -1,0 +1,50 @@
+//> j:0 k:0
+//> j:0 k:2
+//> j:0 k:3
+//> j:0 k:4
+//> j:0 k:5
+//> j:0 k:6
+//> j:0 k:7
+//> j:0 k:8
+//> j:1 k:0
+//> j:1 k:2
+//> j:1 k:3
+//> j:1 k:4
+//> j:1 k:5
+//> j:1 k:6
+//> j:1 k:7
+//> j:1 k:8
+//> j:3 k:0
+//> j:3 k:2
+//> j:3 k:3
+//> j:3 k:4
+//> j:3 k:5
+//> j:3 k:6
+//> j:3 k:7
+//> j:3 k:8
+class Program {
+  void main() {
+    int x;
+
+    for (j = 0; 15) {
+      if (j == 2) {
+        continue;
+      }
+      if (j == 4) {
+        break;
+      }
+      for (k = 0; 19) {
+        if (k == 1) {
+          continue;
+        }
+        if (k == 9) {
+          break;
+        }
+        callout("printf", "j:%d k:%d\n", j, k);
+      }
+    }
+    // If left commented, exposed bug where loop breaks didn't actually exit
+    // the loop due to no following block to jump to.
+    // x = x + 1;
+  }
+}

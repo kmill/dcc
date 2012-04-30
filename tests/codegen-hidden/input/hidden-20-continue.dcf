@@ -1,0 +1,15 @@
+class Program {
+  void main() {
+    int i;
+    i = 0;
+    while (i < 10) {
+      if (i == 7) {
+        i = i + 1;
+        continue;
+      }
+      callout("printf", "%d ", i);
+      i = i + 1;
+    }
+    callout("printf", "\n");
+  }
+}

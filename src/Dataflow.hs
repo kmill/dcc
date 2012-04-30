@@ -9,6 +9,7 @@ import Dataflow.Flatten
 import Dataflow.CopyProp
 import Dataflow.Tailcall
 import Dataflow.LICM
+import Dataflow.Dominator
 import Dataflow.OptSupport
 --import Dataflow.NZP
 
@@ -85,18 +86,26 @@ dataflows
       -- , DFA optNZP performNZPPass
       , DFA optTailcall performTailcallPass
       , DFA optDeadCode performDeadCodePass
-      , DFA optBlockElim performBlockElimPass 
+      , DFA optBlockElim performBlockElimPass
       , DFA (\opts -> optCommonSubElim opts || optFlat opts) performFlattenPass
       , DFA optLICM performLICMPass
       , DFA optCommonSubElim performCSEPass
       , DFA optCopyProp performCopyPropPass
-      , DFA optDeadCode performDeadCodePass 
+      -- doing constprop after flatten/cse does great good! see tests/codegen/fig18.6.dcf
+      , DFA optConstProp performConstPropPass
+      , DFA optDeadCode performDeadCodePass
       , DFA (\opts -> optCommonSubElim opts || optFlat opts || optUnflat opts ) performUnflattenPass 
+      , DFA optCopyProp performCopyPropPass
+      , DFA optConstProp performConstPropPass
       , DFA optDeadCode performDeadCodePass
       , DFA optTailcall performTailcallPass 
       --, DFA optNZP performNZPPass
       , DFA optDeadCode performDeadCodePass 
-      , DFA optBlockElim performBlockElimPass ]
+      , DFA optBlockElim performBlockElimPass 
+      -- It's good to end with this for good measure (and removes dead blocks)
+      , DFA optDeadCode performDeadCodePass
+      --, DFA optDeadCode testDominatorPass
+      ]
 
 performDataflowAnalysis :: OptFlags -> MidIRRepr -> RM MidIRRepr 
 performDataflowAnalysis opts midir
@@ -145,6 +154,26 @@ performUnflattenPass midir
          unFlatten factBase midir
     where graph = midIRGraph midir
           mlabels = (map methodEntry $ midIRMethods midir)
+
+
+testDominatorPass :: MidIRRepr -> RM MidIRRepr 
+testDominatorPass midir 
+    = do (_, factBase, _) <- analyzeAndRewriteFwd
+                             dominatorPass 
+                             (JustC mlabels)
+                             graph
+                             (mapFromList (map (\l -> (l, fact_bot dominatorLattice) ) mlabels))
+         return $ trace (show factBase) midir 
+    where graph = midIRGraph midir
+          mlabels = (map methodEntry $ midIRMethods midir)
+
+data Loop = Loop { loop_header :: Label 
+                 , loop_body :: S.Set Label
+                 , loop_variable :: VarName }
+
+analyzeParallelizationPass :: MidIRRepr -> S.Set Loop 
+analyzeParallelizationPass = error "Not yet implemented :-{"
+
 
 -- (trace (map (show . entryLabel) (forwardBlockList mlabels body)) body)
 
@@ -206,6 +235,13 @@ licmPass = BwdPass
            { bp_lattice = motionLattice
            , bp_transfer = motionTransfer
            , bp_rewrite = motionRewrite }
+
+dominatorPass :: (CheckpointMonad m, FuelMonad m, UniqueNameMonad m)
+                 => FwdPass m MidIRInst DominFact
+dominatorPass = FwdPass 
+                { fp_lattice = dominatorLattice 
+                , fp_transfer = dominatorAnalysis
+                , fp_rewrite = noFwdRewrite }
                    
 performTailcallPass :: MidIRRepr -> RM MidIRRepr
 performTailcallPass midir

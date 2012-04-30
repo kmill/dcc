@@ -1,0 +1,15 @@
+//>0
+class Program {
+  int a[22];
+  void main() {
+    int sum;
+    sum = 0;
+    for(i=0;22) {
+      a[i] = i;
+    }
+    for(i=0;22) {
+      sum += a[i];
+    }
+    callout("printf", "%d\n", sum-22*(22-1)/2);
+  }
+}
