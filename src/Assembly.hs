@@ -449,12 +449,12 @@ calleeSaved = [RBX, R12, R13, R14, R15, RBP]
 -- | All the registers but RSP, which cannot be used (otherwise bad
 -- things will happen!)  It might be possible to use RSP, but too much
 -- care would need to be taken to make it worthwhile.
-useableRegisters :: [X86Reg]
-useableRegisters = [RAX, RBX, RCX, RDX, RBP, RSI, RDI
+usableRegisters :: [X86Reg]
+usableRegisters = [RAX, RBX, RCX, RDX, RBP, RSI, RDI
                    ,R8, R9, R10, R11, R12, R13, R14, R15]
 
-numUseableRegisters :: Int
-numUseableRegisters = length useableRegisters
+numUsableRegisters :: Int
+numUsableRegisters = length usableRegisters
 
 data X86Reg = RAX -- temp reg, return value
             | RBX -- callee-saved
