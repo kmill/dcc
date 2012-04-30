@@ -67,6 +67,10 @@ instance Show OperRM where
     show (RM_R reg) = show reg
     show (RM_M mem) = show mem
 
+data SpillLoc = SpillName String
+              | SpillReg Reg
+                deriving Show
+
 checkIf32Bit :: Int64 -> Bool
 checkIf32Bit x
     = x >= fromIntegral (minBound :: Int32)
@@ -235,8 +239,8 @@ instance Show ALUOp where
 data Asm e x where
   Label     :: SourcePos -> Label -> Asm C O
 
-  Spill :: SourcePos -> Reg -> String -> Asm O O
-  Reload :: SourcePos -> String -> Reg -> Asm O O
+  Spill :: SourcePos -> Reg -> SpillLoc -> Asm O O
+  Reload :: SourcePos -> SpillLoc -> Reg -> Asm O O
 
   MovIRMtoR :: SourcePos -> OperIRM -> Reg -> Asm O O
   MovIRtoM  :: SourcePos -> OperIR -> MemAddr -> Asm O O
@@ -441,6 +445,16 @@ callerSaved = [R10, R11]
 
 calleeSaved :: [X86Reg]
 calleeSaved = [RBX, R12, R13, R14, R15, RBP]
+
+-- | All the registers but RSP, which cannot be used (otherwise bad
+-- things will happen!)  It might be possible to use RSP, but too much
+-- care would need to be taken to make it worthwhile.
+useableRegisters :: [X86Reg]
+useableRegisters = [RAX, RBX, RCX, RDX, RBP, RSI, RDI
+                   ,R8, R9, R10, R11, R12, R13, R14, R15]
+
+numUseableRegisters :: Int
+numUseableRegisters = length useableRegisters
 
 data X86Reg = RAX -- temp reg, return value
             | RBX -- callee-saved
