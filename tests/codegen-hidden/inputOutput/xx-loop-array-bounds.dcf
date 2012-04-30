@@ -1,3 +1,4 @@
+//!
 //> *** RUNTIME ERROR ***: Array out of Bounds access in method "main"
 class Program {
   int A[100];

@@ -173,7 +173,7 @@ testfile() {
   fi
 }
 
-for file in `find $base -iname '*.dcf'`; do
+for file in `find $base/inputOutput -iname '*.dcf'`; do
   testfile $file "--opt=all"
   if [ ! -z "$retest" ]; then
     echo "test $file failed, trying with all optimization levels"

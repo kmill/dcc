@@ -1,3 +1,4 @@
+//!
 //> *** RUNTIME ERROR ***: Array out of Bounds access in method "test"
 // This should produce a runtime error
 class Program {

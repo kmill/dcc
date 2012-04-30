@@ -1,8 +1,7 @@
 #!/bin/sh
 
 domidirc=0
-opts=""
-opts_2="cse copyprop constprop nzp deadcode blockelim flat tailcall"
+opts="cse copyprop constprop nzp deadcode blockelim flat tailcall"
 
 base=`dirname $0`
 
@@ -174,7 +173,7 @@ testfile() {
   fi
 }
 
-for file in `find $base/inputOutput -iname '*.dcf'`; do
+for file in `find $base -iname '*.dcf'`; do
   testfile $file "--opt=all"
   if [ ! -z "$retest" ]; then
     echo "test $file failed, trying with all optimization levels"
