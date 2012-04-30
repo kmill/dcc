@@ -199,14 +199,17 @@ data Web = Web { webReg :: Reg
 type RRFact = S.Set (NodePtr, Reg, Reg)
 
 data InterfGraph = InterfGraph
-    { igWebToInt :: M.Map Web Int
-    , igIntToWeb :: M.Map Int Web
+    { igIntToWeb :: M.Map Int Web
     , igAdjLists :: M.Map Int (S.Set Int)
     , igRRMoves :: RRFact
     }
                    deriving Show
 
 type InterfGraphs = M.Map Label InterfGraph
+
+addInterfEdge :: Int -> Int -> InterfGraph -> InterfGraph
+addInterfEdge u v g = g { igAdjLists = add u v $ add v u $ igAdjLists g }
+    where add a b adj = M.adjust (S.insert b) a adj
 
 -- | Checks whether two webs interfere
 wInterf :: Web -> Web -> Bool
@@ -215,14 +218,6 @@ wInterf (Web _ _ _ dus1 ds1 ex1 us1) (Web _ _ _ dus2 ds2 ex2 us2)
       || (S.union ex1 us1 `ints` S.union ex2 us2)
       where ints s1 s2 = not $ S.null $ s1 `S.intersection` s2
 
---removeWeb :: Int -> InterfGraph -> InterfGraph
---removeWeb i g = InterfGraph
---                { igWebToInt = M.filter (/= i) $ igWebToInt g
---                , igIntToWeb = M.filterWithKey (\k v -> k /= i) $ igIntToWeb g
---                , igAdjLists = M.map withoutI $ M.filterWithKey (\k v -> k /= i) $ igAdjLists g
---                }
---    where adj = igAdjLists g M.! i
---          withoutI a = S.delete i a
 
 -- | Gets the degree of a web in the interference graph.
 webDegree :: Int -> InterfGraph -> Int
@@ -352,7 +347,7 @@ collectWebs dus = iteration' webs webs
                   Just webs' -> iteration' webs' webs'
 
 makeInterfGraph :: [Web] -> RRFact -> InterfGraph
-makeInterfGraph webs rrmoves = InterfGraph webToIntMap intToWebMap augAdjs rrmoves
+makeInterfGraph webs rrmoves = InterfGraph intToWebMap augAdjs rrmoves
     where intToWeb = zip [0..] webs
           intToWebMap = M.fromList intToWeb
           webToInt = zip webs [0..]
@@ -458,11 +453,13 @@ data RWorklists = RWorklists
     , wConstrainedMoves :: [NodePtr] -- ^ moves whose source and target interfere
     , wFrozenMoves :: [NodePtr] -- ^ moves that will no longer be considered for coalescing
     , wActiveMoves :: S.Set NodePtr -- ^ moves not yet ready for coalescing
+      
+    , wMoves :: M.Map NodePtr [Int] -- ^ a map from nodes to web ids
     }
                   deriving Show
 
 initWorklists :: InterfGraph -> S.Set NodePtr -> M.Map Int Int -> RWorklists
-initWorklists g wm deg = RWorklists
+initWorklists g wm moves deg = RWorklists
     { wInterfGraph = g
     , wSpillWorklist = []
     , wFreezeWorklist = []
@@ -478,8 +475,30 @@ initWorklists g wm deg = RWorklists
     , wConstrainedMoves = []
     , wFrozenMoves = []
     , wActiveMoves = S.empty
+    , wMoves = moves
     }
 
+-- | Updates webMoveNodes to the given value for the web id
+updateWebMoves' :: S.Set NodePtr -> Int -> RWorklists -> RWorklists
+updateWebMoves' s i wl
+    = wl { wInterfGraph = g { igIntToWeb = M.insert i web' $ igIntToWeb g }}
+    where g = wInterfGraph wl
+          web = igIntToWeb wl M.! i
+          web' = web { webMoveNodes = s }
+
+getWebMoves' :: Int -> RWorklists -> S.Set NodePtr
+getWebMoves' i wl = webMoveNodes $ igIntToWeb (wInterfGraph wl) M.! i
+
+addToAdjList :: Int -> Int -> AM ()
+addToAdjList u v =
+    do g <- wInterfGraph `fmap` get
+       let adjs = igAdjLists g
+       when (u != v && not (v `S.member` adjs M.! u)) $ do
+         degrees <- wDegrees `fmap` get
+         modify $ \wl -> wl { wInterfGraph = addInterfEdge u v g
+                            , wDegrees = inc u $ inc v $ degrees }
+    where inc i m = M.adjust (+1) i m
+         
 -- | The allocator monad
 type AM = State RWorklists
 
@@ -503,18 +522,17 @@ adjacentWebs i =
 -- | Takes a web id and gives the current list of "move-related" webs. "NodeMoves"
 webMoves :: Int -> AM (S.Set NodePtr)
 webMoves i = 
-    do g <- wInterfGraph `fmap` get
+    do wmoves <- getWebMoves' i `fmap` get
        actives <- wActiveMoves `fmap` get
        worklist <- wWorklistMoves `fmap` get
-       return $ webMoveNodes (igGetWeb i g)
-                  `S.intersection` (actives `S.union` worklist)
+       return $ wmoves `S.intersection` (actives `S.union` worklist)
 
 -- | Takes a web id and tells whether it's "move-related"
 moveRelated :: Int -> AM Bool
 moveRelated i = (not . S.null) `fmap` webMoves i
 
 makeWorklists :: InterfGraph -> RWorklists
-makeWorklists g = iter (igWebIDs g) (initWorklists g initMoves makeDegrees) 
+makeWorklists g = iter (igWebIDs g) (initWorklists g initMoves moves wmoves makeDegrees) 
     where iter [] wlists = wlists
           iter (i:is) wlists
               | webDegree i g >= numUseableRegisters
@@ -524,6 +542,9 @@ makeWorklists g = iter (igWebIDs g) (initWorklists g initMoves makeDegrees)
               | otherwise
                   = iter is (wlists { wSimplifyWorklist = i:(wSimplifyWorklist wlists) })
           initMoves = S.map (\(l,_,_) -> l) $ igRRMoves g
+          moves = M.fromList $ map (\(l,_,_) -> (l, websWithLabel l)) $ S.toList $ igRRMoves g
+          websWithLabel l = filter cond $ M.elems (igIntToWeb g)
+              where cond w = l `S.member` (webDefs w) || l `S.member` (webUses w)
           makeDegrees = M.fromList $ map (\i -> (i, webDegree i g)) (igWebIDs g)
 
 -- | "main"
@@ -555,12 +576,15 @@ doRegAlloc mlabel pg
           main = do mainLoop
                     assignColors
                     spilledWebs <- wSpilledWebs `fmap` get
+                    wl <- get
                     if not $ null spilledWebs
                        then return $ doRegAlloc mlabel (rewriteProgram pg spilledWebs)
                        else return pg
       in evalState main initState
 
--- "Simplify"
+rewriteProgram pg spilledWebs wl  = error $ "got to rewriteprogram " ++ show wl
+
+-- | "Simplify"
 simplify :: AM ()
 simplify = do u <- selectSimplify
               pushSelect u
@@ -571,13 +595,14 @@ simplify = do u <- selectSimplify
 selectSimplify :: AM Int
 selectSimplify =
   do wl@(RWorklists { wSimplifyWorklist = choices }) <- get
-     (x,xs) <- choose choices
-     put $ wl { wSimplifyWorklist = xs }
+     x <- choose choices
+     put $ wl { wSimplifyWorklist = delete x xs }
      return x
     where choose (x:xs) =
-              do return (x, xs)
+              do return x
 
- -- | Decrements the degree of the web in the worklist
+ -- | Decrements the degree of the web in the
+ -- worklist. "DecrementDegree"
 decrementDegree :: Int -> AM ()
 decrementDegree i =
     do wl <- get
@@ -589,10 +614,11 @@ decrementDegree i =
          mapM_ enableMoves adj
          modify $ \wl -> wl { wSpillWorklist = delete i (wSpillWorklist wl) }
          mr <- moveRelated i
-         case mr of
-           True -> modify $ \wl -> wl { wFreezeWorklist = i:(wFreezeWorklist wl) }
-           False -> modify $ \wl -> wl { wSimplifyWorklist = i:(wSimplifyWorklist wl) }
+         modify $ \wl -> if mr
+                         then wl { wFreezeWorklist = i:(wFreezeWorklist wl) }
+                         else wl { wSimplifyWorklist = i:(wSimplifyWorklist wl) }
 
+-- | "EnableMoves"
 enableMoves :: Int -> AM ()
 enableMoves i = do moves <- S.toList `fmap` webMoves i
                    forM_ moves $ \m -> do
@@ -600,7 +626,185 @@ enableMoves i = do moves <- S.toList `fmap` webMoves i
                      when (m `S.member` activeMoves) $
                           do modify $ \wl -> wl { wActiveMoves = S.delete m activeMoves
                                                 , wWorklistMoves = S.insert m (wWorklistMoves wl) }
-                                         
+
+-- | "Coalesce"
+coalesce :: AM ()
+coalesce = do m <- selectMove
+              (u, v) <- (\wl -> wMoves wl M.! m) `fmap` get
+              [u, v] <- mapM getAlias [u, v]
+              intToWeb <- (igIntToWeb . wInterfGraph) `fmap` get
+              let vFixed = webFixed $ intToWeb M.! v
+              (u, v) <- if vFixed then (v, u) else (u, v)
+              -- Invariant: if either u,v is fixed, then u is fixed.
+              wl <- get
+              let uweb = intToWeb M.! u
+                  vweb = intToWeb M.! v
+                  adjuv = S.member v $ (igAdjLists $ wInterfGraph wl) M.! u
+              adjacentu <- adjacentWebs u
+              adjacentv <- adjacentWebs v
+              okadjv <- and `fmap` mapM (\t -> ok t u) adjacentv
+              conserv <- conservative $ adjacentu `S.union` adjacentv
+              cond $
+                [
+                 ( webReg uweb == webReg vweb
+                 , do modify $ \wl -> wl { wCoalescedMoves = S.insert m $ wCoalescedMoves wl }
+                      addWorklist u
+                 )
+                ,( webFixed vweb || adjuv
+                 , do modify $ \wl -> wl { wConstrainedMoves = S.insert m $ wConstrainedMoves wl }
+                      addWorklist u
+                      addWorklist v
+                 )
+                ,( (webFixed uweb && okadjv)
+                   || (not (webFixed uweb) && conserv)
+                 , do modify $ \wl -> wl { wCoalescedMoves = S.insert m $ wCoalescedMoves wl }
+                      combine u v
+                      addWorklist u
+                 )
+                ,( True
+                 , do modify $ \wl -> wl { wActiveMoves = S.insert m $ wActiveMoves wl }
+                 )
+                ]
+    where cond :: Monad m => [(Bool, m ())] -> m ()
+          cond opts = fromMaybe (return ()) $ msum $ map (\(b,m) -> guard b >> return m) opts
+          
+          ok t r = do wl <- get
+                      let deg = wDegrees wl M.! t
+                          fixed = webFixed (igIntToWeb (wInterfGraph wl) M.! t)
+                          adjtr = S.member r (igAdjLists (wInterfGraph wl) M.! t)
+                      return $ deg < numUsableRegisters || fixed || adjtr
+          conservative nodes = conservative' 0 (S.toList nodes)
+              where conservative k [] = return $ k < numUsableRegisters
+                    conservative k (n:ns) =
+                        do wl <- get
+                           let deg = wDegrees wl M.! n
+                           case deg >= numUsableRegisters of
+                             True -> conservative (k+1) ns
+                             False -> conservative k ns
+          
+          addWorklist :: Int -> AM ()
+          addWorklist u =
+              do wl <- get
+                 let uweb = igIntToWeb (wInterfGraph wl) M.! u
+                     deg = wDegrees wl M.! u
+                     fixed = webFixed uweb
+                 moverelated <- moveRelated u
+                 when (not fixed && not moverelated && deg < numUsableRegisters) $ do
+                   modify $ \wl -> wl { wFreezeWorklist = delete u $ wFreezeWorklist wl
+                                      , wSimplifyWorklist = u:(wSimplifyWorklist wl) }
+
+selectMove :: AM NodePtr
+selectMove = do wl@(RWorkLists { wWorklistMoves = choices }) <- get
+                x <- choose $ S.fromList choices
+                put $ wl { wSimplifyWorklist = S.delete x choices }
+                return x
+    where choose (x:xs) =
+              do return x
+
+
+-- | "Combine"
+combine :: Int -> Int -> AM ()
+combine u v =
+    do wl <- get
+       case v `member` wFreezeWorklist wl of
+         True -> modify $ \wl -> wl { wFreezeWorklist = delete v $ wFreezeWorklist wl }
+         False -> modify $ \wl -> wl { wSpillWorklist = delete v $ wSpillWorklist wl }
+       modify $ \wl -> wl { wCoalescedWebs = S.insert v $ wCoalescedWebs wl
+                          , wCoalescedAlias = M.insert v u $ wCoalescedAlias wl }
+       webmovesu <- getWebMoves' u `fmap` get
+       webmovesv <- getWebMoves' v `fmap` get
+       modify $ updateWebMoves' (webmovesu `S.union` webmovesv) u
+       adjv <- adjacentWebs v
+       forM_ adjv $ \t -> do
+         modify $ addToAdjList t u
+         decrementDegree t
+       wl <- get
+       let d = wDegrees wl M.! u
+       when (d >= numUsableRegisters && u `member` wFreezeWorklist wl) $ do
+         modify $ \wl -> wl { wFreezeWorklist = delete u $ wFreezeWorklist wl
+                            , wSpillWorklist = u:(wSpillWorklist wl) }
+
+-- | "GetAlias"
+getAlias :: Int -> AM Int
+getAlias i = do coalesced <- wCoalescedWebs `fmap` get
+                case i `S.member` coalesced of
+                  True -> do alias <- wCoalescedAlias `fmap` get
+                             getAlias $ alias M.! i
+                  False -> return i
+
+-- | "Freeze"
+freeze :: AM ()
+freeze = do u <- selectFreeze
+            modify $ \wl -> wl { wFreezeWorklist = delete u $ wFreezeWorklist wl
+                               , wSimplifyWorklist = u:(wSimplifyWorklist wl) }
+            freezeMoves(u)
+    where selectFreeze = do (u:_) <- wFreezeWorklist `fmap` get
+                            return u
+
+-- | "FreezeMoves"
+freezeMoves :: Int -> AM ()
+freezeMoves u = do wmoves <- webMoves u
+                   wl <- get
+                   let wmoves' = map (\l -> wMoves wl M.! l) $ S.toList wmoves
+                   forM_ (filter (u `elem`) wmoves') $ \m -> do
+                     [v] <- delete u m
+                     modify $ \wl ->
+                       case m `S.member` wActiveMoves wl of
+                         True -> wl { wActiveMoves = S.delete m $ wActiveMoves wl }
+                         False -> wl { wWorklistMoves = S.delete m $ wWorklistMoves wl }
+                     modify $ \wl -> wl { wFrozenMoves = m:(wFrozenMoves wl) }
+                     wmv <- webMoves v
+                     degv <- (\wl -> wDegrees wl M.! v) `fmap` get
+                     when (null wmv && degv < numUsableRegisters) $ do
+                       modify $ \wl -> wl { wFreezeWorklist = S.delete v $ wFreezeWorklist wl
+                                          , wSimplifyWorklist = v:(wSimplifyWorklist wl) }
+
+
+-- | "SelectSpill"
+selectSpill :: AM ()
+selectSpill = do m <- chooseSpill
+                 modify $ \wl -> wl { wSpillWorklist = delete m $ wSpillWorklist wl
+                                    , wSimplifyWorklist = m:(wSimplifyWorklist wl) }
+                 freezeMoves m
+    where chooseSpill =
+              do wl <- get
+                 let spillList = wSpillWorklist wl
+                 let costs = map (\i -> (i, cost wl i)) spillList
+                 return $ fst $ maximumBy (compare `on` snd) costs
+          cost wl i = let web = igGetWeb i $ wInterfGraph wl
+                          deg = wDegrees wl M.! i
+                          dus = S.toList $ webDUs web
+                          len du = S.size $ duExtent dus
+                          score = deg * sum (map len dus) `div` (S.size $ webUses web)
+                      in score
+
+-- | "AssignColors"
+assignColors :: AM ()
+assignColors = do emptyStack
+                  wl <- get
+                  forM_ (M.toList $ wCoalescedWebs wl) $ \n -> do
+                    alias <- getAlias n
+                    modify $ \wl -> wl { wColoredWebs = M.insert n (wColoredWebs wl M.! alias) 
+                                                        (wColoredWebs wl) }
+    where emptyStack :: AM ()
+          emptyStack
+              = do wl <- get
+                   when (not $ null $ wSelectStack wl) $ do
+                     n <- popSelect
+                     okColors <- determineColors n
+                     case okColors of
+                       [] -> modify $ \wl -> wl { wSpilledWebs = n:(wSpilledWebs wl) }
+                       (c:_) -> modify $ \wl ->
+                                   wl { wColoredWebs = M.insert n c (wColoredWebs wl) }
+                     emptyStack
+          determineColors :: Int -> AM [X86Reg]
+          determineColors n = do adj <- S.toList `fmap` adjacentWebs n
+                                 adj' <- mapM getAlias adj
+                                 allcolored <- wColoredWebs `fmap` get
+                                 let colored = filter (`M.member` allcolored) adj'
+                                     usedColors = map (allcolored M.!) colored
+                                     ok = usableRegisters \\ usedColors
+                                 return ok
 
 outputWebGraph :: InterfGraph -> String
 outputWebGraph ig
