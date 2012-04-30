@@ -1,21 +1,54 @@
 #!/bin/sh
 
+domidirc=0
+
+if uname -a | grep "Darwin" > /dev/null; then
+    echo "(compiling for Mac OS X)"
+    d=`pwd`
+    cd $base/maclib
+    make
+    cd $d
+    archstring="-arch x86_64"
+    dccopt="--mac"
+    lib="$base/maclib/lib6035.o"
+    LD_LIBRARY_PATH=$base/maclib:$LD_LIBRARY_PATH
+else
+    d=`pwd`
+    cd $base/lib
+    make
+    cd $d
+    archstring=""
+    dccopt=""
+    lib="-L$base/lib -l6035 -lpthread"
+    if ! gcc -v 2>&1 |grep -q '^Target: x86_64-linux-gnu'; then
+  echo "Refusing to run cross-compilation on non-64-bit architechure."
+  exit 0;
+    fi
+fi
+
+
 runcompiler_opt() {
-  java -jar $orig_pwd/../../dist/Compiler.jar \
-    -target codegen -opt all -o $2 $1
+    $base/../../dcc -target codegen -opt all -o $2 $1
 }
 
 runcompiler_unopt() {
-  java -jar $orig_pwd/../../dist/Compiler.jar \
-    -target codegen -o $2 $1
+    $base/../../dcc -target codegen -opt none -o $2 $1
+}
+
+
+isolate() {
+  exec 3>/dev/stderr 2>/dev/null
+  if $*; then
+    exec 3>&2
+    return 0
+  else
+    exec 3>&2
+    return 1
+  fi
 }
 
 fail=0
 
-if ! gcc -v 2>&1 |grep -q '^Target: x86_64-linux-gnu'; then
-  echo "Refusing to run cross-compilation on non-64-bit architecture."
-  exit 0;
-fi
 
 cd `dirname $0`
 orig_pwd=$PWD
@@ -35,7 +68,7 @@ for file in $PWD/input/*.dcf; do
   cp $orig_input $input;
   msg=""
   if runcompiler_opt $file $asm; then
-    if gcc -o $binary -L${orig_pwd}/lib $asm -l6035 -lpthread; then
+    if gcc $archstring -o $binary $asm $lib -l6035 -lpthread; then
       cd $workingdir
       if $binary > $timing_opt; then
         if ! diff -q $output $golden > /dev/null; then
@@ -52,7 +85,7 @@ for file in $PWD/input/*.dcf; do
   fi
   cd "$orig_pwd";
   if runcompiler_unopt $file $asm; then
-    if gcc -o $binary -L${orig_pwd}/lib $asm -l6035 -lpthread; then
+    if gcc -o $binary $asm $lib -l6035 -lpthread; then
       cd $workingdir
       if $binary > $timing_unopt; then
         if ! diff -q $output $golden > /dev/null; then
