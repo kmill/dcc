@@ -8,6 +8,7 @@ import Dataflow.BlockElim
 import Dataflow.Flatten
 import Dataflow.CopyProp
 import Dataflow.Tailcall
+import Dataflow.Dominator
 import Dataflow.OptSupport
 --import Dataflow.NZP
 
@@ -92,6 +93,8 @@ dataflows
       , DFA optConstProp performConstPropPass
       , DFA optDeadCode performDeadCodePass
       , DFA (\opts -> optCommonSubElim opts || optFlat opts || optUnflat opts ) performUnflattenPass 
+      , DFA optCopyProp performCopyPropPass
+      , DFA optConstProp performConstPropPass
       , DFA optDeadCode performDeadCodePass
       , DFA optTailcall performTailcallPass 
       --, DFA optNZP performNZPPass
@@ -99,6 +102,7 @@ dataflows
       , DFA optBlockElim performBlockElimPass 
       -- It's good to end with this for good measure (and removes dead blocks)
       , DFA optDeadCode performDeadCodePass
+      --, DFA optDeadCode testDominatorPass
       ]
 
 performDataflowAnalysis :: OptFlags -> MidIRRepr -> RM MidIRRepr 
@@ -159,7 +163,16 @@ performUnflattenPass midir
           mlabels = (map methodEntry $ midIRMethods midir)
 
 
-                                   
+testDominatorPass :: MidIRRepr -> RM MidIRRepr 
+testDominatorPass midir 
+    = do (_, factBase, _) <- analyzeAndRewriteFwd
+                             dominatorPass 
+                             (JustC mlabels)
+                             graph
+                             (mapFromList (map (\l -> (l, fact_bot dominatorLattice) ) mlabels))
+         return $ trace (show factBase) midir 
+    where graph = midIRGraph midir
+          mlabels = (map methodEntry $ midIRMethods midir)
 
 -- (trace (map (show . entryLabel) (forwardBlockList mlabels body)) body)
 
@@ -214,6 +227,13 @@ csePass nonTemps = FwdPass
                    { fp_lattice = exprLattice
                    , fp_transfer = exprAvailable nonTemps
                    , fp_rewrite = cseRewrite nonTemps }
+
+dominatorPass :: (CheckpointMonad m, FuelMonad m, UniqueNameMonad m)
+                 => FwdPass m MidIRInst DominFact
+dominatorPass = FwdPass 
+                { fp_lattice = dominatorLattice 
+                , fp_transfer = dominatorAnalysis
+                , fp_rewrite = noFwdRewrite }
                    
 performTailcallPass :: MidIRRepr -> RM MidIRRepr
 performTailcallPass midir

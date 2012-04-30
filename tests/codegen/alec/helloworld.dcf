@@ -1,0 +1,8 @@
+//>hello, world!
+class Program {
+
+void main() { 
+     callout("printf", "hello, world!\n");
+}
+
+}
