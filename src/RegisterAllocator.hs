@@ -26,9 +26,8 @@ regAlloc (LowIRRepr fields strs meths graph)
     = do --graph'' <- evalStupidFuelMonad (collectSpill mlabels graph') 22222222
          return $ LowIRRepr fields strs meths graph'
       where GMany _ body _ = graph
-            pg = toPGraph graph
-            pg' = foldl (flip id) pg (map doRegAlloc mlabels)
-            graph' = error $ I.graphToGraphViz show pg'
+            g' = foldl (flip id) graph (map doRegAlloc mlabels)
+            graph' = error $ I.graphToGraphViz show g'
 --            graph' = foldl (|*><*|) emptyClosedGraph bodies
 --             bodies = map f (mapElems body)
 --             f :: Block Asm C C -> Graph Asm C C
@@ -548,9 +547,10 @@ makeWorklists g = iter (igWebIDs g) (initWorklists g initMoves moves makeDegrees
           makeDegrees = M.fromList $ map (\i -> (i, webDegree i g)) (igWebIDs g)
 
 -- | "main"
-doRegAlloc :: Label -> Graph (PNode Asm) C C -> Graph (PNode Asm) C C
-doRegAlloc mlabel pg
-    = let dus = collectDU [mlabel] pg
+doRegAlloc :: Label -> Graph Asm C C -> Graph Asm C C
+doRegAlloc mlabel graph
+    = let pg = toPGraph graph
+          dus = collectDU [mlabel] pg
           webs = collectWebs (dus M.! mlabel)
           rrfacts = getRegRegMoves [mlabel] pg
           interfgraph = makeInterfGraph webs (rrfacts M.! mlabel)
@@ -561,28 +561,54 @@ doRegAlloc mlabel pg
           mainLoop = do wl <- get
                         let mtodo = msum
                                     [ do guard $ not (null $ wSimplifyWorklist wl)
-                                         return simplify
+                                         return $ trace "simplify" simplify
                                     , do guard $ not (S.null $ wWorklistMoves wl)
-                                         return coalesce
+                                         return $ trace "coalesce" coalesce
                                     , do guard $ not (null $ wFreezeWorklist wl)
-                                         return freeze
+                                         return $ trace "freeze" freeze
                                     , do guard $ not (null $ wSpillWorklist wl)
-                                         return selectSpill
+                                         return $ trace "selectSpill" selectSpill
                                     ]
                         case mtodo of
                           Just action -> do action
                                             mainLoop
                           Nothing -> return ()
-          main = do mainLoop
-                    assignColors
+          main = do trace "mainLoop" mainLoop
+                    trace "assignColors" assignColors
                     spilledWebs <- wSpilledWebs `fmap` get
                     wl <- get
                     if not $ null spilledWebs
-                       then return $ doRegAlloc mlabel (rewriteProgram pg spilledWebs wl)
-                       else return pg
-      in evalState main initState
+                       then return $ doRegAlloc mlabel (rewriteProgram pg wl)
+                       else return $ error $ show "got to return " ++ show wl  --pg
+      in evalState main (trace ("initState: " ++ show initState) initState)
 
-rewriteProgram pg spilledWebs wl  = error $ "got to rewriteprogram " ++ show wl
+rewriteProgram pg wl  = error $ "got to rewriteprogram " ++ show wl
+    where GMany _ body _ = pg
+          graph' = foldl (|*><*|) emptyClosedGraph bodies
+          bodies = map f (mapElems body)
+          f :: Block (PNode Asm) C C -> Graph Asm C C
+          f block = mkFirst (fe e)
+                    <*> catGraphs (map fm inner)
+                    <*> mkLast (fx x)
+              where (me, inner, mx) = blockToNodeList block
+                    e :: (PNode Asm) C O
+                    x :: (PNode Asm) O C
+                    e = case me of
+                          JustC e' -> e'
+                    x = case mx of
+                          JustC x' -> x'
+          fe :: PNode Asm C O -> Asm C O
+          fe (PNode l n) = n
+          fm :: PNode Asm O O -> Asm O O
+          fm (PNode l n) 
+          fx :: PNode Asm O C -> Asm O C
+          spilledWebs = wSpilledWebs wl
+          intToWeb = M.toList $ igIntToWeb (wInterfGraph wl)
+          lrToWebID = M.fromList $ [(webReg w, )
+                                    | (i, w) <- intToWeb, i `elem` spilledWebs]
+          unspill l reg = case M.lookup (
+          isSpilled l reg = igIntToWeb (wInterfGraph wl)
+
 
 -- | "Simplify"
 simplify :: AM ()
@@ -630,11 +656,11 @@ enableMoves i = do moves <- S.toList `fmap` webMoves i
 -- | "Coalesce"
 coalesce :: AM ()
 coalesce = do m <- selectMove
-              [u, v] <- (\wl -> wMoves wl M.! m) `fmap` get
-              [u, v] <- mapM getAlias [u, v]
+              [x, y] <- (\wl -> wMoves wl M.! m) `fmap` get
+              [x, y] <- mapM getAlias [x, y]
               intToWeb <- (igIntToWeb . wInterfGraph) `fmap` get
-              let vFixed = webFixed $ intToWeb M.! v
-              let (u, v) = if vFixed then (v, u) else (u, v)
+              let yFixed = webFixed $ intToWeb M.! y
+              let (u, v) = if yFixed then (y, x) else (x, y)
               -- Invariant: if either u,v is fixed, then u is fixed.
               wl <- get
               let uweb = intToWeb M.! u
@@ -655,8 +681,7 @@ coalesce = do m <- selectMove
                       addWorklist u
                       addWorklist v
                  )
-                ,( (webFixed uweb && okadjv)
-                   || (not (webFixed uweb) && conserv)
+                ,( conserv
                  , do modify $ \wl -> wl { wCoalescedMoves = m:(wCoalescedMoves wl) }
                       combine u v
                       addWorklist u
@@ -689,7 +714,7 @@ coalesce = do m <- selectMove
                      deg = wDegrees wl M.! u
                      fixed = webFixed uweb
                  moverelated <- moveRelated u
-                 when (not fixed && not moverelated && deg < numUsableRegisters) $ do
+                 when (not moverelated && deg < numUsableRegisters) $ do
                    modify $ \wl -> wl { wFreezeWorklist = delete u $ wFreezeWorklist wl
                                       , wSimplifyWorklist = u:(wSimplifyWorklist wl) }
 
@@ -726,11 +751,12 @@ combine u v =
 
 -- | "GetAlias"
 getAlias :: Int -> AM Int
-getAlias i = do coalesced <- wCoalescedWebs `fmap` get
-                case i `S.member` coalesced of
-                  True -> do alias <- wCoalescedAlias `fmap` get
-                             getAlias $ alias M.! i
-                  False -> return i
+getAlias i = (getAlias' i) `fmap` get
+
+getAlias' :: Int -> RWorklists -> Int
+getAlias' i wl = case i `S.member` wCoalescedWebs wl of
+                   True -> getAlias (wCoalescedAlias wl M.! i) wl
+                   False -> i
 
 -- | "Freeze"
 freeze :: AM ()
@@ -791,12 +817,15 @@ assignColors = do emptyStack
               = do wl <- get
                    when (not $ null $ wSelectStack wl) $ do
                      n <- popSelect
-                     okColors <- determineColors n
+                     web <- (igGetWeb n . wInterfGraph) `fmap` get
+                     okColors <- if webFixed web then return [x86reg $ webReg web] else determineColors n
                      case okColors of
                        [] -> modify $ \wl -> wl { wSpilledWebs = n:(wSpilledWebs wl) }
                        (c:_) -> modify $ \wl ->
                                    wl { wColoredWebs = M.insert n c (wColoredWebs wl) }
                      emptyStack
+          x86reg (MReg r) = r
+          x86reg r = error $ show r ++ " is not a machine register but is associated with a fixed web."
           determineColors :: Int -> AM [X86Reg]
           determineColors n = do adj <- S.toList `fmap` adjacentWebs n
                                  adj' <- mapM getAlias adj
