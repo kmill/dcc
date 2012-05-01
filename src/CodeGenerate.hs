@@ -132,13 +132,10 @@ instToAsm (I.Call pos d name args)
 instToAsm (I.Callout pos d name args)
     = do gargs <- genSetArgs pos args
          return $ gargs
---                    <*> mkMiddle (A.Realign pos (max 0 ((length args) - 6)))
                     <*> mkMiddle (A.mov pos (A.Imm32 0) (A.MReg A.RAX))
                     <*> genSetSP pos args
                     <*> mkMiddle (A.Callout pos (length args) (A.Imm32Label name 0))
---                    <*> mkMiddle (A.Unrealign pos)
                     <*> genResetSP pos args
---                    <*> genPopRegs pos A.callerSaved
                     <*> mkMiddle (A.mov pos (A.MReg A.RAX) (A.SReg $ show d))
 instToAsm (I.Branch pos l)
     = return $ mkLast $ A.Jmp pos (A.Imm32BlockLabel l 0)
@@ -215,14 +212,14 @@ expITo' f m = do a <- m
                  return $ (GNil, f a)
 
 expToIRM :: MidIRExpr -> CGM (Graph A.Asm O O, A.OperIRM)
-expToIRM e = expITo' A.IRM_I (expToI e)
+expToIRM e = mcut $ expITo' A.IRM_I (expToI e)
              `mplus` expTo' A.IRM_M (expToM e)
              `mplus` expTo' A.IRM_R (expToR e)
 expToIR :: MidIRExpr -> CGM (Graph A.Asm O O, A.OperIR)
-expToIR e = expITo' A.IR_I (expToI e)
+expToIR e = mcut $ expITo' A.IR_I (expToI e)
             `mplus` expTo' A.IR_R (expToR e)
 expToRM :: MidIRExpr -> CGM (Graph A.Asm O O, A.OperRM)
-expToRM e = expTo' A.RM_M (expToM e)
+expToRM e = mcut $ expTo' A.RM_M (expToM e)
             `mplus` expTo' A.RM_R (expToR e)
 
 withNode :: MidIRExpr -> CGM MidIRExpr
@@ -378,12 +375,12 @@ expToR e = mcut $ msum rules
               ]
 
 expToMem :: MidIRExpr -> CGM (Graph A.Asm O O, A.MemAddr)
-expToMem e = do let exp = flattenOp I.OpAdd e
-                (exp', disp) <- disp exp
-                (exp'', gind, ind, sc) <- getScalar exp'
-                (gbase, base) <- getBase exp''
-                let mem = A.MemAddr base disp ind sc
-                return (gind <*> gbase, mem)
+expToMem e = mcut $ do let exp = flattenOp I.OpAdd e
+                       (exp', disp) <- disp exp
+                       (exp'', gind, ind, sc) <- getScalar exp'
+                       (gbase, base) <- getBase exp''
+                       let mem = A.MemAddr base disp ind sc
+                       return (gind <*> gbase, mem)
     where
       disp exp = msum
                  [ -- do not deal with labels here.  They should be leaq'd to work on macs.
