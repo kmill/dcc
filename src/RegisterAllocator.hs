@@ -907,8 +907,10 @@ selectSpill = do m <- chooseSpill
                           dus = S.toList $ webDUs web
                           len (DU {duExtent = ext}) = S.size ext
                           len (DUv{}) = 0
-                          score = deg * sum (map len dus) `div` (1 + (S.size $ webUses web))
-                      in score
+                          uses = max 1 (S.size $ webUses web)
+                          size = S.size (webExtent web) --sum (map len dus)
+                          score = (deg * size) `div` (uses)
+                      in trace (show (webReg web) ++ " " ++ show score) score
 
 -- | "AssignColors"
 assignColors :: AM ()

@@ -169,7 +169,8 @@ genSetArgs pos args = do gs <- mapM genset $ reverse (zip args locs)
                                     return $ gs <*> (mkMiddle $ A.MovIRtoM pos a m)
           genset (arg, Right r) = do (gs, a) <- expToIRM arg
                                      return $ gs <*> (mkMiddle $ A.MovIRMtoR pos a r)
-          locs = A.argStoreLocations $ toNearestSafeSP $ (length args) - 8*max 0 (length args - 6)
+          nargs' = max 0 (length args - 6)
+          locs = A.argStoreLocations $ (negate $ toNearestSafeSP (length args)) -- + (fromIntegral $ 8*nargs')
 
 genSetSP :: SourcePos -> [MidIRExpr] -> Graph A.Asm O O
 genSetSP pos args = if sp == 0

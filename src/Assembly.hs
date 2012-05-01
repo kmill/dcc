@@ -433,7 +433,7 @@ argOrder = (map Just [RDI, RSI, RDX, RCX, R8, R9]) ++ nothings
 
 argStoreLocations :: Int32 -> [Either MemAddr Reg]
 argStoreLocations dsp = map (Right . MReg) [RDI, RSI, RDX, RCX, R8, R9]
-                        ++ map (Left . makeMem) [dsp, dsp-8..]
+                        ++ map (Left . makeMem) [dsp, dsp+8..]
     where makeMem d = MemAddr (Just $ MReg RSP) (Imm32 d) Nothing SOne
 
 argStackDepth :: [Int]
