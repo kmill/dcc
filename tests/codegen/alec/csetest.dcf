@@ -1,0 +1,16 @@
+//>10
+class Program {
+int f(int i, int j, int k, int l) {
+i = j + k;
+l = j + k;
+
+return i + l;
+}
+
+void main() {
+int r;
+r = f(1, 2, 3, 4);
+callout("printf", "%d\n", r);
+}
+
+}

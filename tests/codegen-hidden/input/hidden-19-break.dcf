@@ -1,0 +1,12 @@
+class Program {
+  void main() {
+    int i;
+    for (i = 1; 10) {
+      if (i == 7) {
+	break;
+      }
+      callout("printf", "%d ", i);
+    }
+    callout("printf", "\n");
+  }
+}

@@ -1,0 +1,14 @@
+//>i is: 2
+class Program { 
+
+void main() {
+
+int i;
+
+i = 1; 
+i = 2;
+callout("printf", "i is: %d\n", i);
+
+}
+
+}

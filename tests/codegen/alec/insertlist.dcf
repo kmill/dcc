@@ -1,0 +1,10 @@
+
+class Program {
+
+int A[22];
+
+void main() {
+ A[0] = 22;
+}
+
+}

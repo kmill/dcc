@@ -1,0 +1,12 @@
+// This should produce a runtime error
+class Program {
+  int a;
+
+  int foo() {
+  }
+  
+  void main() {
+    callout("printf", "expecting an error next:\n");
+    a = foo();
+  }
+}
