@@ -191,8 +191,8 @@ genLoadArgs :: SourcePos -> [VarName] -> Graph A.Asm O O
 genLoadArgs pos args = catGraphs $ map genload $ zip args A.argLocation
     where genload (a, Right reg)
               = mkMiddle $ A.MovIRMtoR pos (A.IRM_R reg) (A.SReg $ show a)
-          genload (a, Left mem)
-              = mkMiddle $ A.MovIRMtoR pos (A.IRM_M mem) (A.SReg $ show a)
+          genload (a, Left spillLoc)
+              = mkMiddle $ A.Reload pos spillLoc (A.SReg $ show a)
 
 genPushRegs :: SourcePos -> [A.X86Reg] -> Graph A.Asm O O
 genPushRegs pos regs = catGraphs $ map genpush regs

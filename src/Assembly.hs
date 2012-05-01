@@ -69,7 +69,14 @@ instance Show OperRM where
 
 data SpillLoc = SpillName String
               | SpillReg Reg
-                deriving Show
+              | SpillID Int
+              | SpillArg Int
+                deriving (Eq, Ord, Show)
+
+type SpillLocSupply = [SpillLoc]
+
+freeSpillLocs :: SpillLocSupply
+freeSpillLocs = map SpillID [0..]
 
 checkIf32Bit :: Int64 -> Bool
 checkIf32Bit x
@@ -429,10 +436,9 @@ argStackDepth :: [Int]
 argStackDepth = [no, no, no, no, no, no] ++ [16, 16+8..]
     where no = error "argStackDepth for non-stack-arg :-("
 
-argLocation :: [Either MemAddr Reg]
+argLocation :: [Either SpillLoc Reg]
 argLocation = map (Right . MReg) [RDI, RSI, RDX, RCX, R8, R9]
-              ++ map (Left . makeMem) [16,16+8..]
-    where makeMem d = MemAddr (Just $ MReg RSP) (Imm32 d) Nothing SOne
+              ++ map (Left . SpillArg) [0,8..]
 
 ---- | Gives a midir expression for getting any particular argument.
 --argExprs :: SourcePos -> [Expr VarName]
@@ -452,6 +458,9 @@ calleeSaved = [RBX, R12, R13, R14, R15, RBP]
 usableRegisters :: [X86Reg]
 usableRegisters = [RAX, RBX, RCX, RDX, RBP, RSI, RDI
                    ,R8, R9, R10, R11, R12, R13, R14, R15]
+
+usableRegisters' :: [Reg]
+usableRegisters' = map MReg usableRegisters
 
 numUsableRegisters :: Int
 numUsableRegisters = length usableRegisters
@@ -491,3 +500,106 @@ instance Show X86Reg where
     show R13 = "%r13"
     show R14 = "%r14"
     show R15 = "%r15"
+
+class AsmRename x where
+    -- | Takes a function on registers and something, and replaces the
+    -- registers in the something.
+    mapArg :: (Reg -> Reg) -> x -> x
+
+instance AsmRename Reg where
+    mapArg f r = f r
+instance AsmRename MemAddr where
+    mapArg f m = MemAddr
+                 { baseReg = f `fmap` baseReg m
+                 , displace = displace m
+                 , indexReg = f `fmap` indexReg m
+                 , scalar = scalar m }
+
+instance AsmRename OperIRM where
+    mapArg f (IRM_I i) = IRM_I i
+    mapArg f (IRM_R r) = IRM_R $ f r
+    mapArg f (IRM_M m) = IRM_M $ mapArg f m
+instance AsmRename OperIR where
+    mapArg f (IR_I i) = IR_I i
+    mapArg f (IR_R r) = IR_R $ f r
+instance AsmRename OperRM where
+    mapArg f (RM_R r) = RM_R $ f r
+    mapArg f (RM_M m) = RM_M $ mapArg f m
+
+mapAsm :: forall e x . (Reg -> Reg) -> (Reg -> Reg) -> Asm e x -> Asm e x
+mapAsm fs fd n
+    = case n of
+        Label{} -> n
+        
+        Spill pos r spillloc -> Spill pos (fs' r) spillloc
+        Reload pos spillloc r -> Reload pos spillloc (fd' r)
+        
+        MovIRMtoR pos s d -> MovIRMtoR pos (fs' s) (fd' d)
+        MovIRtoM pos s d -> MovIRtoM pos (fs' s) (fs' d)
+        Mov64toR pos i d -> Mov64toR pos i (fd' d)
+
+        CMovRMtoR pos fl s d -> CMovRMtoR pos fl (fs' s) (fd' d)
+        
+        Enter{} -> n
+        Leave{} -> n
+        
+        Call{} -> n
+        Callout{} -> n
+        Ret{} -> n
+        RetPop{} -> n
+        ExitFail{} -> n
+        
+        Lea pos s d -> Lea pos (fs' s) (fd' d)
+        
+        Push pos s -> Push pos (fs' s)
+        Pop pos (RM_R rd) -> Pop pos (RM_R $ fd' rd)
+        Pop pos (RM_M ms) -> Pop pos (RM_M $ fs' ms)
+        
+        Jmp{} -> n
+        JCond{} -> n
+        
+        ALU_IRMtoR pos op s d -> let dSource = fs' d
+                                     dDest = fd' d
+                                 in case dSource == dDest of
+                                      True -> ALU_IRMtoR pos op (fs' s) dDest
+                                      False -> error $ printf "source and dest not equal in %s!"
+                                                          (show n)
+        ALU_IRtoM pos op s d -> ALU_IRtoM pos op (fs' s) (fs' d)
+        Cmp pos s1 s2 -> Cmp pos (fs' s1) (fs' s2)
+        Test pos s1 s2 -> Test pos (fs' s1) (fs' s2)
+        
+        Inc pos sd -> doUnaryRM (Inc pos) sd
+        Dec pos sd -> doUnaryRM (Dec pos) sd
+        Neg pos sd -> doUnaryRM (Neg pos) sd
+        
+        IMulRAX pos s -> IMulRAX pos (fs' s)
+        IMulRM pos s d -> let dSource = fs' d
+                              dDest = fd' d
+                          in case dSource == dDest of
+                               True -> IMulRM pos (fs' s) dDest
+                               False -> error $ printf "source and dest not equal in %s!"
+                                                   (show n)
+        IMulImm pos i s d -> IMulImm pos i (fs' s) (fd' d)
+        
+        IDiv pos s -> IDiv pos (fs' s)
+        Cqo{} -> n
+        
+        Shl pos i rm -> doUnaryRM (Shl pos i) rm
+        Shr pos i rm -> doUnaryRM (Shr pos i) rm
+        Sar pos i rm -> doUnaryRM (Sar pos i) rm
+        
+        Nop{} -> n
+        
+    where fs', fd' :: AsmRename x => x -> x
+          fs' = mapArg fs
+          fd' = mapArg fd
+          
+          doUnaryRM :: (OperRM -> Asm O O) -> OperRM -> Asm O O
+          doUnaryRM cons (RM_R rd)
+              = let rdSource = fs' rd
+                    rdDest = fd' rd
+                in case rdSource == rdDest of
+                     True -> cons (RM_R rdDest)
+                     False -> error $ printf "source and dest not equal in %s!"
+                                           (show n)
+          doUnaryRM cons (RM_M m) = cons (RM_M $ fs' m)
