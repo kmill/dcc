@@ -7,9 +7,11 @@ module RegisterAllocator where
 import qualified Data.Map as M
 import Assembly
 import qualified Assembly as A
+import AliveDead
 import CodeGenerate
 import qualified IR as I
 import Dataflow
+import Dataflow.DeadCodeAsm
 import qualified Data.Set as S
 import Data.List
 import Control.Monad.State
@@ -22,10 +24,11 @@ import Data.Function
 import Util.NodeLocate
 
 regAlloc :: LowIRRepr -> I.GM LowIRRepr
-regAlloc (LowIRRepr fields strs meths graph)
+regAlloc lir
     = do --graph'' <- evalStupidFuelMonad (collectSpill mlabels graph') 22222222
          return $ LowIRRepr fields strs meths graph'
-      where GMany _ body _ = graph
+      where LowIRRepr fields strs meths graph = I.runGM $ evalStupidFuelMonad (performDeadAsmPass lir) 2222222
+            GMany _ body _ = graph
             graph' = foldl (flip id) graph (map (doRegAlloc freeSpillLocs) mlabels)
             mlabels = map I.methodEntry meths
 --            graph' = error $ I.graphToGraphViz show g'
@@ -215,11 +218,13 @@ addInterfEdge u v g = g { igAdjLists = add u v $ add v u $ igAdjLists g }
 -- | Checks whether two webs interfere
 wInterf :: Web -> Web -> Bool
 wInterf (Web r1 _ _ _ dus1 ds1 ex1 us1) (Web r2 _ _ _ dus2 ds2 ex2 us2)
-    = if r1 `notElem` usableRegisters' || r2 `notElem` usableRegisters'
+    = if notUsable r1 || notUsable r2
       then False
       else (S.union ds1 ex1 `ints` S.union ds2 ex2)
                || (S.union ex1 us1 `ints` S.union ex2 us2)
       where ints s1 s2 = not $ S.null $ s1 `S.intersection` s2
+            notUsable (MReg r) = r `notElem` usableRegisters
+            notUsable (SReg _) = False
 
 
 -- | Gets the degree of a web in the interference graph.
@@ -355,7 +360,7 @@ collectWebs dus = iteration' webs webs
                   Just webs' -> iteration' webs' webs'
 
 makeInterfGraph :: [Web] -> RRFact -> InterfGraph
-makeInterfGraph webs rrmoves = InterfGraph intToWebMap augAdjs rrmoves
+makeInterfGraph webs rrmoves = trace ("mkAdjs " ++ show mkAdjs) $ InterfGraph intToWebMap augAdjs rrmoves
     where intToWeb = zip [0..] webs
           intToWebMap = M.fromList intToWeb
           webToInt = zip webs [0..]
@@ -583,7 +588,7 @@ doRegAlloc spillLocs mlabel graph
                           Just action -> do action
                                             mainLoop
                           Nothing -> return ()
-          main = do trace "mainLoop" mainLoop
+          main = do trace ("interfgraph\n" ++ outputWebGraph interfgraph ++ "\nmainLoop") mainLoop
                     trace "assignColors" assignColors
                     spilledWebs <- wSpilledWebs `fmap` get
                     wl <- get
@@ -825,7 +830,9 @@ combine u v =
          decrementDegree t
        wl <- get
        let d = wDegrees wl M.! u
-       when (d >= numUsableRegisters && u `elem` wFreezeWorklist wl) $ do
+       when (d >= numUsableRegisters
+             && u `elem` wFreezeWorklist wl
+             && u `notElem` wSpillWorklist wl) $ do
          modify $ \wl -> wl { wFreezeWorklist = delete u $ wFreezeWorklist wl
                             , wSpillWorklist = u:(wSpillWorklist wl) }
 
@@ -883,13 +890,13 @@ selectSpill = do m <- chooseSpill
                           len (DU {duExtent = ext}) = S.size ext
                           len (DUv{}) = 0
                           score = deg * sum (map len dus) `div` (1 + (S.size $ webUses web))
-                      in if webSpilled web then -22 else score
+                      in score
 
 -- | "AssignColors"
 assignColors :: AM ()
 assignColors = do emptyStack
                   wl <- get
-                  forM_ (S.toList $ wCoalescedWebs wl) $ \n -> do
+                  forM_ (S.toList $ wCoalescedWebs (trace (outputWebGraph $ wInterfGraph wl) wl)) $ \n -> do
                     alias <- getAlias n
                     modify $ \wl -> wl { wColoredWebs = M.insert n (wColoredWebs wl M.! alias) 
                                                         (wColoredWebs wl) }
@@ -899,8 +906,9 @@ assignColors = do emptyStack
                    when (not $ null $ wSelectStack wl) $ do
                      n <- popSelect
                      web <- (igGetWeb n . wInterfGraph) `fmap` get
+                     wl <- get
                      okColors <- if webFixed web then return [x86reg $ webReg web] else determineColors n
-                     case okColors of
+                     case trace (show n ++ " " ++ show (webReg web) ++ " okColors: " ++ show okColors ++ " " ++ show (igAdjLists (wInterfGraph wl) M.! n) ++ " " ++ show (wColoredWebs wl)) okColors of
                        [] -> modify $ \wl -> wl { wSpilledWebs = n:(wSpilledWebs wl) }
                        (c:_) -> modify $ \wl ->
                                    wl { wColoredWebs = M.insert n c (wColoredWebs wl) }
@@ -908,7 +916,8 @@ assignColors = do emptyStack
           x86reg (MReg r) = r
           x86reg r = error $ show r ++ " is not a machine register but is associated with a fixed web."
           determineColors :: Int -> AM [X86Reg]
-          determineColors n = do adj <- S.toList `fmap` adjacentWebs n
+          determineColors n = do wl <- get
+                                 let adj = S.toList $ igAdjLists (wInterfGraph wl) M.! n
                                  adj' <- mapM getAlias adj
                                  allcolored <- wColoredWebs `fmap` get
                                  let colored = filter (`M.member` allcolored) adj'
@@ -942,152 +951,7 @@ outputWebGraph ig
           webs = M.toList $ igIntToWeb ig
           g = igAdjLists ig
 
----
---- Aliveness/deadness (aka use/definition)
----
 
-
-type AliveDead = ([Reg], [Reg])
-class GetRegs x where
-    getRSrc :: x -> AliveDead
-    getRDst :: x -> AliveDead
-
-emptyAD :: AliveDead
-emptyAD = ([], [])
-
-infixl 5 <+>
-
-(<+>) :: AliveDead -> AliveDead -> AliveDead
-(a1,d1) <+> (a2,d2) = (a1++a2, d1++d2)
-
-instance GetRegs OperIRM where
-    getRSrc (IRM_I _) = ([],[])
-    getRSrc (IRM_R r) = getRSrc r
-    getRSrc (IRM_M m) = getRSrc m
-    getRDst (IRM_I _) = ([],[])
-    getRDst (IRM_R r) = getRDst r
-    getRDst (IRM_M m) = getRDst m
-instance GetRegs OperIR where
-    getRSrc (IR_I _) = ([],[])
-    getRSrc (IR_R r) = getRSrc r
-    getRDst (IR_I _) = ([],[])
-    getRDst (IR_R r) = getRDst r
-instance GetRegs OperRM where
-    getRSrc (RM_R r) = getRSrc r
-    getRSrc (RM_M m) = getRSrc m
-    getRDst (RM_R r) = getRDst r
-    getRDst (RM_M m) = getRDst m
-instance GetRegs MemAddr where
-    getRSrc (MemAddr br d i s)
-        = (maybeToList br ++ maybeToList i, [])
-    getRDst (MemAddr br d i s)
-        = (maybeToList br ++ maybeToList i, [])
-instance GetRegs Reg where
-    getRSrc r = ([r],[])
-    getRDst r = ([],[r])
-
-map_IRM :: (Reg -> Reg) -> OperIRM -> OperIRM
-map_IRM f (IRM_I i) = IRM_I i
-map_IRM f (IRM_R r) = IRM_R $ f r
-map_IRM f (IRM_M m) = IRM_M $ map_M f m
-
-map_IR :: (Reg -> Reg) -> OperIR -> OperIR
-map_IR f (IR_I i) = IR_I i
-map_IR f (IR_R r) = IR_R $ f r
-
-map_RM :: (Reg -> Reg) -> OperRM -> OperRM
-map_RM f (RM_R r) = RM_R $ f r
-map_RM f (RM_M m) = RM_M $ map_M f m
-
-map_M :: (Reg -> Reg) -> MemAddr -> MemAddr
-map_M f (MemAddr br d i s) = MemAddr (fmap f br) d (fmap f i) s
-
-mapRR :: forall e x. (Reg -> Reg) -> Asm e x -> Asm e x
-mapRR f a@(Label{}) = a
-mapRR f (Spill pos r d) = Spill pos (f r) d
-mapRR f (Reload pos s r) = Reload pos s (f r)
-mapRR f (MovIRMtoR p irm r) = MovIRMtoR p (map_IRM f irm) (f r)
-mapRR f (MovIRtoM p ir m) = MovIRtoM p (map_IR f ir) (map_M f m)
-mapRR f (Mov64toR p i r) = Mov64toR p i (f r)
-mapRR f (CMovRMtoR p fl rm r) = CMovRMtoR p fl (map_RM f rm) (f r)
-mapRR f a@(Enter{}) = a
-mapRR f a@(Leave{}) = a
-mapRR f a@(Call{}) = a
-mapRR f a@(Callout{}) = a
-mapRR f a@(Ret{}) = a
-mapRR f a@(RetPop{}) = a
-mapRR f a@(ExitFail{}) = a
---mapRR f a@(Realign{}) = a
---mapRR f a@(Unrealign{}) = a
-mapRR f (Lea p m r) = Lea p (map_M f m) (f r)
-mapRR f (Push p irm) = Push p (map_IRM f irm)
-mapRR f (Pop p rm) = Pop p (map_RM f rm)
-mapRR f a@(Jmp{}) = a
-mapRR f a@(JCond{}) = a
-mapRR f (ALU_IRMtoR p op irm r) = ALU_IRMtoR p op (map_IRM f irm) (f r)
-mapRR f (ALU_IRtoM p op ir m) = ALU_IRtoM p op (map_IR f ir) (map_M f m)
-mapRR f (Cmp p ir rm) = Cmp p (map_IR f ir) (map_RM f rm)
-mapRR f (Test p ir rm) = Test p (map_IR f ir) (map_RM f rm)
-mapRR f (Inc p rm) = Inc p (map_RM f rm)
-mapRR f (Dec p rm) = Dec p (map_RM f rm)
-mapRR f (Neg p rm) = Neg p (map_RM f rm)
-mapRR f (IMulRAX p rm) = IMulRAX p (map_RM f rm)
-mapRR f (IMulRM p rm r) = IMulRM p (map_RM f rm) (f r)
-mapRR f (IMulImm p i rm r) = IMulImm p i (map_RM f rm) (f r)
-mapRR f (IDiv p rm) = IDiv p (map_RM f rm)
-mapRR f (Cqo p) = Cqo p
-mapRR f (Shl p i rm) = Shl p i (map_RM f rm)
-mapRR f (Shr p i rm) = Shr p i (map_RM f rm)
-mapRR f (Sar p i rm) = Sar p i (map_RM f rm)
-mapRR f (Nop p) = Nop p
-
--- | Gets the registers which are used and defined (also known as
--- "alive" and "dead", respectively, because of backwards liveness
--- analysis).
-getAliveDead :: forall e x. Asm e x -> AliveDead
-getAliveDead expr
-    = case expr of
-        Label{} -> emptyAD
-        Spill _ r d -> getRSrc r
-        Reload _ s r -> getRDst r
-        MovIRMtoR _ irm r -> getRSrc irm <+> getRDst r
-        MovIRtoM _ ir m -> getRSrc ir <+> getRDst m
-        Mov64toR _ i r -> getRDst r
-        CMovRMtoR _ _ rm r -> getRSrc rm <+> getRSrc r <+> getRDst r
-        Enter _ _ i _ -> ([], x) <+> ([], map MReg A.calleeSaved ++ [MReg RSP])
-                where x = map MReg (catMaybes $ take i argOrder)
-        Leave{} -> ([MReg RSP], [MReg RSP])
-        Call p nargs i -> (x, [MReg RAX]) <+> ([MReg RSP], map MReg A.callerSaved ++ [MReg RSP])
-                where x = map MReg (catMaybes $ take nargs argOrder)
-        Callout p nargs i -> (x ++ [MReg RAX], [MReg RAX]) <+> ([MReg RSP], map MReg A.callerSaved ++ [MReg RSP])
-                             -- :-O  should add Caller-saved registers
-                where x = map MReg (catMaybes $ take nargs argOrder)
-        Ret p rets -> (if rets then [MReg RAX] else [], []) <+> (map MReg A.calleeSaved ++ [MReg RSP], [])
-        RetPop p rets num -> (if rets then [MReg RAX] else [], []) <+> (map MReg A.calleeSaved ++ [MReg RSP], [])
-        ExitFail{} -> emptyAD
---        Realign{} -> ([MReg RSP], [MReg RSP])
---        Unrealign{} -> ([MReg RSP], [MReg RSP])
-        Lea p m r -> getRSrc m <+> getRDst r
-        Push p irm -> getRSrc irm <+> ([MReg RSP], [MReg RSP])
-        Pop p rm -> getRDst rm <+> ([MReg RSP], [MReg RSP])
-        Jmp{} -> emptyAD
-        JCond{} -> emptyAD
-        ALU_IRMtoR _ _ irm r -> getRSrc irm <+> getRSrc r <+> getRDst r
-        ALU_IRtoM _ _ ir m -> getRSrc ir <+> getRSrc m <+> getRDst m
-        Cmp _ ir rm -> getRSrc ir <+> getRSrc rm
-        Test _ ir rm -> getRSrc ir <+> getRSrc rm
-        Inc _ rm -> getRSrc rm <+> getRDst rm
-        Dec _ rm -> getRSrc rm <+> getRDst rm
-        Neg _ rm -> getRSrc rm <+> getRDst rm
-        IMulRAX _ rm -> getRSrc rm <+> ([MReg RAX], [MReg RAX, MReg RDX])
-        IMulRM _ rm r -> getRSrc rm <+> getRSrc r <+> getRDst r
-        IMulImm _ i rm r -> getRSrc rm <+> getRDst r
-        IDiv _ rm -> getRSrc rm <+> ([MReg RDX, MReg RAX], [MReg RAX, MReg RDX])
-        Cqo _ -> ([MReg RAX], [MReg RDX])
-        Shl _ _ rm -> getRSrc rm <+> getRDst rm
-        Shr _ _ rm -> getRSrc rm <+> getRDst rm
-        Sar _ _ rm -> getRSrc rm <+> getRDst rm
-        Nop _ -> emptyAD
 
 -- | Gets the registers which are "pinned" by the instruction.  That
 -- is, those registers which are both used and defined by the
