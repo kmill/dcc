@@ -67,9 +67,7 @@ instance Show OperRM where
     show (RM_R reg) = show reg
     show (RM_M mem) = show mem
 
-data SpillLoc = SpillName String
-              | SpillReg Reg
-              | SpillID Int
+data SpillLoc = SpillID Int
               | SpillArg Int
                 deriving (Eq, Ord, Show)
 
@@ -257,8 +255,8 @@ data Asm e x where
 
   -- Takes 1) the number of arguments and 2) the amount of stack
   -- space.  Not actually "enter" instruction!
-  Enter :: SourcePos -> Label -> Int -> Int -> Asm C O
-  Leave :: SourcePos -> Int -> Asm O O
+  Enter :: SourcePos -> Label -> Int -> Int32 -> Asm C O
+  Leave :: SourcePos -> Int32 -> Asm O O
 
   -- | Int is the number of arguments (to know which registers are
   -- used)
@@ -349,10 +347,16 @@ instance Show (Asm e x) where
   show (CMovRMtoR pos flag a b) = showBinOp opcode pos a b
             where opcode = "cmov" ++ show flag ++ "q"
 
-  show (Enter pos lbl nargs st) = printf "%s: subq $%d, %s  # %d args  %s"
-                                  (show lbl) st (show (MReg RSP)) nargs (showPos pos)
-  show (Leave pos st) = printf "addq $%d, %s  #  %s"
-                        st (show (MReg RSP)) (showPos pos)
+  show (Enter pos lbl nargs st) = printf "%s: %s  # %d args  %s"
+                                  (show lbl) adjSP nargs (showPos pos)
+      where adjSP = case st of
+                      0 -> ""
+                      _ -> printf "subq $%d, %s" st (show (MReg RSP))
+  show (Leave pos st) = printf "%s# leave  %s"
+                        adjSP (showPos pos)
+      where adjSP = case st of
+                      0 -> ""
+                      _ -> printf "addq $%d, %s  " st (show (MReg RSP))
 
   show (Call pos nargs func) = showUnOp "call" pos func
   show (Callout pos nargs func) = showUnOp "call" pos func
@@ -427,9 +431,9 @@ argOrder :: [Maybe X86Reg]
 argOrder = (map Just [RDI, RSI, RDX, RCX, R8, R9]) ++ nothings
     where nothings = Nothing:nothings
 
-argStoreLocations :: [Either MemAddr Reg]
-argStoreLocations = map (Right . MReg) [RDI, RSI, RDX, RCX, R8, R9]
-                    ++ map (Left . makeMem) [0, 0-8..]
+argStoreLocations :: Int32 -> [Either MemAddr Reg]
+argStoreLocations dsp = map (Right . MReg) [RDI, RSI, RDX, RCX, R8, R9]
+                        ++ map (Left . makeMem) [dsp, dsp-8..]
     where makeMem d = MemAddr (Just $ MReg RSP) (Imm32 d) Nothing SOne
 
 argStackDepth :: [Int]

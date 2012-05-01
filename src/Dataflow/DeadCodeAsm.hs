@@ -63,6 +63,8 @@ deadAsstElim = mkBRewrite d
     where 
       d :: forall e x . Asm e x -> Fact x Live -> m (Maybe (Graph Asm e x))
       d n@(Reload{}) live = handle n live
+      d n@(MovIRMtoR _ (IRM_R rs) rd) f
+          | rs == rd = return $ Just emptyGraph
       d n@(MovIRMtoR{}) live = handle n live
       d n@(Mov64toR{}) live = handle n live
       d n@(CMovRMtoR{}) live = handle n live

@@ -163,29 +163,34 @@ instToAsm (I.Fail pos)
                <*> mkLast (A.ExitFail pos)
 
 genSetArgs :: SourcePos -> [MidIRExpr] -> CGM (Graph A.Asm O O)
-genSetArgs pos args = do gs <- mapM genset $ reverse (zip args A.argStoreLocations)
+genSetArgs pos args = do gs <- mapM genset $ reverse (zip args locs)
                          return $ catGraphs gs
     where genset (arg, Left m) = do (gs, a) <- expToIR arg
                                     return $ gs <*> (mkMiddle $ A.MovIRtoM pos a m)
           genset (arg, Right r) = do (gs, a) <- expToIRM arg
                                      return $ gs <*> (mkMiddle $ A.MovIRMtoR pos a r)
+          locs = A.argStoreLocations $ toNearestSafeSP $ (length args) - 8*max 0 (length args - 6)
 
 genSetSP :: SourcePos -> [MidIRExpr] -> Graph A.Asm O O
-genSetSP pos args = if length args - 6 > 0
-                    then mkMiddle $
+genSetSP pos args = if sp == 0
+                    then emptyGraph
+                    else mkMiddle $
                          A.ALU_IRMtoR pos A.Sub
-                              (A.IRM_I $ A.Imm32 $
-                                fromIntegral $ 8 * (length args - 6))
+                              (A.IRM_I $ A.Imm32 sp)
                               (A.MReg A.RSP)
-                    else GNil
+    where sp = toNearestSafeSP $ length args
 genResetSP :: SourcePos -> [MidIRExpr] -> Graph A.Asm O O
-genResetSP pos args = if length args - 6 > 0
-                      then mkMiddle $
+genResetSP pos args = if sp == 0
+                      then emptyGraph
+                      else mkMiddle $
                            A.ALU_IRMtoR pos A.Add
-                                (A.IRM_I $ A.Imm32 $
-                                  fromIntegral $ 8 * (length args - 6))
+                                (A.IRM_I $ A.Imm32 sp)
                                 (A.MReg A.RSP)
-                      else GNil
+    where sp = toNearestSafeSP $ length args
+
+toNearestSafeSP :: Int -> Int32
+toNearestSafeSP nargs = fromIntegral $ i + (i `rem` (8*2))
+    where i = 8 * max 0 (nargs - 6)
 
 genLoadArgs :: SourcePos -> [VarName] -> Graph A.Asm O O
 genLoadArgs pos args = catGraphs $ map genload $ zip args A.argLocation
@@ -550,8 +555,10 @@ lowIRToAsm m opts
           , ".globl _main" 
           , "main:"
           , "_main:"
+          , "subq $8, %rsp"
           , "call method_main"
           , "movq $0, %rax"
+          , "addq $8, %rsp"
           , "ret" ]
       ++ ["# methods"]
       ++ (concatMap (showMethod (macMode opts) (lowIRGraph m)) (lowIRMethods m))
