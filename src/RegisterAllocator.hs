@@ -28,7 +28,7 @@ dotrace = False
 
 trace' a b = if dotrace then trace a b else b 
 
-
+-- | Main entry point to allocating registers for the IR
 regAlloc :: LowIRRepr -> I.GM LowIRRepr
 regAlloc lir
     = do graph'' <- evalStupidFuelMonad (collectSpill mlabels graph') 22222222
@@ -37,21 +37,8 @@ regAlloc lir
             GMany _ body _ = graph
             graph' = foldl (flip id) graph (map (doRegAlloc freeSpillLocs) mlabels)
             mlabels = map I.methodEntry meths
---            graph' = error $ I.graphToGraphViz show g'
---            graph' = foldl (|*><*|) emptyClosedGraph bodies
---             bodies = map f (mapElems body)
---             f :: Block Asm C C -> Graph Asm C C
---             f block = mkFirst e
---                       <*> catGraphs (map withSpills inner)
---                       <*> mkLast x
---                 where (me, inner, mx) = blockToNodeList block
---                       e :: Asm C O
---                       x :: Asm O C
---                       e = case me of
---                             JustC e' -> e'
---                       x = case mx of
---                             JustC x' -> x'
 
+-- | Collects and rewrites the spills in the graph to moves.
 collectSpill :: [Label] -> Graph A.Asm C C -> RM (Graph A.Asm C C)
 collectSpill mlabels graph
     = do (_, f, _) <- analyzeAndRewriteBwd
@@ -67,7 +54,8 @@ collectSpill mlabels graph
          return g
 
 
-
+-- | Gets the list of spills for each entry point. TODO: make it also
+-- find live ranges for spills so we can reuse stack space.
 collectSpillPass :: (CheckpointMonad m, FuelMonad m)
                     => BwdPass m A.Asm (S.Set SpillLoc)
 collectSpillPass = BwdPass
@@ -101,6 +89,7 @@ collectSpillPass = BwdPass
                          ((fromMaybe S.empty) . (flip lookupFact f))
                          (successors x)
 
+-- | Rewrites the spills to moves.
 rewriteSpillPass :: (CheckpointMonad m, FuelMonad m) =>
                     FactBase (S.Set SpillLoc) -> FwdPass m Asm (S.Set SpillLoc)
 rewriteSpillPass fb = FwdPass 
@@ -160,30 +149,6 @@ rewriteSpillPass fb = FwdPass
                 toNearestSafeSP :: Int32 -> Int32
                 toNearestSafeSP i = i + ((i+8) `rem` (8*2))
 
-freeRegs :: [Reg]
-freeRegs = map MReg [R10, R11, R12, R13, R14, R15] -- put this in optimal order!
-
-getSRegs :: [Reg] -> [String]
-getSRegs [] = []
-getSRegs ((SReg s):xs) = s:(getSRegs xs)
-getSRegs (_:xs) = getSRegs xs
-
--- withSpills :: Asm O O -> Graph Asm O O
--- withSpills expr = reloads <*> expr' <*> spills
---     where
---       (alive, dead) = getAliveDead expr
---       salive = getSRegs alive
---       sdead = getSRegs dead
---       sToRegs = zip (salive ++ sdead) freeRegs
---       f :: Reg -> Reg
---       f (SReg s) = getMReg s
---       f r = r
---       getMReg s = fromJust $ lookup s sToRegs
---       expr' = mkMiddle $ mapRR f expr
---       mkReload s = mkMiddle $ Reload noPosition s (getMReg s)
---       mkSpill s = mkMiddle $ Spill noPosition (getMReg s) s
---       reloads = catGraphs $ map mkReload salive
---       spills = catGraphs $ map mkSpill sdead
 
 ---
 --- Webs
@@ -216,17 +181,20 @@ data Web = Web { webReg :: Reg
 
 -- | Represents the reg to reg moves
 type RRFact = S.Set (NodePtr, Reg, Reg)
+type WebID = Int
 
 data InterfGraph = InterfGraph
-    { igIntToWeb :: M.Map Int Web
-    , igAdjLists :: M.Map Int (S.Set Int)
+    { igIDToWeb :: M.Map WebID Web
+    , igAdjLists :: M.Map WebID (S.Set WebID)
     , igRRMoves :: RRFact
+    , igFixedRegs :: M.Map Reg (S.Set Int)
     }
                    deriving Show
 
 type InterfGraphs = M.Map Label InterfGraph
 
-addInterfEdge :: Int -> Int -> InterfGraph -> InterfGraph
+-- | Adds an edge (commutitatively) to the interference graph.
+addInterfEdge :: WebID -> WebID -> InterfGraph -> InterfGraph
 addInterfEdge u v g = g { igAdjLists = add u v $ add v u $ igAdjLists g }
     where add a b adj = M.adjust (S.insert b) a adj
 
@@ -243,15 +211,16 @@ wInterf (Web r1 _ _ _ dus1 ds1 ex1 us1) (Web r2 _ _ _ dus2 ds2 ex2 us2)
 
 
 -- | Gets the degree of a web in the interference graph.
-webDegree :: Int -> InterfGraph -> Int
+webDegree :: WebID -> InterfGraph -> Int
 webDegree i g = S.size $ igAdjLists g M.! i
 
 -- | Gets the list of web ids from an interference graph.
-igWebIDs :: InterfGraph -> [Int]
-igWebIDs g = M.keys $ igIntToWeb g
+igWebIDs :: InterfGraph -> [WebID]
+igWebIDs g = M.keys $ igIDToWeb g
 
-igGetWeb :: Int -> InterfGraph -> Web
-igGetWeb i g = igIntToWeb g M.! i
+-- | Gets the web by id from the interference graph.
+igGetWeb :: WebID -> InterfGraph -> Web
+igGetWeb i g = igIDToWeb g M.! i
 
 -- | (dus, tomatch, extents)
 type DUBuildFact = (S.Set DU, S.Set (Reg, Bool, NodePtr), S.Set (Reg, NodePtr))
@@ -375,43 +344,46 @@ collectWebs dus = iteration' webs webs
                   Just webs' -> iteration' webs' webs'
 
 makeInterfGraph :: [Web] -> RRFact -> InterfGraph
-makeInterfGraph webs rrmoves = trace' ("mkAdjs " ++ show mkAdjs) $ InterfGraph intToWebMap augAdjs rrmoves
-    where intToWeb = zip [0..] webs
-          intToWebMap = M.fromList intToWeb
-          webToInt = zip webs [0..]
-          webToIntMap = M.fromList webToInt
+makeInterfGraph webs rrmoves = InterfGraph idToWebMap mkAdjs rrmoves fixedRegs
+    where idToWeb = zip [0..] webs
+          idToWebMap = M.fromList idToWeb
+--          webToInt = zip webs [0..]
+--          webToIntMap = M.fromList webToInt
           mkAdj i w = S.fromList $ do
-                        (j, w') <- intToWeb
+                        (j, w') <- idToWeb
                         guard $ i /= j
                         guard $ wInterf w w'
                         return j
           mkAdjs = M.fromList $ do
-                     (i, w) <- intToWeb
+                     (i, w) <- idToWeb
                      return (i, mkAdj i w)
-          -- | This is a map from the web number of fixed webs to a
-          -- list of all the web numbers webs with that same register
-          -- interfere with.  This helps make it appear like the webs
-          -- for a particular fixed register are all one big web.
-          fixedClasses :: M.Map Int [Int]
-          fixedClasses = M.fromList [(i, S.toList $ combinedFixed M.! (webReg w))
-                                    | (i, w) <- intToWeb, webFixed w]
-          -- | This is a map from fixed webs to their adjacency lists.
-          fixedWebAdjs :: M.Map Web (S.Set Int)
-          fixedWebAdjs = M.map (mkAdjs M.!) $ M.filterWithKey (\k v -> webFixed k) webToIntMap
-          -- | This is a mapping from fixed registers to the union
-          -- of all of the webs those registers interfere with.
-          combinedFixed :: M.Map Reg (S.Set Int)
-          combinedFixed = M.mapKeysWith S.union webReg fixedWebAdjs
+          fixedRegs = M.mapKeysWith S.union webReg $
+                      M.fromList $ do (i, w) <- idToWeb
+                                      return (w, S.singleton i)
+--           -- | This is a map from the web number of fixed webs to a
+--           -- list of all the web numbers webs with that same register
+--           -- interfere with.  This helps make it appear like the webs
+--           -- for a particular fixed register are all one big web.
+--           fixedClasses :: M.Map Int [Int]
+--           fixedClasses = M.fromList [(i, S.toList $ combinedFixed M.! (webReg w))
+--                                     | (i, w) <- intToWeb, webFixed w]
+--           -- | This is a map from fixed webs to their adjacency lists.
+--           fixedWebAdjs :: M.Map Web (S.Set Int)
+--           fixedWebAdjs = M.map (mkAdjs M.!) $ M.filterWithKey (\k v -> webFixed k) webToIntMap
+--           -- | This is a mapping from fixed registers to the union
+--           -- of all of the webs those registers interfere with.
+--           combinedFixed :: M.Map Reg (S.Set Int)
+--           combinedFixed = M.mapKeysWith S.union webReg fixedWebAdjs
           
-          augAdjs :: M.Map Int (S.Set Int)
-          augAdjs = M.mapWithKey f mkAdjs
-              where f k v
-                        | webFixed web = case M.lookup (webReg web) combinedFixed of
-                                           Just adjs -> v `S.union` adjs
-                                           Nothing -> v
-                        | otherwise = S.fromList $ do i <- S.toList v
-                                                      M.findWithDefault [i] i fixedClasses
-                        where web = intToWebMap M.! k
+--           augAdjs :: M.Map Int (S.Set Int)
+--           augAdjs = M.mapWithKey f mkAdjs
+--               where f k v
+--                         | webFixed web = case M.lookup (webReg web) combinedFixed of
+--                                            Just adjs -> v `S.union` adjs
+--                                            Nothing -> v
+--                         | otherwise = S.fromList $ do i <- S.toList v
+--                                                       M.findWithDefault [i] i fixedClasses
+--                         where web = intToWebMap M.! k
 
 getRegRegMoves :: [Label] -> Graph (PNode Asm) C C -> M.Map Label RRFact
 getRegRegMoves mlabels graph
@@ -449,31 +421,24 @@ getRegRegMoves mlabels graph
           facts :: FactBase RRFact
           facts = I.runGM $ evalStupidFuelMonad doRR 2222222
 
-makeInterfGraphs :: [Label] -> Graph (PNode Asm) C C -> InterfGraphs
-makeInterfGraphs mlabels pg = interfgraphs
-    where dus = collectDU mlabels pg
-          webs = M.map collectWebs dus
-          rrfacts = getRegRegMoves mlabels pg
-          interfgraphs = M.fromList $
-                         map (\l -> (l, makeInterfGraph (webs M.! l) (rrfacts M.! l))) mlabels
           
 data RWorklists = RWorklists
     { wInterfGraph :: InterfGraph
       
       -- Every web is in exactly one of the following:
-    , wSpillWorklist :: [Int] -- ^ high-degree webs
-    , wFreezeWorklist :: [Int] -- ^ low-degree move-related webs
-    , wSimplifyWorklist :: [Int] -- ^ list of low-degree non-move-related webs
-    , wSpilledWebs :: [Int] -- ^ webs marked for spilling
-    , wCoalescedWebs :: S.Set Int -- ^ webs that have been coalesced
-    , wColoredWebs :: M.Map Int X86Reg -- ^ webs successfully colored
-    , wSelectStack :: [Int] -- ^ stack containing temporaries removed from the graph
+    , wSpillWorklist :: [WebID] -- ^ high-degree webs
+    , wFreezeWorklist :: [WebID] -- ^ low-degree move-related webs
+    , wSimplifyWorklist :: [WebID] -- ^ list of low-degree non-move-related webs
+    , wSpilledWebs :: [WebID] -- ^ webs marked for spilling
+    , wCoalescedWebs :: S.Set WebID -- ^ webs that have been coalesced
+    , wColoredWebs :: M.Map WebID X86Reg -- ^ webs successfully colored
+    , wSelectStack :: [WebID] -- ^ stack containing temporaries removed from the graph
       
-    , wCoalescedAlias :: M.Map Int Int -- ^ when (u,v) coalesced and v
-                                       -- is in coalesced webs, then
-                                       -- wCoalescedAlias[v]==u
+    , wCoalescedAlias :: M.Map WebID WebID -- ^ when (u,v) coalesced and v
+                                           -- is in coalesced webs, then
+                                           -- wCoalescedAlias[v]==u
       
-    , wDegrees :: M.Map Int Int -- ^ web to degree mapping
+    , wDegrees :: M.Map WebID Int -- ^ web to degree mapping
       
       -- Every move is in exactly one of the following
     , wWorklistMoves :: S.Set NodePtr -- ^ moves enabled for possible coalescing
@@ -482,7 +447,7 @@ data RWorklists = RWorklists
     , wFrozenMoves :: [NodePtr] -- ^ moves that will no longer be considered for coalescing
     , wActiveMoves :: S.Set NodePtr -- ^ moves not yet ready for coalescing
       
-    , wMoves :: M.Map NodePtr [Int] -- ^ a map from nodes to web ids
+    , wMoves :: M.Map NodePtr [WebID] -- ^ a map from nodes to web ids
     }
                   deriving Show
 
@@ -508,17 +473,17 @@ initWorklists g wm moves deg = RWorklists
     }
 
 -- | Updates webMoveNodes to the given value for the web id
-updateWebMoves' :: S.Set NodePtr -> Int -> RWorklists -> RWorklists
+updateWebMoves' :: S.Set NodePtr -> WebID -> RWorklists -> RWorklists
 updateWebMoves' s i wl
-    = wl { wInterfGraph = g { igIntToWeb = M.insert i web' $ igIntToWeb g }}
+    = wl { wInterfGraph = g { igIDToWeb = M.insert i web' $ igIDToWeb g }}
     where g = wInterfGraph wl
-          web = igIntToWeb g M.! i
+          web = igIDToWeb g M.! i
           web' = web { webMoveNodes = s }
 
-getWebMoves' :: Int -> RWorklists -> S.Set NodePtr
-getWebMoves' i wl = webMoveNodes $ igIntToWeb (wInterfGraph wl) M.! i
+getWebMoves' :: WebID -> RWorklists -> S.Set NodePtr
+getWebMoves' i wl = webMoveNodes $ igIDToWeb (wInterfGraph wl) M.! i
 
-addToAdjList :: Int -> Int -> AM ()
+addToAdjList :: WebID -> WebID -> AM ()
 addToAdjList u v =
     do g <- wInterfGraph `fmap` get
        let adjs = igAdjLists g
@@ -572,7 +537,7 @@ makeWorklists g = iter (igWebIDs g) (initWorklists g initMoves moves makeDegrees
                   = iter is (wlists { wSimplifyWorklist = i:(wSimplifyWorklist wlists) })
           initMoves = S.map (\(l,_,_) -> l) $ igRRMoves g
           moves = M.fromList $ map (\(l,_,_) -> (l, websWithLabel l)) $ S.toList $ igRRMoves g
-          websWithLabel l = M.keys $ M.filter cond $ igIntToWeb g
+          websWithLabel l = M.keys $ M.filter cond $ igIDToWeb g
               where cond w = l `S.member` (webDefs w) || l `S.member` (webUses w)
           makeDegrees = M.fromList $ map (\i -> (i, webDegree i g)) (igWebIDs g)
 
@@ -654,8 +619,8 @@ insertSpills spillLocs pg wl = trace' ("insertSpills: " ++ show toSpill ++ show 
           spillLocs' = drop (length $ wSpilledWebs wl) spillLocs
           slmap = M.fromList $ zip (wSpilledWebs wl) spillLocs
           
-          intToWeb = M.toList $ igIntToWeb (wInterfGraph wl)
-          spilledWebs = do (i, w) <- intToWeb
+          idToWeb = M.toList $ igIDToWeb (wInterfGraph wl)
+          spilledWebs = do (i, w) <- idToWeb
                            let i' = getAlias' i wl
                            guard $ i' `elem` wSpilledWebs wl
                            return (w, slmap M.! i')
@@ -698,13 +663,13 @@ rewriteGraph pg wl = trace' ("rewriteGraph: " ++ show usesColorMap ++ show defsC
           fx :: PNode Asm O C -> Graph Asm O C
           fx (PNode l n) = mkLast n
           
-          intToWeb = M.toList $ igIntToWeb (wInterfGraph wl)
-          usesColorMap = M.fromList $ do (i, w) <- intToWeb
+          idToWeb = M.toList $ igIDToWeb (wInterfGraph wl)
+          usesColorMap = M.fromList $ do (i, w) <- idToWeb
                                          u <- S.toList $ webUses w
                                          case M.lookup i (wColoredWebs wl) of
                                            Just r -> return ((u, webReg w), MReg r)
                                            Nothing -> mzero
-          defsColorMap = M.fromList $ do (i, w) <- intToWeb
+          defsColorMap = M.fromList $ do (i, w) <- idToWeb
                                          d <- S.toList $ webDefs w
                                          case M.lookup i (wColoredWebs wl) of
                                            Just r -> return ((d, webReg w), MReg r)
@@ -761,13 +726,13 @@ coalesce :: AM ()
 coalesce = do m <- selectMove
               [x, y] <- (\wl -> wMoves wl M.! m) `fmap` get
               [x, y] <- mapM getAlias [x, y]
-              intToWeb <- (igIntToWeb . wInterfGraph) `fmap` get
-              let yFixed = webFixed $ intToWeb M.! y
+              idToWeb <- (igIDToWeb . wInterfGraph) `fmap` get
+              let yFixed = webFixed $ idToWeb M.! y
               let (u, v) = if yFixed then (y, x) else (x, y)
               -- Invariant: if either u,v is fixed, then u is fixed.
               wl <- get
-              let uweb = intToWeb M.! u
-                  vweb = intToWeb M.! v
+              let uweb = idToWeb M.! u
+                  vweb = idToWeb M.! v
                   adjuv = S.member v $ (igAdjLists $ wInterfGraph wl) M.! u
               adjacentu <- adjacentWebs u
               adjacentv <- adjacentWebs v
@@ -798,7 +763,7 @@ coalesce = do m <- selectMove
           
           ok t r = do wl <- get
                       let deg = wDegrees wl M.! t
-                          fixed = webFixed (igIntToWeb (wInterfGraph wl) M.! t)
+                          fixed = webFixed (igIDToWeb (wInterfGraph wl) M.! t)
                           adjtr = S.member r (igAdjLists (wInterfGraph wl) M.! t)
                       return $ deg < numUsableRegisters || fixed || adjtr
           conservative nodes = conservative' 0 (S.toList nodes)
@@ -813,7 +778,7 @@ coalesce = do m <- selectMove
           addWorklist :: Int -> AM ()
           addWorklist u =
               do wl <- get
-                 let uweb = igIntToWeb (wInterfGraph wl) M.! u
+                 let uweb = igIDToWeb (wInterfGraph wl) M.! u
                      deg = wDegrees wl M.! u
                      fixed = webFixed uweb
                  moverelated <- moveRelated u
@@ -968,7 +933,7 @@ outputWebGraph ig
                     wd = show $ webDefs web
                     we = show $ webExtent web
                     wu = show $ webUses web
-          webs = M.toList $ igIntToWeb ig
+          webs = M.toList $ igIDToWeb ig
           g = igAdjLists ig
 
 
