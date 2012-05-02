@@ -64,14 +64,14 @@ getAliveDead expr
         CMovRMtoR _ _ rm r -> getRSrc rm <+> getRSrc r <+> getRDst r
         Enter _ _ i _ -> ([], x) <+> ([], map MReg calleeSaved ++ [MReg RSP])
                 where x = map MReg (catMaybes $ take i argOrder)
-        Leave{} -> ([MReg RSP], [MReg RSP])
+        Leave{} -> (map MReg calleeSaved ++ [MReg RSP], [MReg RSP])
         Call p nargs i -> (x, [MReg RAX]) <+> ([MReg RSP], map MReg callerSaved ++ [MReg RSP])
                 where x = map MReg (catMaybes $ take nargs argOrder)
         Callout p nargs i -> (x ++ [MReg RAX], [MReg RAX]) <+> ([MReg RSP], map MReg callerSaved ++ [MReg RSP])
                              -- :-O  should add Caller-saved registers
                 where x = map MReg (catMaybes $ take nargs argOrder)
-        Ret p rets -> (if rets then [MReg RAX] else [], []) <+> (map MReg calleeSaved ++ [MReg RSP], [])
-        RetPop p rets num -> (if rets then [MReg RAX] else [], []) <+> (map MReg calleeSaved ++ [MReg RSP], [])
+        Ret p rets -> (if rets then [MReg RAX] else [], []) <+> ([MReg RSP], [])
+        RetPop p rets num -> (if rets then [MReg RAX] else [], []) <+> ([MReg RSP], [])
         ExitFail{} -> emptyAD
 --        Realign{} -> ([MReg RSP], [MReg RSP])
 --        Unrealign{} -> ([MReg RSP], [MReg RSP])

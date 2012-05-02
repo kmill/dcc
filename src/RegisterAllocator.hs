@@ -893,7 +893,7 @@ selectSpill = do m <- chooseSpill
                           size = S.size (webExtent web) --sum (map len dus)
 --                          score = (deg * size) `div` (uses)
                           score = 10 * deg * size `div` (1 + S.size (webDefs web) + S.size (webUses web))
-                      in score
+                      in if webSpilled web then -22 else score
 
 -- | "AssignColors"
 assignColors :: AM ()
@@ -910,7 +910,11 @@ assignColors = do emptyStack
                      n <- popSelect
                      web <- gets $ igGetWeb n . wInterfGraph
                      wl <- get
-                     okColors <- if webFixed web then return [x86reg $ webReg web] else determineColors n
+                     okColors' <- determineColors n 
+                     let rspmod = if webReg web == MReg RSP then [RSP] else []
+                     let okColors = if webFixed web
+                                    then [x86reg $ webReg web] `intersect` (okColors' ++ rspmod)
+                                    else okColors'
                      case trace' (show n ++ " " ++ show (webReg web) ++ " okColors: " ++ show okColors ++ " " ++ show (igAdjLists (wInterfGraph wl) M.! n) ++ " " ++ show (wColoredWebs wl)) okColors of
                        [] -> modify $ \wl -> wl { wSpilledWebs = n:(wSpilledWebs wl) }
                        (c:_) -> modify $ \wl ->
@@ -1021,7 +1025,7 @@ getFixed expr
         CMovRMtoR _ _ rm r -> noFixed
         Enter _ _ i _ -> ([], x ++ map MReg A.calleeSaved ++ [MReg RSP]) 
             where x = map MReg (catMaybes $ take i argOrder)
-        Leave{} -> ([MReg RSP], [MReg RSP])
+        Leave{} -> ([MReg RSP] ++ map MReg A.calleeSaved, [MReg RSP])
         Call p nargs i -> (x, [MReg RAX]) <+> ([MReg RSP], map MReg A.callerSaved ++ [MReg RSP])
             where x = map MReg (catMaybes $ take nargs argOrder)
         Callout p nargs i -> (x ++ [MReg RAX], [MReg RAX])
