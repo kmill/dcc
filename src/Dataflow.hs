@@ -15,6 +15,7 @@ import Dataflow.OptSupport
 import Control.Monad
 import Control.Monad.Trans
 
+import Data.Int
 import qualified Data.Set as S
 import qualified Data.Map as Map
 import Data.Maybe
@@ -176,7 +177,25 @@ testDominatorPass midir
 
 data Loop = Loop { loop_header :: Label 
                  , loop_body :: S.Set Label
-                 , loop_variable :: VarName }
+                 , loop_variable :: Maybe (VarName, Label, Int64, Int64, Int64) }
+            deriving (Eq, Ord, Show)
+
+type BackEdge = (Label, Label)
+
+findLoops :: FactBase DominFact -> Graph MidIRInst C C -> S.Set Loop 
+findLoops dominators graph = S.fromList loops
+    where GMany _ body _ = graph
+          backEdges = findBackEdges (mapElems body)
+          loops = map backEdgeToLoop backEdges
+          findBackEdges :: [Block MidIRInst C C] -> [BackEdge]
+          findBackEdges [] = [] 
+          findBackEdges (x:xs) = case mapLookup (entryLabel x ) dominators of 
+                                   Just (PElem domin) -> (maybeBackEdges domin) ++ (findBackEdges xs)
+                                   _ -> findBackEdges xs
+              where maybeBackEdges domin = [ (entryLabel x, y) | y <- successors x, S.member y domin]
+
+backEdgeToLoop :: BackEdge -> Loop 
+backEdgeToLoop (loopBack, loopHeader) = error "Not implemented yet :-{"
 
 analyzeParallelizationPass :: MidIRRepr -> S.Set Loop 
 analyzeParallelizationPass = error "Not yet implemented :-{"
