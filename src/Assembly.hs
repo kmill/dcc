@@ -442,7 +442,7 @@ argStackDepth = [no, no, no, no, no, no] ++ [16, 16+8..]
 
 argLocation :: [Either SpillLoc Reg]
 argLocation = map (Right . MReg) [RDI, RSI, RDX, RCX, R8, R9]
-              ++ map (Left . SpillArg) [0,8..]
+              ++ map (Left . SpillArg) [0,1..]
 
 ---- | Gives a midir expression for getting any particular argument.
 --argExprs :: SourcePos -> [Expr VarName]
@@ -451,7 +451,7 @@ argLocation = map (Right . MReg) [RDI, RSI, RDX, RCX, R8, R9]
 --                   [16, 16+8..])
 
 callerSaved :: [X86Reg]
-callerSaved = [R10, R11]
+callerSaved = [R10, R11] ++ [RDI, RSI, RDX, RCX, R8, R9]
 
 calleeSaved :: [X86Reg]
 calleeSaved = [RBX, R12, R13, R14, R15, RBP]
