@@ -506,7 +506,7 @@ labelToAsmOut macmode graph (lbl, mnlabel)
         show' x = if macmode
                   then case x of
                          A.Callout pos args (A.Imm32Label s 0)
-                             -> show $ A.Callout pos args (A.Imm32Label ("_" ++ s) 0)
+                             -> ind $ show $ A.Callout pos args (A.Imm32Label ("_" ++ s) 0)
 --                          A.Realign pos nstackargs
 --                              -> let code=[ A.mov pos (A.MReg A.RSP) (A.MReg A.R12)
 --                                          , A.ALU_IRMtoR pos A.Sub 

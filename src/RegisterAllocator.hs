@@ -201,11 +201,11 @@ addInterfEdge u v g = g { igAdjLists = add u v $ add v u $ igAdjLists g }
 -- | Checks whether two webs interfere
 wInterf :: Web -> Web -> Bool
 wInterf (Web r1 _ _ _ dus1 ds1 ex1 us1) (Web r2 _ _ _ dus2 ds2 ex2 us2)
-    = if notUsable r1 || notUsable r2
+    = if notUsable r1 || notUsable r2 -- basically, we don't want RSP to interfere
       then False
       else (S.union ds1 ex1 `ints` S.union ds2 ex2)
                || (S.union ex1 us1 `ints` S.union ex2 us2)
-      where ints s1 s2 = not $ S.null $ s1 `S.intersection` s2
+      where ints s1 s2 = not $ S.null $ S.intersection s1 s2
             notUsable (MReg r) = r `notElem` usableRegisters
             notUsable (SReg _) = False
 
@@ -245,6 +245,7 @@ duTransfer = mkBTransfer3 fe fm fx
     where fe :: (PNode Asm) C O -> DUBuildFact -> DUBuildFact
           fe (PNode l n) f
               = handle l False S.empty (getAliveDead n) (getPinned n) (getFixed n) f
+                
           fm :: (PNode Asm) O O -> DUBuildFact -> DUBuildFact
           fm (PNode l n@(Spill{})) f
               = handle l True S.empty (getAliveDead n) (getPinned n) (getFixed n) f
@@ -254,12 +255,19 @@ duTransfer = mkBTransfer3 fe fm fx
               = handle l False (S.singleton l) (getAliveDead n) (getPinned n) (getFixed n) f
           fm (PNode l n) f
               = handle l False S.empty (getAliveDead n) (getPinned n) (getFixed n) f
+                
           fx :: (PNode Asm) O C -> FactBase DUBuildFact -> DUBuildFact
           fx (PNode l n) fb
               = handle l False S.empty (getAliveDead n) (getPinned n) (getFixed n)
                 (joinOutFacts duLattice n fb)
           
-          handle :: NodePtr -> Bool -> S.Set NodePtr -> AliveDead -> [Reg] -> ([Reg], [Reg]) -> DUBuildFact 
+          handle :: NodePtr
+                 -> Bool -- ^ whether it's "spill-related"
+                 -> S.Set NodePtr -- ^ the set of associated moves
+                 -> AliveDead -- ^ the alive/dead (i.e., uses/defs) for the node
+                 -> [Reg] -- ^ the pinned registers for the node
+                 -> ([Reg], [Reg]) -- ^ the fixed uses/defs for the node
+                 -> DUBuildFact
                  -> DUBuildFact
           handle l sr mr (uses, defs) pinned (fixedUses, fixedDefs) (dus, tomatch, extents)
               = let withdef d = S.map makeDU rps
@@ -289,8 +297,8 @@ duTransfer = mkBTransfer3 fe fm fx
                     dextents = S.map (\(reg, fixed, ptr) -> (reg, l)) tomatch'
                                `S.union` (S.fromList $ map (\reg -> (reg, l)) pinned)
                 in ( S.unions [dus, ddu, dduPinned, ddvirtused]
-                   , tomatch' `S.union` dtomatch
-                   , extents' `S.union` dextents )
+                   , S.unions [tomatch', dtomatch]
+                   , S.unions [extents', dextents] )
 
 duPass :: Monad m => BwdPass m (PNode Asm) DUBuildFact
 duPass = BwdPass
@@ -315,14 +323,25 @@ collectDU mlabels graph
 collectWebs :: S.Set DU -> [Web]
 collectWebs dus = iteration' webs webs
     where webs = map duToWeb (S.toList dus)
+          
+          duToWeb :: DU -> Web
           duToWeb du@(DU r sr mr fixed d ex u)
               = Web r sr mr fixed (S.singleton du) (S.singleton d) ex (S.singleton u)
           duToWeb du@(DUv r sr fixed d)
               = Web r sr S.empty fixed (S.singleton du) (S.singleton d) S.empty S.empty
-          wToCoalesce (Web r1 sr1 mr1 fixed1 dus1 ds1 ex1 us1) (Web r2 sr2 mr2 fixed2 dus2 ds2 ex2 us2)
+          
+          -- | Checks whether two webs should be coalesced because
+          -- they have the same register and because they either share
+          -- a definition or use.
+          wToCoalesce :: Web -> Web -> Bool
+          wToCoalesce (Web r1 sr1 mr1 fixed1 dus1 ds1 ex1 us1)
+                      (Web r2 sr2 mr2 fixed2 dus2 ds2 ex2 us2)
               = r1 == r2 && (not (S.null $ ds1 `S.intersection` ds2)
                              || not (S.null $ us1 `S.intersection` us2))
-          wUnion (Web r1 sr1 mr1 fixed1 dus1 ds1 ex1 us1) (Web r2 sr2 mr2 fixed2 dus2 ds2 ex2 us2)
+          
+          wUnion :: Web -> Web -> Web
+          wUnion (Web r1 sr1 mr1 fixed1 dus1 ds1 ex1 us1)
+                 (Web r2 sr2 mr2 fixed2 dus2 ds2 ex2 us2)
               = Web 
                 { webReg = r1 
                 , webSpilled = sr1 || sr2
@@ -332,23 +351,29 @@ collectWebs dus = iteration' webs webs
                 , webDefs = ds1 `S.union` ds2 
                 , webExtent = ex1 `S.union` ex2 
                 , webUses = us1 `S.union` us2 }
+          
+          iteration'' :: Web -> [Web] -> Maybe [Web]
           iteration'' w webs
               = let (int, nint) = partition (wToCoalesce w) webs
                 in case length int of
                      1 -> Nothing
                      _ -> Just $ (foldl1 wUnion int):nint
+          
+          -- | Not really efficient... Iteratively coalesces webs
+          -- which should be coalesced by wToCoalesce.
+          iteration' :: [Web] -> [Web] -> [Web]
           iteration' [] webs = webs
           iteration' (w:tocheck) webs
               = case iteration'' w webs of
                   Nothing -> iteration' tocheck webs
                   Just webs' -> iteration' webs' webs'
 
+-- | Builds the interference graph for all the webs by running wInterf
+-- on all pairs of webs.
 makeInterfGraph :: [Web] -> RRFact -> InterfGraph
 makeInterfGraph webs rrmoves = InterfGraph idToWebMap mkAdjs rrmoves fixedRegs
     where idToWeb = zip [0..] webs
           idToWebMap = M.fromList idToWeb
---          webToInt = zip webs [0..]
---          webToIntMap = M.fromList webToInt
           mkAdj i w = S.fromList $ do
                         (j, w') <- idToWeb
                         guard $ i /= j
@@ -360,6 +385,9 @@ makeInterfGraph webs rrmoves = InterfGraph idToWebMap mkAdjs rrmoves fixedRegs
           fixedRegs = M.mapKeysWith S.union webReg $
                       M.fromList $ do (i, w) <- idToWeb
                                       return (w, S.singleton i)
+                                      
+--          webToInt = zip webs [0..]
+--          webToIntMap = M.fromList webToInt
 --           -- | This is a map from the web number of fixed webs to a
 --           -- list of all the web numbers webs with that same register
 --           -- interfere with.  This helps make it appear like the webs
@@ -385,6 +413,7 @@ makeInterfGraph webs rrmoves = InterfGraph idToWebMap mkAdjs rrmoves fixedRegs
 --                                                       M.findWithDefault [i] i fixedClasses
 --                         where web = intToWebMap M.! k
 
+-- | Finds all register-to-register moves in the graph.
 getRegRegMoves :: [Label] -> Graph (PNode Asm) C C -> M.Map Label RRFact
 getRegRegMoves mlabels graph
     = M.fromList $ map (\l -> (l, fromJust $ lookupFact l facts)) mlabels
@@ -893,7 +922,7 @@ selectSpill = do m <- chooseSpill
                           size = S.size (webExtent web) --sum (map len dus)
 --                          score = (deg * size) `div` (uses)
                           score = 10 * deg * size `div` (1 + S.size (webDefs web) + S.size (webUses web))
-                      in if webSpilled web then -22 else score
+                      in if webSpilled web then score `div` 2 else score
 
 -- | "AssignColors"
 assignColors :: AM ()
@@ -979,7 +1008,7 @@ getPinned expr
         MovIRtoM _ ir m -> []
         Mov64toR _ i r -> []
         CMovRMtoR _ _ rm r -> [r]
-        Enter _ _ _ _ -> []
+        Enter _ _ i _ -> []
         Leave{} -> [MReg RSP]
         Call p nargs i -> []
         Callout p nargs i -> []
@@ -1026,9 +1055,10 @@ getFixed expr
         Enter _ _ i _ -> ([], x ++ map MReg A.calleeSaved ++ [MReg RSP]) 
             where x = map MReg (catMaybes $ take i argOrder)
         Leave{} -> ([MReg RSP] ++ map MReg A.calleeSaved, [MReg RSP])
-        Call p nargs i -> (x, [MReg RAX]) <+> ([MReg RSP], map MReg A.callerSaved ++ [MReg RSP])
+        Call p nargs i -> (x, x ++ [MReg RAX])
+                          <+> ([MReg RSP], map MReg A.callerSaved ++ [MReg RSP])
             where x = map MReg (catMaybes $ take nargs argOrder)
-        Callout p nargs i -> (x ++ [MReg RAX], [MReg RAX])
+        Callout p nargs i -> (x ++ [MReg RAX], x ++ [MReg RAX])
                              <+> ([MReg RSP], map MReg A.callerSaved ++ [MReg RSP])
             where x = map MReg (catMaybes $ take nargs argOrder)
         Ret p rets -> (if rets then [MReg RAX] else [], []) <+> (map MReg A.calleeSaved ++ [MReg RSP], [])
@@ -1037,7 +1067,7 @@ getFixed expr
 --        Realign{} -> []
 --        Unrealign{} -> []
         Lea p m r -> noFixed
-        Push p irm -> noFixed
+        Push p irm -> ([MReg RSP], [MReg RSP])
         Pop p rm -> ([MReg RSP], [MReg RSP])
         Jmp{} -> noFixed
         JCond{} -> noFixed
