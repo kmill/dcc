@@ -477,14 +477,18 @@ checkLocation (ArrayLocation pos tok expr) -- tok[expr]
          t <==> tArray pos Nothing (Var v)
          return $ Var v
 
+liftReturn :: DUTerm -> DUTerm
+liftReturn (Term (DUFunc _) (ret:args)) = ret
+liftReturn x = x
+
 checkMethodCall :: MethodCall -> SemChecker DUTerm
 checkMethodCall (NormalMethod pos tok args)
     = do env <- ask
          v <- fromJust <$> (liftS genVar)
          targs' <- targs
          case envLookup name env of
-           Just t -> do t <==> tFunc pos (Var v) targs'
-                        return $ Var v
+           Just t  -> do t <==> tFunc pos (Var v) targs'
+                         return $ (liftReturn t)
            Nothing -> local envRoot $
                       do ft <- lookupOrAdd pos name
                          ft <==> tFunc pos (Var v) targs'
