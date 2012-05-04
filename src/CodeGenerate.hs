@@ -349,11 +349,11 @@ expToR e = mcut $ msum rules
                                           , A.Shl pos (A.Imm8 $ fromIntegral logb') (A.RM_R dr) ]
                           , dr )
               , do I.BinOp pos I.OpMul expa expb <- withNode e
-                   b <- expToI expb
-                   (ga, a) <- expToRM expa
+                   a <- expToI expa
+                   (gb, b) <- expToRM expb
                    dr <- genTmpReg
-                   return ( ga
-                            <*> mkMiddle (A.IMulImm pos b a dr)
+                   return ( gb
+                            <*> mkMiddle (A.IMulImm pos a b dr)
                           , dr )
               , do I.BinOp pos I.OpMul expa expb <- withNode e
                    (ga, a) <- expToIRM expa

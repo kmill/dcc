@@ -24,7 +24,7 @@ import Data.Function
 import Util.NodeLocate
 
 
-dotrace = False
+dotrace = True
 
 trace' a b = if dotrace then trace a b else b 
 
@@ -178,6 +178,10 @@ data Web = Web { webReg :: Reg
                , webExtent :: S.Set NodePtr
                , webUses :: S.Set NodePtr }
          deriving (Show, Eq, Ord)
+
+-- | A short web is one which shouldn't be spilled because it's just so short.
+isShortWeb :: Web -> Bool
+isShortWeb w = S.null $ webExtent w
 
 -- | Represents the reg to reg moves
 type RRFact = S.Set (NodePtr, Reg, Reg)
@@ -461,7 +465,8 @@ data RWorklists = RWorklists
     , wSpilledWebs :: [WebID] -- ^ webs marked for spilling
     , wCoalescedWebs :: S.Set WebID -- ^ webs that have been coalesced
     , wColoredWebs :: M.Map WebID X86Reg -- ^ webs successfully colored
-    , wSelectStack :: [WebID] -- ^ stack containing temporaries removed from the graph
+    , wSelectStack :: [WebID] -- ^ stack containing temporaries
+                              -- removed from the graph and fixed webs
       
     , wCoalescedAlias :: M.Map WebID WebID -- ^ when (u,v) coalesced and v
                                            -- is in coalesced webs, then
@@ -469,6 +474,7 @@ data RWorklists = RWorklists
     , wFixedWebs :: S.Set WebID -- ^ webs that are fixed
     , wHaveSpilled :: Bool -- ^ whether a spill has been selected yet
     , wPreSpillCoalesced :: S.Set WebID -- ^ webs that have been coalesced before the first spill
+    , wPreSpillAlias :: M.Map WebID WebID
       
     , wDegrees :: M.Map WebID Int -- ^ web to degree mapping
       
@@ -483,30 +489,6 @@ data RWorklists = RWorklists
     }
                   deriving Show
 
-initWorklists :: InterfGraph -> S.Set NodePtr -> M.Map NodePtr [WebID] -> S.Set WebID
-              -> RWorklists
-initWorklists g wm moves fixed = RWorklists
-    { wInterfGraph = g
-    , wSpillWorklist = []
-    , wFreezeWorklist = []
-    , wSimplifyWorklist = []
-    , wSpilledWebs = []
-    , wCoalescedWebs = S.empty
-    , wColoredWebs = M.empty
-    , wSelectStack = []
-    , wCoalescedAlias = M.empty
-    , wFixedWebs = fixed
-    , wHaveSpilled = False
-    , wPreSpillCoalesced = S.empty
-    , wDegrees = M.fromList $ map (\i -> (i, webDegree i g)) (igWebIDs g)
-    , wWorklistMoves = wm
-    , wCoalescedMoves = []
-    , wConstrainedMoves = []
-    , wFrozenMoves = []
-    , wActiveMoves = S.empty
-    , wMoves = moves
-    }
-
 -- | Updates webMoveNodes to the given value for the web id
 updateWebMoves' :: S.Set NodePtr -> WebID -> RWorklists -> RWorklists
 updateWebMoves' s i wl
@@ -515,15 +497,18 @@ updateWebMoves' s i wl
           web = igIDToWeb g M.! i
           web' = web { webMoveNodes = s }
 
+wGetWeb :: WebID -> RWorklists -> Web
+wGetWeb i wl = igGetWeb i (wInterfGraph wl)
+
 getWebMoves' :: WebID -> RWorklists -> S.Set NodePtr
-getWebMoves' i wl = webMoveNodes $ igIDToWeb (wInterfGraph wl) M.! i
+getWebMoves' i wl = webMoveNodes $ wGetWeb i wl
 
 addToAdjList :: WebID -> WebID -> AM ()
 addToAdjList u v =
-    do g <- wInterfGraph `fmap` get
+    do g <- gets wInterfGraph
        let adjs = igAdjLists g
        when (u /= v && not (v `S.member` (adjs M.! u))) $ do
-         degrees <- wDegrees `fmap` get
+         degrees <- gets wDegrees
          modify $ \wl -> wl { wInterfGraph = addInterfEdge u v g
                             , wDegrees = inc u $ inc v $ degrees }
     where inc i m = M.adjust (+1) i m
@@ -565,12 +550,18 @@ makeWorklists :: InterfGraph -> RWorklists
 makeWorklists g = iter (igWebIDs g) (initWorklists g initMoves moves fixed) 
     where iter [] wlists = wlists
           iter (i:is) wlists
-              | webDegree i g >= numUsableRegisters -- || webFixed (igGetWeb i g)
+              | webFixed web && isShortWeb web
+                  = iter is (wlists
+                             { wColoredWebs = M.insert i (x86reg $ webReg web)
+                                              (wColoredWebs wlists)
+                             , wDegrees = M.insert i maxBound (wDegrees wlists) })
+              | webDegree i g >= numUsableRegisters
                   = iter is (wlists { wSpillWorklist = i:(wSpillWorklist wlists) })
               | evalState (moveRelated i) wlists
                   = iter is (wlists { wFreezeWorklist = i:(wFreezeWorklist wlists) })
               | otherwise
                   = iter is (wlists { wSimplifyWorklist = i:(wSimplifyWorklist wlists) })
+              where web = igGetWeb i g
           initMoves = S.map (\(l,_,_) -> l) $ igRRMoves g
           moves = M.fromList $ map (\(l,_,_) -> (l, websWithLabel l)) $ S.toList $ igRRMoves g
           websWithLabel l = M.keys $ M.filter cond $ igIDToWeb g
@@ -578,6 +569,36 @@ makeWorklists g = iter (igWebIDs g) (initWorklists g initMoves moves fixed)
           fixed = S.fromList $ do (i, w) <- M.toList $ igIDToWeb g
                                   guard $ webFixed w
                                   return i
+
+          x86reg (MReg r) = r
+          x86reg r = error $ show r ++ " is not a machine register but is associated with a fixed web."
+          
+          -- | Sets up everything but the web worklists.
+          initWorklists :: InterfGraph -> S.Set NodePtr -> M.Map NodePtr [WebID] -> S.Set WebID
+              -> RWorklists
+          initWorklists g wm moves fixed
+              = RWorklists
+                { wInterfGraph = g
+                , wSpillWorklist = []
+                , wFreezeWorklist = []
+                , wSimplifyWorklist = []
+                , wSpilledWebs = []
+                , wCoalescedWebs = S.empty
+                , wColoredWebs = M.empty
+                , wSelectStack = []
+                , wCoalescedAlias = M.empty
+                , wFixedWebs = fixed
+                , wHaveSpilled = False
+                , wPreSpillCoalesced = S.empty
+                , wPreSpillAlias = M.empty
+                , wDegrees = M.fromList $ map (\i -> (i, webDegree i g)) (igWebIDs g)
+                , wWorklistMoves = wm
+                , wCoalescedMoves = []
+                , wConstrainedMoves = []
+                , wFrozenMoves = []
+                , wActiveMoves = S.empty
+                , wMoves = moves
+                }
 
 -- | "main"
 doRegAlloc :: SpillLocSupply -> Label -> Graph Asm C C -> Graph Asm C C
@@ -606,7 +627,7 @@ doRegAlloc spillLocs mlabel graph
                           Just action -> do action
                                             mainLoop
                           Nothing -> return ()
-          main = do trace' ("interfgraph\n" ++ outputWebGraph interfgraph ++ "\nmainLoop") mainLoop
+          main = do trace' ("asm:\n" ++ I.graphToGraphViz show graph ++ "\ninterfgraph\n" ++ outputWebGraph interfgraph ++ "\nmainLoop") mainLoop
                     trace' "assignColors" assignColors
                     spilledWebs <- wSpilledWebs `fmap` get
                     wl <- get
@@ -635,34 +656,61 @@ insertSpills spillLocs pg wl = trace' ("insertSpills: " ++ show toSpill ++ show 
                           JustC x' -> x'
           
           fe :: PNode Asm C O -> Graph Asm C O
-          fe (PNode l n) = mkFirst n <*> mkMiddles (map genSpill defined')
-              where (used, defined) = getAliveDead n
+          fe (PNode l n) = mkFirst n' <*> mkMiddles (map genSpill defined')
+              where n' = rewriteCoal l n
+                    (used, defined) = getAliveDead n'
                     defined' = filter (\d -> (l, d) `M.member` toSpill) defined
                     genSpill reg = Spill noPosition reg (toSpill M.! (l, reg))
           
           fm :: PNode Asm O O -> Graph Asm O O
-          fm (PNode l n) = mkMiddles $ map genReload used' ++ [n] ++ map genSpill defined'
-              where (used, defined) = getAliveDead n
+          fm (PNode l n) = mkMiddles $ map genReload used' ++ [n'] ++ map genSpill defined'
+              where n' = rewriteCoal l n
+                    (used, defined) = getAliveDead n'
                     used' = filter (\u -> (l, u) `M.member` toReload) used
                     defined' = filter (\d -> (l, d) `M.member` toSpill) defined
                     genReload reg = Reload noPosition (toReload M.! (l, reg)) reg
                     genSpill reg = Spill noPosition reg (toSpill M.! (l, reg))
-          
+                    
           fx :: PNode Asm O C -> Graph Asm O C
-          fx (PNode l n) = mkMiddles (map genReload used') <*> mkLast n
-              where (used, defined) = getAliveDead n
+          fx (PNode l n) = mkMiddles (map genReload used') <*> mkLast n'
+              where n' = rewriteCoal l n
+                    (used, defined) = getAliveDead n'
                     used' = filter (\u -> (l, u) `M.member` toReload) used
                     genReload reg = Reload noPosition (toReload M.! (l, reg)) reg
-          
-          spillLocs' = drop (length $ wSpilledWebs wl) spillLocs
-          slmap = M.fromList $ zip (wSpilledWebs wl) spillLocs
+                    
+          rewriteCoal l n = mapAsm (ms l) (md l) n
+          ms l r = fromMaybe r $ M.lookup (l, r) usesMap
+          md l r = fromMaybe r $ M.lookup (l, r) defsMap
           
           idToWeb = M.toList $ igIDToWeb (wInterfGraph wl)
+          
+          usesMap, defsMap :: M.Map (NodePtr, Reg) Reg
+          usesMap = M.fromList $ do (i, w) <- idToWeb
+                                    let i' = getPreAlias' i wl
+                                        r' = webReg $ (igIDToWeb (wInterfGraph wl)) M.! i'
+                                    u <- S.toList $ webUses w
+                                    return ((u, webReg w), r')
+          defsMap = M.fromList $ do (i, w) <- idToWeb
+                                    let i' = getPreAlias' i wl
+                                        r' = webReg $ (igIDToWeb (wInterfGraph wl)) M.! i'
+                                    u <- S.toList $ webDefs w
+                                    return ((u, webReg w), r')
+          
+          spillLocs' = drop (length $ spilled') spillLocs
+          
+          slmap :: M.Map WebID SpillLoc
+          slmap = M.fromList $ zip spilled' spillLocs
+          
+          spilled' :: [WebID]
+          spilled' = map (\i -> getPreAlias' i wl) (wSpilledWebs wl)
+          
+          spilledWebs :: [(Web, SpillLoc)]
           spilledWebs = do (i, w) <- idToWeb
-                           let i' = i --getAlias' i wl
-                           guard $ i' `elem` wSpilledWebs wl
+                           let i' = getPreAlias' i wl
+                           guard $ i' `elem` spilled'
                            return (w, slmap M.! i')
           
+          toReload, toSpill :: M.Map (NodePtr, Reg) SpillLoc
           toReload = M.fromList $ do (w, sl) <- spilledWebs
                                      u <- S.toList $ webUses w
                                      return $ ((u, webReg w), sl)
@@ -718,25 +766,32 @@ rewriteGraph pg wl = trace' ("rewriteGraph: " ++ show usesColorMap ++ show defsC
 simplify :: AM ()
 simplify = do u <- selectSimplify
               modify $ \wl -> wl { wSimplifyWorklist = delete u $ wSimplifyWorklist wl }
-              intg <- wInterfGraph `fmap` get
-              let web = igGetWeb u intg
+              web <- gets $ wGetWeb u
               trace' ("pushSelect " ++ show u ++ " = " ++ show (webReg web)) $ pushSelect u
               when (not (webFixed web)) $ do
-                adjs <- adjacentWebs u
-                mapM_ decrementDegree (S.toList adjs)
+                (S.toList `fmap` adjacentWebs u) >>= mapM_ decrementDegree
 
 -- | Chooses the web to simplify
-selectSimplify :: AM Int
+selectSimplify :: AM WebID
 selectSimplify =
   do wl@(RWorklists { wSimplifyWorklist = choices }) <- get
      x <- choose choices
      return x
-    where choose (x:xs) =
-              do return x
+    where
+      -- | We choose non-fixed webs first so they can be colored after
+      -- their fixed friends.  Furthermore, we choose not-short webs
+      -- before short webs in each class so that we make sure the
+      -- short webs actually are given a register.
+      choose xs = do wl <- get
+                     let isfixed i = webFixed $ wGetWeb i wl
+                         isshort i = isShortWeb $ wGetWeb i wl
+                         (short, notshort) = partition isshort xs
+                         (fixed, notfixed) = partition isfixed (notshort ++ short)
+                     return $ head (notfixed ++ fixed)
 
  -- | Decrements the degree of the web in the
  -- worklist. "DecrementDegree"
-decrementDegree :: Int -> AM ()
+decrementDegree :: WebID -> AM ()
 decrementDegree i =
     do wl <- get
        let d = wDegrees wl M.! i
@@ -752,10 +807,10 @@ decrementDegree i =
                          else wl { wSimplifyWorklist = i:(wSimplifyWorklist wl) }
 
 -- | "EnableMoves"
-enableMoves :: Int -> AM ()
+enableMoves :: WebID -> AM ()
 enableMoves i = do moves <- S.toList `fmap` webMoves i
                    forM_ moves $ \m -> do
-                     activeMoves <- wActiveMoves `fmap` get
+                     activeMoves <- gets wActiveMoves
                      when (m `S.member` activeMoves) $
                           do modify $ \wl -> wl { wActiveMoves = S.delete m activeMoves
                                                 , wWorklistMoves = S.insert m (wWorklistMoves wl) }
@@ -848,6 +903,9 @@ combine u v =
                           , wPreSpillCoalesced = (if wHaveSpilled wl
                                                   then id
                                                   else S.insert v) (wPreSpillCoalesced wl)
+                          , wPreSpillAlias = (if wHaveSpilled wl
+                                              then id
+                                              else M.insert v u) (wPreSpillAlias wl)
                           }
        webmovesu <- gets $ getWebMoves' u
        webmovesv <- gets $ getWebMoves' v
@@ -865,13 +923,18 @@ combine u v =
                             , wSpillWorklist = u:(wSpillWorklist wl) }
 
 -- | "GetAlias"
-getAlias :: Int -> AM Int
+getAlias :: WebID -> AM WebID
 getAlias i = gets $ getAlias' i
 
-getAlias' :: Int -> RWorklists -> Int
+getAlias' :: WebID -> RWorklists -> WebID
 getAlias' i wl = case i `S.member` wCoalescedWebs wl of
                    True -> getAlias' (wCoalescedAlias wl M.! i) wl
                    False -> i
+
+getPreAlias' :: WebID -> RWorklists -> WebID
+getPreAlias' i wl = case i `S.member` wPreSpillCoalesced wl of
+                      True -> getPreAlias' (wPreSpillAlias wl M.! i) wl
+                      False -> i
 
 -- | "Freeze"
 freeze :: AM ()
@@ -922,7 +985,7 @@ selectSpill = do m <- chooseSpill
                           size = S.size (webExtent web) --sum (map len dus)
 --                          score = (deg * size) `div` (uses)
                           score = 10 * deg * size `div` (1 + S.size (webDefs web) + S.size (webUses web))
-                      in if webSpilled web then score `div` 2 else score
+                      in if isShortWeb web then 0 else score
 
 -- | "AssignColors"
 assignColors :: AM ()
