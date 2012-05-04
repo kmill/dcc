@@ -165,7 +165,7 @@ loopNestInformation graph mlabels = finalNestMap
 
 findReaching :: forall v. Label -> Label -> Graph (Inst v) C C -> [Label] -> S.Set Label 
 findReaching loopBack loopHeader graph mlabels 
-    = S.fromList [l | (l, b) <- mapToList reaching, b == True] 
+    = failReaching
       where (_, reaching, _) = runGM reaching' 
             reachingRun :: RM (Graph (Inst v) C C, FactBase ReachingFact, MaybeO C ReachingFact)
             reachingRun = (analyzeAndRewriteBwd
@@ -175,7 +175,20 @@ findReaching loopBack loopHeader graph mlabels
                            mapEmpty)
             reaching' = runWithFuel 2222222 reachingRun
             reachingPass = BwdPass reachingLattice (reachingAnalysis loopBack loopHeader) noBwdRewrite
-      
+            initialReaching = S.fromList [l | (l, b) <- mapToList reaching, b == True]
+            failReaching = S.fold addClosedSuccs initialReaching initialReaching
+            addClosedSuccs :: Label -> S.Set Label -> S.Set Label
+            addClosedSuccs l set = foldl addClosedSucc set mySuccessors 
+                where BodyBlock currentBlock = lookupBlock graph l  
+                      mySuccessors = successors currentBlock 
+
+            addClosedSucc :: S.Set Label -> Label -> S.Set Label
+            addClosedSucc set l = if noSuccessors 
+                                  then S.insert l set 
+                                  else set
+                where BodyBlock currentBlock = lookupBlock graph l
+                      noSuccessors = null $ successors currentBlock
+                                      
 
 --dominatorTransfer :: Label -> (Map.Map Label (S.Set Label), Bool) -> (Map.Map Label 
 
