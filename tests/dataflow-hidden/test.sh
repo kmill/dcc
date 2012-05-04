@@ -53,6 +53,7 @@ fail=0
 
 testfile() {
   file=$1
+  echo $file
   optstring=$2
   diffout=""
   output=""
