@@ -1,0 +1,209 @@
+{-# LANGUAGE RankNTypes, ScopedTypeVariables, GADTs, TypeFamilies, TypeSynonymInstances #-}
+module LoopAnalysis where 
+
+import Dataflow.Dominator 
+import Dataflow.OptSupport
+import DataflowTypes
+
+import Compiler.Hoopl
+import Compiler.Hoopl.Fuel
+import Debug.Trace
+import IR
+
+import Control.Monad
+
+
+
+
+import Data.Int
+import Data.Maybe
+import qualified Data.Set as S
+import qualified Data.Map as Map
+
+
+
+
+
+data Loop = Loop { loop_header :: Label 
+                 , loop_body :: S.Set Label
+                 , loop_variables :: [LoopVariable] }
+            deriving (Eq, Ord, Show)
+
+type BackEdge = (Label, Label)
+type LoopVariable = (VarName, MidIRExpr, MidIRExpr, Int64)
+
+findLoops :: FactBase DominFact -> Graph MidIRInst C C -> [Label] -> S.Set Loop 
+findLoops dominators graph mlabels = S.fromList loops
+    where GMany _ body _ = graph
+          backEdges = findBackEdges dominators (mapElems body)
+          loops = map (backEdgeToLoop dominators graph mlabels) backEdges
+
+
+findBackEdges :: NonLocal n => FactBase DominFact -> [Block n C C] -> [BackEdge]
+findBackEdges _ [] = []
+findBackEdges dominators (x:xs) = case mapLookup (entryLabel x) dominators of 
+                                    Just (PElem domin) -> (maybeBackEdges domin) ++ (findBackEdges dominators xs)
+                                    _ -> findBackEdges dominators xs
+    where maybeBackEdges domin = [ (entryLabel x, y) | y <- successors x, S.member y domin]
+
+backEdgeToLoop :: FactBase DominFact -> Graph MidIRInst C C -> [Label] -> BackEdge -> Loop 
+backEdgeToLoop dominators graph mlabels (loopBack, loopHeader) = Loop loopHeader loopBody loopVariables
+    where loopBody = S.insert loopHeader $ findReaching loopBack loopHeader graph mlabels
+          headerDomins = case mapLookup loopHeader dominators of 
+                           Just (PElem domin) -> domin
+                           _ -> S.empty
+          BodyBlock loopBackBlock = lookupBlock graph loopBack
+          BodyBlock headerBlock = lookupBlock graph loopHeader
+          loopVariables = findLoopVariables graph headerDomins headerBlock loopBackBlock
+         
+                    
+
+findLoopVariables :: Graph MidIRInst C C -> S.Set Label -> Block MidIRInst C C -> Block MidIRInst C C -> [LoopVariable]
+findLoopVariables graph headerDomin headerBlock loopbackBlock 
+    = loopVariables
+    where (_, inner, _) = blockToNodeList loopbackBlock 
+          loopVariables = findLoopVarNames inner
+          findLoopVarNames :: [MidIRInst e x] -> [LoopVariable]
+          findLoopVarNames [] = []
+          findLoopVarNames (Store _ v expr:xs)
+              | isJust $ makeLoopVariable v expr = (fromJust $ makeLoopVariable v expr):(findLoopVarNames xs) 
+          findLoopVarNames (_:xs) = findLoopVarNames xs
+
+          makeLoopVariable :: VarName -> MidIRExpr -> Maybe LoopVariable
+          makeLoopVariable v expr  
+              = do varFinalValue <- findFinalValue v 
+                   incValue <- findIncValue v expr 
+                   varInitValue <- findInitValue v
+                   return (v, varInitValue, varFinalValue, incValue)
+
+          -- To find the init value for a loop, we're going to have to look at the predecessors to the loop 
+          -- header. If we find more than one potential value, then we can't parallelize so just discard the loop
+          -- (i.e. return Nothing)
+          -- Can't look at the predecessors, so we're going to look at the dominators instead
+          -- specifically, want to find a list of all the definitions of the variable in 
+          -- the dominators of the header. Hopefully there will only be one
+          findInitValue :: VarName -> Maybe MidIRExpr
+          findInitValue v = case varDefs of 
+                              x:[] -> Just x
+                              _ -> Nothing 
+              where varDefs = concatMap (findVarDefs v) $ S.toList headerDomin
+                   
+          findVarDefs :: VarName -> Label -> [MidIRExpr]
+          findVarDefs v l = let BodyBlock block = lookupBlock graph l
+                                (_, inner, _) = blockToNodeList block
+                                in [expr | (Store _ x expr) <- inner, x == v]
+
+          -- To find the final value for a loop, we're going to have to look at the loop header
+          -- need to look until we find a statement of the pattern 
+          -- (CondBranch _ (BinOp _ CmpGTE (Var _ v) (Lit _ i)) tl fl)
+          -- The final value is then i 
+          findFinalValue :: VarName -> Maybe MidIRExpr
+          findFinalValue v = case headerX of 
+                               JustC (CondBranch _ (BinOp _ CmpGTE (Var _ x) expr) _ _)
+                                   | x == v -> Just expr
+                               _ -> Nothing
+              where (_, _, headerX) = blockToNodeList headerBlock
+
+          findIncValue :: VarName -> MidIRExpr -> Maybe Int64
+          findIncValue v (BinOp _ OpAdd (Var _ x) (Lit _ i)) =  Just i
+          findIncValue v (BinOp _ OpAdd (Lit _ i) (Var _ x)) =  Just i 
+          findIncValue v _ = Nothing
+
+      
+
+analyzeParallelizationPass :: MidIRRepr -> S.Set Loop 
+analyzeParallelizationPass = error "Not yet implemented :-{"
+
+
+findDominators :: forall v. Graph (Inst v) C C -> [Label] -> FactBase DominFact 
+findDominators graph mlabels = domins 
+     where (_, domins, _) = runGM domins'
+          --domins' :: GM (Graph (Inst v) C C, FactBase DominFact, MaybeO C DominFact)
+           dominAnalysis :: RM (Graph (Inst v) C C, FactBase DominFact, MaybeO C DominFact)
+           dominAnalysis = (analyzeAndRewriteFwd 
+                            generalDominPass 
+                            (JustC mlabels)
+                            graph
+                            (mapFromList (map (\l -> (l, fact_bot dominatorLattice)) mlabels)))
+           domins' = runWithFuel 2222222 dominAnalysis
+
+generalDominPass :: (CheckpointMonad m, FuelMonad m, UniqueNameMonad m)
+                 => FwdPass m (Inst v) DominFact 
+generalDominPass = FwdPass 
+                   { fp_lattice = dominatorLattice
+                   , fp_transfer = generalDominAnalysis
+                   , fp_rewrite = noFwdRewrite }
+
+type LoopBody = S.Set Label
+
+loopNestInformation :: forall v. Graph (Inst v) C C -> [Label] -> Map.Map Label Int 
+loopNestInformation graph mlabels = finalNestMap
+    where domins = findDominators graph mlabels
+          GMany _ body _ = graph 
+          backEdges = findBackEdges domins (mapElems body)
+          loops = map (findLoopBodies graph) backEdges
+
+          -- Now that all information is available, populate the map with our information
+          finalNestMap = foldl addLoopNests Map.empty loops
+
+          addLoopNests :: Map.Map Label Int -> S.Set Label -> Map.Map Label Int
+          addLoopNests nestMap s = S.fold addLoopNest nestMap s
+
+          addLoopNest :: Label -> Map.Map Label Int -> Map.Map Label Int 
+          addLoopNest l nestMap = case Map.lookup l nestMap of 
+                                    Just i -> Map.insert l (i+1) nestMap
+                                    Nothing -> Map.insert l 1 nestMap
+
+          findLoopBodies :: forall v. Graph (Inst v) C C -> BackEdge -> LoopBody
+          findLoopBodies graph (loopBack, loopHeader) = S.insert loopHeader loopBody 
+              where loopBody = findReaching loopBack loopHeader graph mlabels
+
+          -- loops = findGeneralLoops domins graph
+
+
+
+
+findReaching :: forall v. Label -> Label -> Graph (Inst v) C C -> [Label] -> S.Set Label 
+findReaching loopBack loopHeader graph mlabels 
+    = S.fromList [l | (l, b) <- mapToList reaching, b == True] 
+      where (_, reaching, _) = runGM reaching' 
+            reachingRun :: RM (Graph (Inst v) C C, FactBase ReachingFact, MaybeO C ReachingFact)
+            reachingRun = (analyzeAndRewriteBwd
+                           reachingPass
+                           (JustC mlabels)
+                           graph
+                           mapEmpty)
+            reaching' = runWithFuel 2222222 reachingRun
+            reachingPass = BwdPass reachingLattice (reachingAnalysis loopBack loopHeader) noBwdRewrite
+      
+
+--dominatorTransfer :: Label -> (Map.Map Label (S.Set Label), Bool) -> (Map.Map Label 
+
+type ReachingFact = Bool 
+reachingLattice :: DataflowLattice ReachingFact 
+reachingLattice = DataflowLattice { fact_name = "Reaching Fact"
+                                  , fact_bot = False
+                                  , fact_join = unionFact }
+    where unionFact :: Label -> OldFact ReachingFact -> NewFact ReachingFact -> (ChangeFlag, ReachingFact)
+          unionFact _ (OldFact old) (NewFact new) 
+              = ( ch, old || new) 
+                where ch = changeIf $ (old || new) /= old
+
+reachingAnalysis :: forall n. (NonLocal n) => Label -> Label -> BwdTransfer n ReachingFact 
+reachingAnalysis loopBack loopHeader = mkBTransfer3 bBegin bMiddle bEnd
+    where bBegin :: n C O -> ReachingFact -> ReachingFact 
+          bBegin inst f
+              | entryLabel inst == loopBack = True
+              | entryLabel inst == loopHeader = False 
+              | otherwise = f
+
+          bMiddle :: n O O -> ReachingFact -> ReachingFact 
+          bMiddle inst f = f 
+
+          bEnd :: n O C -> FactBase ReachingFact -> ReachingFact 
+          bEnd inst f = or $ map (successorFact f) $ successors inst 
+
+          successorFact factBase l = case mapLookup l factBase of 
+                                       Just b -> b 
+                                       Nothing -> False
+ 

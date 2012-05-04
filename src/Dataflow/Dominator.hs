@@ -45,4 +45,20 @@ dominatorAnalysis = mkFTransfer ft
           insertLabel :: Label -> DominFact -> DominFact
           insertLabel l Bot = PElem $ S.singleton l 
           insertLabel l (PElem s) = PElem $ S.insert l s
+
+
+generalDominAnalysis :: (NonLocal n) => FwdTransfer n DominFact 
+generalDominAnalysis = mkFTransfer3 ftBegin ftMiddle ftEnd 
+    where ftBegin :: (NonLocal n) => n C O -> DominFact -> DominFact 
+          ftBegin inst f = insertLabel (entryLabel inst) f 
+
+          ftMiddle :: (NonLocal n) => n O O -> DominFact -> DominFact 
+          ftMiddle inst f = f 
+
+          ftEnd :: (NonLocal n) => n O C -> DominFact -> FactBase DominFact
+          ftEnd inst f = mkFactBase dominatorLattice [ (l, insertLabel l f) | l <- successors inst]
+
+          insertLabel :: Label -> DominFact -> DominFact
+          insertLabel l Bot = PElem $ S.singleton l 
+          insertLabel l (PElem s) = PElem $ S.insert l s
                 

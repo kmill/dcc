@@ -1,0 +1,17 @@
+//>484
+class Program {
+
+  void main() {
+    int sum; 
+
+    for (i = 0; 22) { 
+      for (j = 0; 22) {
+	sum+=1;
+      }
+    }
+
+    callout("printf", "%d\n", sum);
+
+  }
+
+}
