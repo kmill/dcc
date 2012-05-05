@@ -465,6 +465,8 @@ data RWorklists = RWorklists
     , wSpilledWebs :: [WebID] -- ^ webs marked for spilling
     , wCoalescedWebs :: S.Set WebID -- ^ webs that have been coalesced
     , wColoredWebs :: M.Map WebID X86Reg -- ^ webs successfully colored
+    , wPrecoloredWebs :: S.Set WebID -- ^ webs which are precolored
+                                     -- and shouldn't be spilled
     , wSelectStack :: [WebID] -- ^ stack containing temporaries
                               -- removed from the graph and fixed webs
       
@@ -554,6 +556,7 @@ makeWorklists g = iter (igWebIDs g) (initWorklists g initMoves moves fixed)
                   = iter is (wlists
                              { wColoredWebs = M.insert i (x86reg $ webReg web)
                                               (wColoredWebs wlists)
+                             , wPrecoloredWebs = S.insert i (wPrecoloredWebs wlists)
                              , wDegrees = M.insert i maxBound (wDegrees wlists) })
               | webDegree i g >= numUsableRegisters
                   = iter is (wlists { wSpillWorklist = i:(wSpillWorklist wlists) })
@@ -585,6 +588,7 @@ makeWorklists g = iter (igWebIDs g) (initWorklists g initMoves moves fixed)
                 , wSpilledWebs = []
                 , wCoalescedWebs = S.empty
                 , wColoredWebs = M.empty
+                , wPrecoloredWebs = S.empty
                 , wSelectStack = []
                 , wCoalescedAlias = M.empty
                 , wFixedWebs = fixed
