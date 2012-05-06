@@ -181,14 +181,15 @@ rewriteSpillPass fb = FwdPass
 
                 d _ f = return Nothing
                 
-                countSpillID f = S.size $ S.filter (\s -> case s of
-                                                            SpillID i -> True
-                                                            SpillArg _ -> False) f
+                countSpillID f = length $ normalSpills f
+                normalSpills f = S.toList $ S.filter (\s -> case s of
+                                                              SpillID i -> True
+                                                              SpillArg _ -> False) f
 
                 toMem :: SpillLoc -> S.Set SpillLoc -> MemAddr
-                toMem (SpillID i) f = A.MemAddr (Just $ A.MReg A.RSP)
-                                      (A.Imm32 $ fromIntegral (8 * i))
-                                      Nothing A.SOne
+                toMem sl@(SpillID i) f = A.MemAddr (Just $ A.MReg A.RSP)
+                                         (A.Imm32 $ fromIntegral (8 * fromJust (findIndex (==sl) $ normalSpills f)))
+                                         Nothing A.SOne
                 toMem (SpillArg r) f = A.MemAddr (Just $ A.MReg A.RSP)
                                        (A.Imm32 $ fromIntegral (8*r + 16 + 8 * countSpillID f))
                                        Nothing A.SOne
