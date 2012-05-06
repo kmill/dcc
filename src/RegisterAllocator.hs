@@ -11,6 +11,7 @@ import AliveDead
 import CodeGenerate
 import qualified IR as I
 import Dataflow
+import Dataflow.DeadCodeAsm
 import DataflowTypes
 import qualified Data.Set as S
 import Data.List
@@ -22,9 +23,9 @@ import AST (SourcePos, noPosition)
 import Debug.Trace
 import Data.Function
 import Util.NodeLocate
+import qualified LoopAnalysis as L
 
-
-dotrace = False
+dotrace = True
 
 trace' a b = if dotrace then trace a b else b 
 
@@ -544,6 +545,7 @@ data RWorklists = RWorklists
     , wMoves :: M.Map MovePtr [WebID] -- ^ a map from move nodes to web ids
     , wIdealRegs :: M.Map WebID [X86Reg] -- ^ a map from webs to fixed
                                          -- registers from associated moves
+    , wLoops ::M.Map Label Int -- ^ a map from labels to the nesting of the loop
     }
                   deriving Show
 
@@ -603,8 +605,8 @@ webMoves i =
 moveRelated :: WebID -> AM Bool
 moveRelated i = (not . S.null) `fmap` webMoves i
 
-makeWorklists :: InterfGraph -> RWorklists
-makeWorklists g = iter (igWebIDs g) (initWorklists g initMoves moves idealRegs)
+makeWorklists :: InterfGraph -> M.Map Label Int -> RWorklists
+makeWorklists g loops = iter (igWebIDs g) (initWorklists g initMoves moves idealRegs loops)
     where iter [] wlists = wlists
           iter (i:is) wlists
               | webPrecolored web
@@ -639,9 +641,9 @@ makeWorklists g = iter (igWebIDs g) (initWorklists g initMoves moves idealRegs)
                                        
 
           -- | Sets up everything but the web worklists.
-          initWorklists :: InterfGraph -> S.Set NodePtr -> M.Map NodePtr [WebID] -> M.Map WebID [X86Reg]
+          initWorklists :: InterfGraph -> S.Set NodePtr -> M.Map NodePtr [WebID] -> M.Map WebID [X86Reg] -> M.Map Label Int
               -> RWorklists
-          initWorklists g wm moves idealRegs
+          initWorklists g wm moves idealRegs loops
               = RWorklists
                 { wInterfGraph = g
                 , wSpillWorklist = []
@@ -664,6 +666,7 @@ makeWorklists g = iter (igWebIDs g) (initWorklists g initMoves moves idealRegs)
                 , wActiveMoves = S.empty
                 , wMoves = moves
                 , wIdealRegs = idealRegs
+                , wLoops = loops
                 }
 
 -- | "main"
@@ -674,7 +677,8 @@ doRegAlloc spillLocs mlabel graph
           webs = collectWebs (dus M.! mlabel)
           rrfacts = getRegRegMoves [mlabel] pg
           interfgraph = makeInterfGraph webs (rrfacts M.! mlabel)
-          initState = makeWorklists interfgraph
+          loops = L.loopNestInformation graph [mlabel]
+          initState = makeWorklists interfgraph loops
           spilledNodes = evalState (return pg) initState
           -- | runs simplify/coalesce/freeze/selectspill until work
           -- lists are empty
@@ -881,7 +885,7 @@ coalesce = do m <- selectMove
               [x, y] <- gets $ \wl -> fixList $ wMoves wl M.! m
               [x, y] <- mapM getAlias [x, y]
               idToWeb <- gets $ igIDToWeb . wInterfGraph
-              let yPC = webPrecolored $ idToWeb M.! y
+              let yPC = webPrecolored $ idToWeb M.! (trace' ("move: " ++ show [x, y]) y)
               let (u, v) = if yPC then (y, x) else (x, y)
               -- Invariant: if either u,v is fixed, then u is fixed.
               wl <- get
@@ -955,8 +959,7 @@ selectMove = do wl@(RWorklists { wWorklistMoves = choices }) <- get
 -- | "Combine"
 combine :: Int -> Int -> AM ()
 combine u v =
-    do wl <- get
-       modify $ \wl ->
+    do modify $ \wl ->
            case v `elem` wFreezeWorklist wl of
              True -> wl { wFreezeWorklist = delete v $ wFreezeWorklist wl }
              False -> wl { wSpillWorklist = delete v $ wSpillWorklist wl }
@@ -1031,26 +1034,30 @@ freezeMoves u = do wmoves <- webMoves u
 
 -- | "SelectSpill"
 selectSpill :: AM ()
-selectSpill = do m <- chooseSpill
+selectSpill = do wl <- get
+                 m <- chooseSpill $ makeCosts wl
                  modify $ \wl -> wl { wSpillWorklist = delete m $ wSpillWorklist wl
                                     , wSimplifyWorklist = m:(wSimplifyWorklist wl)
                                     , wHaveSpilled = True }
                  freezeMoves m
-    where chooseSpill =
+    where chooseSpill :: M.Map WebID Int -> AM WebID
+          chooseSpill costs =
               do wl <- get
                  let spillList = wSpillWorklist wl
-                 let costs = map (\i -> (i, cost wl i)) spillList
-                 return $ trace' ("costs: " ++ show costs) $ fst $ maximumBy (compare `on` snd) costs
+                     costs' = map (\i -> (i, costs M.! i)) spillList
+                 return $ trace' ("costs: " ++ show costs') $ fst $ minimumBy (compare `on` snd) costs'
+          makeCosts :: RWorklists -> M.Map WebID Int
+          makeCosts wl = M.fromList $ map (\i -> (i, cost wl i)) $ wSpillWorklist wl
+          cost :: RWorklists -> WebID -> Int
           cost wl i = let web = igGetWeb i $ wInterfGraph wl
                           deg = wDegrees wl M.! i
-                          dus = S.toList $ webDUs web
-                          len (DU {duExtent = ext}) = S.size ext
-                          len (DUv{}) = 0
+                          loopDepth l = M.findWithDefault 0 (nodeLabel l) (wLoops wl)
+                          loadCost = sum $ map (\l -> 10 ^ (loopDepth l)) (S.toList (webUses web) ++ S.toList (webDefs web))
                           uses = max 1 (S.size $ webUses web)
                           size = S.size (webExtent web) --sum (map len dus)
 --                          score = (deg * size) `div` (uses)
-                          score = 10 * deg * size `div` (1 + S.size (webDefs web) + S.size (webUses web))
-                      in if isShortWeb web then 0 else score
+                          score = 100 * loadCost `div` deg
+                      in if isShortWeb web then maxBound else score
 
 -- | "AssignColors"
 assignColors :: AM ()
@@ -1075,7 +1082,8 @@ assignColors = do emptyStack
                      emptyStack
           
           determineColors :: WebID -> AM [X86Reg]
-          determineColors n = do wl <- get
+          determineColors n = do n <- getAlias n
+                                 wl <- get
                                  let adj = S.toList $ igAdjLists (wInterfGraph wl) M.! n
                                  adj' <- mapM getAlias adj
                                  allcolored <- gets wColoredWebs
@@ -1086,10 +1094,6 @@ assignColors = do emptyStack
                                      nnregs = concatMap (wIdealRegs wl M.!) adj'
                                      (ok1, ok2) = partition (`notElem` nnregs) ok
                                      (ok1', ok2') = partition (`elem` nregs) (ok1 ++ ok2)
---                                     fixedAdjRegs = do a <- adj'
---                                                       let w = igGetWeb a (wInterfGraph wl)
---                                                       guard $ webFixed w
---                                                       return $ x86reg $ webReg w
                                  return $ ok1' ++ ok2'
 
 outputWebGraph :: InterfGraph -> String

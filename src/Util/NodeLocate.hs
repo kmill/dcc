@@ -10,6 +10,9 @@ import Assembly
 
 data NodePtr = NodePtr Label Int
                deriving (Eq, Ord)
+
+nodeLabel :: NodePtr -> Label
+nodeLabel (NodePtr l _) = l
                         
 instance Show NodePtr where
     show (NodePtr l i) = show l ++ "." ++ show i
