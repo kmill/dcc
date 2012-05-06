@@ -56,20 +56,20 @@ getAliveDead :: forall e x. Asm e x -> AliveDead
 getAliveDead expr
     = case expr of
         Label{} -> emptyAD
-        Spill _ r d -> getRSrc r
-        Reload _ s r -> getRDst r
+        Spill _ r d -> getRSrc r <+> ([MReg RSP], [])
+        Reload _ s r -> getRDst r <+> ([MReg RSP], [])
         MovIRMtoR _ irm r -> getRSrc irm <+> getRDst r
         MovIRtoM _ ir m -> getRSrc ir <+> getRDst m
         Mov64toR _ i r -> getRDst r
         CMovRMtoR _ _ rm r -> getRSrc rm <+> getRSrc r <+> getRDst r
-        Enter _ _ i _ -> ([], x) <+> ([], map MReg calleeSaved ++ [MReg RSP])
-                where x = map MReg (catMaybes $ take i argOrder)
-        Leave{} -> (map MReg calleeSaved ++ [MReg RSP], [MReg RSP])
-        Call p nargs i -> (x, x ++ [MReg RAX])
-                          <+> ([MReg RSP], map MReg callerSaved ++ [MReg RSP])
+        Enter _ _ nargs _ -> ([], x) <+> ([], map MReg calleeSaved ++ [MReg RSP])
                 where x = map MReg (catMaybes $ take nargs argOrder)
-        Callout p nargs i -> (x ++ [MReg RAX], x ++ [MReg RAX])
-                             <+> ([MReg RSP], map MReg callerSaved ++ [MReg RSP])
+        Leave{} -> (map MReg calleeSaved ++ [MReg RSP], [MReg RSP])
+        Call p nargs fl -> (x, x ++ [MReg RAX])
+                           <+> ([MReg RSP], map MReg callerSaved ++ [MReg RSP])
+                where x = map MReg (catMaybes $ take nargs argOrder)
+        Callout p nargs fl -> (x ++ [MReg RAX], x ++ [MReg RAX])
+                              <+> ([MReg RSP], map MReg callerSaved ++ [MReg RSP])
                 where x = map MReg (catMaybes $ take nargs argOrder)
         Ret p rets -> (if rets then [MReg RAX] else [], []) <+> ([MReg RSP], [])
         RetPop p rets num -> (if rets then [MReg RAX] else [], []) <+> ([MReg RSP], [])

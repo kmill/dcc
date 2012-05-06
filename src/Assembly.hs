@@ -22,6 +22,11 @@ data LowIRField = LowIRField SourcePos String Int64
 data Reg = MReg X86Reg -- ^ a real machine register
          | SReg String -- ^ a symbolic register
            deriving (Eq, Ord)
+
+x86Reg :: Reg -> X86Reg
+x86Reg (MReg r) = r
+x86Reg _ = error "getReg on non-MReg :-("
+
 data Imm8 = Imm8 Int8
 data Imm16 = Imm16 Int16
 data Imm32 = Imm32 Int32 -- ^ a 32-bit sign-extended literal

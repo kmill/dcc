@@ -104,8 +104,10 @@ instToAsm (I.Enter pos l args)
 --                    <*> (genPushRegs pos A.calleeSaved)
                     <*> (genLoadArgs pos args)
 instToAsm (I.Store pos d sexp)
-    = do (gd, s) <- expToIRM sexp
-         return $ gd <*> mkMiddle (A.MovIRMtoR pos s (A.SReg $ show d))
+    = mcut $ msum [
+       do (gd, s) <- expToIRM sexp
+          return $ gd <*> mkMiddle (A.MovIRMtoR pos s (A.SReg $ show d))
+      ]
 instToAsm (I.DivStore pos d op expa expb)
     = do (ga, a) <- expToIRM expa
          (gb, b) <- expToRM expb
@@ -118,10 +120,31 @@ instToAsm (I.DivStore pos d op expa expb)
                   I.DivQuo -> A.RAX
                   I.DivRem -> A.RDX
 instToAsm (I.IndStore pos dexp sexp)
-    = do (gd, d) <- expToMem dexp
-         (gs, s) <- expToIR sexp
-         return $ gd <*> gs
-                    <*> mkMiddle (A.MovIRtoM pos s d)
+    = mcut $ msum [
+       -- for *(x) += y
+       do let parts = flattenOp I.OpAdd sexp
+          let dexp' = I.Load pos dexp
+          guard $ length parts > 1
+          let rest = delete dexp' parts
+          guard $ length rest < length parts
+          let sumrest = foldl1 (I.BinOp pos I.OpAdd) rest
+          (gd, d) <- expToMem dexp
+          (gs', s') <- expToIR sumrest
+          return $ gd <*> gs'
+                     <*> mkMiddle (A.ALU_IRtoM pos A.Add s' d)
+      -- for *(x) -= y
+      ,do I.BinOp pos' I.OpSub expa expb <- return sexp
+          guard $ I.Load pos dexp == expa
+          (gd, d) <- expToMem dexp
+          (gs, s) <- expToIR expb
+          return $ gd <*> gs
+                     <*> mkMiddle (A.ALU_IRtoM pos A.Sub s d)
+      -- for everything else
+      ,do (gd, d) <- expToMem dexp
+          (gs, s) <- expToIR sexp
+          return $ gd <*> gs
+                     <*> mkMiddle (A.MovIRtoM pos s d)
+      ]
 instToAsm (I.Call pos d name args)
     = do gargs <- genSetArgs pos args
          return $ gargs
