@@ -22,6 +22,11 @@ data LowIRField = LowIRField SourcePos String Int64
 data Reg = MReg X86Reg -- ^ a real machine register
          | SReg String -- ^ a symbolic register
            deriving (Eq, Ord)
+
+x86Reg :: Reg -> X86Reg
+x86Reg (MReg r) = r
+x86Reg _ = error "getReg on non-MReg :-("
+
 data Imm8 = Imm8 Int8
 data Imm16 = Imm16 Int16
 data Imm32 = Imm32 Int32 -- ^ a 32-bit sign-extended literal
@@ -52,6 +57,10 @@ rmToIRM :: OperRM -> OperIRM
 rmToIRM (RM_R r) = IRM_R r
 rmToIRM (RM_M m) = IRM_M m
 
+irToIRM :: OperIR -> OperIRM
+irToIRM (IR_I i) = IRM_I i
+irToIRM (IR_R r) = IRM_R r
+
 instance Show OperIRM where
     show (IRM_I imm) = "$" ++ show imm
     show (IRM_R reg) = show reg
@@ -62,6 +71,15 @@ instance Show OperIR where
 instance Show OperRM where
     show (RM_R reg) = show reg
     show (RM_M mem) = show mem
+
+data SpillLoc = SpillID Int
+              | SpillArg Int
+                deriving (Eq, Ord, Show)
+
+type SpillLocSupply = [SpillLoc]
+
+freeSpillLocs :: SpillLocSupply
+freeSpillLocs = map SpillID [0..]
 
 checkIf32Bit :: Int64 -> Bool
 checkIf32Bit x
@@ -231,8 +249,8 @@ instance Show ALUOp where
 data Asm e x where
   Label     :: SourcePos -> Label -> Asm C O
 
-  Spill :: SourcePos -> Reg -> String -> Asm O O
-  Reload :: SourcePos -> String -> Reg -> Asm O O
+  Spill :: SourcePos -> Reg -> SpillLoc -> Asm O O
+  Reload :: SourcePos -> SpillLoc -> Reg -> Asm O O
 
   MovIRMtoR :: SourcePos -> OperIRM -> Reg -> Asm O O
   MovIRtoM  :: SourcePos -> OperIR -> MemAddr -> Asm O O
@@ -240,8 +258,10 @@ data Asm e x where
 
   CMovRMtoR :: SourcePos -> Flag -> OperRM -> Reg -> Asm O O
 
-  Enter :: SourcePos -> Label -> Int -> Asm C O
-  Leave :: SourcePos -> Asm O O
+  -- Takes 1) the number of arguments and 2) the amount of stack
+  -- space.  Not actually "enter" instruction!
+  Enter :: SourcePos -> Label -> Int -> Int32 -> Asm C O
+  Leave :: SourcePos -> Int32 -> Asm O O
 
   -- | Int is the number of arguments (to know which registers are
   -- used)
@@ -256,8 +276,8 @@ data Asm e x where
   ExitFail :: SourcePos -> Asm O C
   
   -- | For Mac OS X compatibility mode
-  Realign :: SourcePos -> Int -> Asm O O
-  Unrealign :: SourcePos -> Asm O O
+--  Realign :: SourcePos -> Int -> Asm O O
+--  Unrealign :: SourcePos -> Asm O O
 
   Lea :: SourcePos -> MemAddr -> Reg -> Asm O O
 
@@ -295,7 +315,7 @@ data Asm e x where
   
 instance NonLocal Asm where
   entryLabel (Label _ lbl) = lbl
-  entryLabel (Enter _ lbl _) = lbl
+  entryLabel (Enter _ lbl _ _) = lbl
   successors (Jmp _ (Imm32BlockLabel l 0)) = [l]
   successors (Jmp _ _) = []
   successors (JCond _ _ (Imm32BlockLabel tr 0) fa) = [tr, fa]
@@ -332,9 +352,16 @@ instance Show (Asm e x) where
   show (CMovRMtoR pos flag a b) = showBinOp opcode pos a b
             where opcode = "cmov" ++ show flag ++ "q"
 
-  show (Enter pos lbl st) = printf "%s: enter $%d, $0  # %s"
-                            (show lbl) st (showPos pos)
-  show (Leave pos) = showNullOp "leave" pos
+  show (Enter pos lbl nargs st) = printf "%s: %s  # %d args  %s"
+                                  (show lbl) adjSP nargs (showPos pos)
+      where adjSP = case st of
+                      0 -> ""
+                      _ -> printf "subq $%d, %s" st (show (MReg RSP))
+  show (Leave pos st) = printf "%s# leave  %s"
+                        adjSP (showPos pos)
+      where adjSP = case st of
+                      0 -> ""
+                      _ -> printf "addq $%d, %s  " st (show (MReg RSP))
 
   show (Call pos nargs func) = showUnOp "call" pos func
   show (Callout pos nargs func) = showUnOp "call" pos func
@@ -346,10 +373,10 @@ instance Show (Asm e x) where
         ++ (if not returns then " (void method)" else "")
   show (ExitFail pos)
       = "# exited by failure. " ++ showPos pos
-  show (Realign pos i)
-       = "# realign goes here for --mac"
-  show (Unrealign pos)
-      = "# unrealign goes here for --mac"
+--   show (Realign pos i)
+--        = "# realign goes here for --mac"
+--   show (Unrealign pos)
+--       = "# unrealign goes here for --mac"
 
   show (Lea pos mem reg) = showBinOp "leaq" pos mem reg
 
@@ -409,14 +436,18 @@ argOrder :: [Maybe X86Reg]
 argOrder = (map Just [RDI, RSI, RDX, RCX, R8, R9]) ++ nothings
     where nothings = Nothing:nothings
 
+argStoreLocations :: Int32 -> [Either MemAddr Reg]
+argStoreLocations dsp = map (Right . MReg) [RDI, RSI, RDX, RCX, R8, R9]
+                        ++ map (Left . makeMem) [dsp, dsp+8..]
+    where makeMem d = MemAddr (Just $ MReg RSP) (Imm32 d) Nothing SOne
+
 argStackDepth :: [Int]
 argStackDepth = [no, no, no, no, no, no] ++ [16, 16+8..]
     where no = error "argStackDepth for non-stack-arg :-("
 
-argLocation :: [Either MemAddr Reg]
+argLocation :: [Either SpillLoc Reg]
 argLocation = map (Right . MReg) [RDI, RSI, RDX, RCX, R8, R9]
-              ++ map (Left . makeMem) [16,16+8..]
-    where makeMem d = MemAddr (Just $ MReg RBP) (Imm32 d) Nothing SOne
+              ++ map (Left . SpillArg) [0,1..]
 
 ---- | Gives a midir expression for getting any particular argument.
 --argExprs :: SourcePos -> [Expr VarName]
@@ -425,17 +456,30 @@ argLocation = map (Right . MReg) [RDI, RSI, RDX, RCX, R8, R9]
 --                   [16, 16+8..])
 
 callerSaved :: [X86Reg]
-callerSaved = [R10, R11]
+callerSaved = [R10, R11] ++ [RDI, RSI, RDX, RCX, R8, R9]
 
 calleeSaved :: [X86Reg]
-calleeSaved = [RBX, R12, R13, R14, R15]
+calleeSaved = [RBX, R12, R13, R14, R15, RBP]
+
+-- | All the registers but RSP, which cannot be used (otherwise bad
+-- things will happen!)  It might be possible to use RSP, but too much
+-- care would need to be taken to make it worthwhile.
+usableRegisters :: [X86Reg]
+usableRegisters = [RAX, RBX, RCX, RDX, RBP, RSI, RDI
+                   ,R8, R9, R10, R11, R12, R13, R14, R15]
+
+usableRegisters' :: [Reg]
+usableRegisters' = map MReg usableRegisters
+
+numUsableRegisters :: Int
+numUsableRegisters = length usableRegisters
 
 data X86Reg = RAX -- temp reg, return value
             | RBX -- callee-saved
             | RCX -- 4th arg
             | RDX -- 3rd arg
             | RSP -- stack pointer
-            | RBP -- base pointer (callee-saved)
+            | RBP -- "base pointer" (callee-saved)
             | RSI -- 2nd argument
             | RDI -- 1st argument
             | R8 -- 5th argument
@@ -465,3 +509,106 @@ instance Show X86Reg where
     show R13 = "%r13"
     show R14 = "%r14"
     show R15 = "%r15"
+
+class AsmRename x where
+    -- | Takes a function on registers and something, and replaces the
+    -- registers in the something.
+    mapArg :: (Reg -> Reg) -> x -> x
+
+instance AsmRename Reg where
+    mapArg f r = f r
+instance AsmRename MemAddr where
+    mapArg f m = MemAddr
+                 { baseReg = f `fmap` baseReg m
+                 , displace = displace m
+                 , indexReg = f `fmap` indexReg m
+                 , scalar = scalar m }
+
+instance AsmRename OperIRM where
+    mapArg f (IRM_I i) = IRM_I i
+    mapArg f (IRM_R r) = IRM_R $ f r
+    mapArg f (IRM_M m) = IRM_M $ mapArg f m
+instance AsmRename OperIR where
+    mapArg f (IR_I i) = IR_I i
+    mapArg f (IR_R r) = IR_R $ f r
+instance AsmRename OperRM where
+    mapArg f (RM_R r) = RM_R $ f r
+    mapArg f (RM_M m) = RM_M $ mapArg f m
+
+mapAsm :: forall e x . (Reg -> Reg) -> (Reg -> Reg) -> Asm e x -> Asm e x
+mapAsm fs fd n
+    = case n of
+        Label{} -> n
+        
+        Spill pos r spillloc -> Spill pos (fs' r) spillloc
+        Reload pos spillloc r -> Reload pos spillloc (fd' r)
+        
+        MovIRMtoR pos s d -> MovIRMtoR pos (fs' s) (fd' d)
+        MovIRtoM pos s d -> MovIRtoM pos (fs' s) (fs' d)
+        Mov64toR pos i d -> Mov64toR pos i (fd' d)
+
+        CMovRMtoR pos fl s d -> CMovRMtoR pos fl (fs' s) (fd' d)
+        
+        Enter{} -> n
+        Leave{} -> n
+        
+        Call{} -> n
+        Callout{} -> n
+        Ret{} -> n
+        RetPop{} -> n
+        ExitFail{} -> n
+        
+        Lea pos s d -> Lea pos (fs' s) (fd' d)
+        
+        Push pos s -> Push pos (fs' s)
+        Pop pos (RM_R rd) -> Pop pos (RM_R $ fd' rd)
+        Pop pos (RM_M ms) -> Pop pos (RM_M $ fs' ms)
+        
+        Jmp{} -> n
+        JCond{} -> n
+        
+        ALU_IRMtoR pos op s d -> let dSource = fs' d
+                                     dDest = fd' d
+                                 in case dSource == dDest of
+                                      True -> ALU_IRMtoR pos op (fs' s) dDest
+                                      False -> error $ printf "source and dest not equal in %s!"
+                                                          (show n)
+        ALU_IRtoM pos op s d -> ALU_IRtoM pos op (fs' s) (fs' d)
+        Cmp pos s1 s2 -> Cmp pos (fs' s1) (fs' s2)
+        Test pos s1 s2 -> Test pos (fs' s1) (fs' s2)
+        
+        Inc pos sd -> doUnaryRM (Inc pos) sd
+        Dec pos sd -> doUnaryRM (Dec pos) sd
+        Neg pos sd -> doUnaryRM (Neg pos) sd
+        
+        IMulRAX pos s -> IMulRAX pos (fs' s)
+        IMulRM pos s d -> let dSource = fs' d
+                              dDest = fd' d
+                          in case dSource == dDest of
+                               True -> IMulRM pos (fs' s) dDest
+                               False -> error $ printf "source and dest not equal in %s!"
+                                                   (show n)
+        IMulImm pos i s d -> IMulImm pos i (fs' s) (fd' d)
+        
+        IDiv pos s -> IDiv pos (fs' s)
+        Cqo{} -> n
+        
+        Shl pos i rm -> doUnaryRM (Shl pos i) rm
+        Shr pos i rm -> doUnaryRM (Shr pos i) rm
+        Sar pos i rm -> doUnaryRM (Sar pos i) rm
+        
+        Nop{} -> n
+        
+    where fs', fd' :: AsmRename x => x -> x
+          fs' = mapArg fs
+          fd' = mapArg fd
+          
+          doUnaryRM :: (OperRM -> Asm O O) -> OperRM -> Asm O O
+          doUnaryRM cons (RM_R rd)
+              = let rdSource = fs' rd
+                    rdDest = fd' rd
+                in case rdSource == rdDest of
+                     True -> cons (RM_R rdDest)
+                     False -> error $ printf "source and dest not equal in %s!"
+                                           (show n)
+          doUnaryRM cons (RM_M m) = cons (RM_M $ fs' m)

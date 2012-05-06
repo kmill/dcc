@@ -100,12 +100,14 @@ instToAsm :: forall e x. I.MidIRInst e x -> CGM (Graph A.Asm e x)
 instToAsm (I.Label pos l) = return $ mkFirst $ A.Label pos l
 instToAsm (I.PostEnter pos l) = return $ mkFirst $ A.Label pos l
 instToAsm (I.Enter pos l args)
-    = do return $ mkFirst (A.Enter pos l 0)
-                    <*> (genPushRegs pos A.calleeSaved)
+    = do return $ mkFirst (A.Enter pos l (length args) 0)
+--                    <*> (genPushRegs pos A.calleeSaved)
                     <*> (genLoadArgs pos args)
 instToAsm (I.Store pos d sexp)
-    = do (gd, s) <- expToIRM sexp
-         return $ gd <*> mkMiddle (A.MovIRMtoR pos s (A.SReg $ show d))
+    = mcut $ msum [
+       do (gd, s) <- expToIRM sexp
+          return $ gd <*> mkMiddle (A.MovIRMtoR pos s (A.SReg $ show d))
+      ]
 instToAsm (I.DivStore pos d op expa expb)
     = do (ga, a) <- expToIRM expa
          (gb, b) <- expToRM expb
@@ -118,30 +120,45 @@ instToAsm (I.DivStore pos d op expa expb)
                   I.DivQuo -> A.RAX
                   I.DivRem -> A.RDX
 instToAsm (I.IndStore pos dexp sexp)
-    = do (gd, d) <- expToMem dexp
-         (gs, s) <- expToIR sexp
-         return $ gd <*> gs
-                    <*> mkMiddle (A.MovIRtoM pos s d)
+    = mcut $ msum [
+       -- for *(x) += y
+       do let parts = flattenOp I.OpAdd sexp
+          let dexp' = I.Load pos dexp
+          guard $ length parts > 1
+          let rest = delete dexp' parts
+          guard $ length rest < length parts
+          let sumrest = foldl1 (I.BinOp pos I.OpAdd) rest
+          (gd, d) <- expToMem dexp
+          (gs', s') <- expToIR sumrest
+          return $ gd <*> gs'
+                     <*> mkMiddle (A.ALU_IRtoM pos A.Add s' d)
+      -- for *(x) -= y
+      ,do I.BinOp pos' I.OpSub expa expb <- return sexp
+          guard $ I.Load pos dexp == expa
+          (gd, d) <- expToMem dexp
+          (gs, s) <- expToIR expb
+          return $ gd <*> gs
+                     <*> mkMiddle (A.ALU_IRtoM pos A.Sub s d)
+      -- for everything else
+      ,do (gd, d) <- expToMem dexp
+          (gs, s) <- expToIR sexp
+          return $ gd <*> gs
+                     <*> mkMiddle (A.MovIRtoM pos s d)
+      ]
 instToAsm (I.Call pos d name args)
-    = do (gs, vars) <- unzip `fmap` mapM expToIRM args
-         return $ catGraphs gs
-                    <*> genPushRegs pos A.callerSaved
-                    <*> genSetArgs pos vars
+    = do gargs <- genSetArgs pos args
+         return $ gargs
+                    <*> genSetSP pos args
                     <*> mkMiddle (A.Call pos (length args) (A.Imm32Label name 0))
                     <*> genResetSP pos args
-                    <*> genPopRegs pos A.callerSaved
                     <*> mkMiddle (A.mov pos (A.MReg A.RAX) (A.SReg $ show d))
 instToAsm (I.Callout pos d name args)
-    = do (gs, vars) <- unzip `fmap` mapM expToIRM args
-         return $ catGraphs gs
-                    <*> genPushRegs pos A.callerSaved
-                    <*> mkMiddle (A.Realign pos (max 0 ((length args) - 6)))
-                    <*> genSetArgs pos vars
+    = do gargs <- genSetArgs pos args
+         return $ gargs
                     <*> mkMiddle (A.mov pos (A.Imm32 0) (A.MReg A.RAX))
+                    <*> genSetSP pos args
                     <*> mkMiddle (A.Callout pos (length args) (A.Imm32Label name 0))
-                    <*> mkMiddle (A.Unrealign pos)
                     <*> genResetSP pos args
-                    <*> genPopRegs pos A.callerSaved
                     <*> mkMiddle (A.mov pos (A.MReg A.RAX) (A.SReg $ show d))
 instToAsm (I.Branch pos l)
     = return $ mkLast $ A.Jmp pos (A.Imm32BlockLabel l 0)
@@ -149,41 +166,59 @@ instToAsm (I.CondBranch pos cexp tl fl)
     = do (g, flag) <- expToFlag cexp
          return $ g <*> (mkLast $ A.JCond pos flag (A.Imm32BlockLabel tl 0) fl)
 instToAsm (I.Return pos fname Nothing)
-    = return $ genPopRegs pos A.calleeSaved
-               <*> (mkMiddle $ A.Leave pos)
+    = return $ --genPopRegs pos A.calleeSaved
+               (mkMiddle $ A.Leave pos 0)
                <*> (mkLast $ A.Ret pos False)
 instToAsm (I.Return pos fname (Just exp))
     = do (g, irm) <- expToIRM exp
          return $ g <*> mkMiddle (A.MovIRMtoR pos irm (A.MReg A.RAX))
-                    <*> genPopRegs pos A.calleeSaved
-                    <*> (mkMiddle $ A.Leave pos)
+--                    <*> genPopRegs pos A.calleeSaved
+                    <*> (mkMiddle $ A.Leave pos 0)
                     <*> mkLast (A.Ret pos True)
 instToAsm (I.Fail pos)
     = return $ mkMiddles [ A.mov pos (A.Imm32 1) (A.MReg A.RDI)
                          , A.mov pos (A.Imm32 0) (A.MReg A.RAX)
-                         , A.Realign pos 0
+--                         , A.Realign pos 0
                          , A.Callout pos 1 (A.Imm32Label "exit" 0) ]
                <*> mkLast (A.ExitFail pos)
 
-genSetArgs :: SourcePos -> [A.OperIRM] -> Graph A.Asm O O
-genSetArgs pos args = catGraphs $ map genset $ reverse (zip args A.argOrder)
-    where genset (a, Nothing) = mkMiddle $ A.Push pos a
-          genset (a, Just d) = mkMiddle $ A.MovIRMtoR pos a (A.MReg d)
+genSetArgs :: SourcePos -> [MidIRExpr] -> CGM (Graph A.Asm O O)
+genSetArgs pos args = do gs <- mapM genset $ reverse (zip args locs)
+                         return $ catGraphs gs
+    where genset (arg, Left m) = do (gs, a) <- expToIR arg
+                                    return $ gs <*> (mkMiddle $ A.MovIRtoM pos a m)
+          genset (arg, Right r) = do (gs, a) <- expToIRM arg
+                                     return $ gs <*> (mkMiddle $ A.MovIRMtoR pos a r)
+          nargs' = max 0 (length args - 6)
+          locs = A.argStoreLocations $ (negate $ toNearestSafeSP (length args)) -- + (fromIntegral $ 8*nargs')
+
+genSetSP :: SourcePos -> [MidIRExpr] -> Graph A.Asm O O
+genSetSP pos args = if sp == 0
+                    then emptyGraph
+                    else mkMiddle $
+                         A.ALU_IRMtoR pos A.Sub
+                              (A.IRM_I $ A.Imm32 sp)
+                              (A.MReg A.RSP)
+    where sp = toNearestSafeSP $ length args
 genResetSP :: SourcePos -> [MidIRExpr] -> Graph A.Asm O O
-genResetSP pos args = if length args - 6 > 0
-                      then mkMiddle $
+genResetSP pos args = if sp == 0
+                      then emptyGraph
+                      else mkMiddle $
                            A.ALU_IRMtoR pos A.Add
-                                (A.IRM_I $ A.Imm32 $
-                                  fromIntegral $ 8 * (length args - 6))
+                                (A.IRM_I $ A.Imm32 sp)
                                 (A.MReg A.RSP)
-                      else GNil
+    where sp = toNearestSafeSP $ length args
+
+toNearestSafeSP :: Int -> Int32
+toNearestSafeSP nargs = fromIntegral $ i + (i `rem` (8*2))
+    where i = 8 * max 0 (nargs - 6)
 
 genLoadArgs :: SourcePos -> [VarName] -> Graph A.Asm O O
 genLoadArgs pos args = catGraphs $ map genload $ zip args A.argLocation
     where genload (a, Right reg)
               = mkMiddle $ A.MovIRMtoR pos (A.IRM_R reg) (A.SReg $ show a)
-          genload (a, Left mem)
-              = mkMiddle $ A.MovIRMtoR pos (A.IRM_M mem) (A.SReg $ show a)
+          genload (a, Left spillLoc)
+              = mkMiddle $ A.Reload pos spillLoc (A.SReg $ show a)
 
 genPushRegs :: SourcePos -> [A.X86Reg] -> Graph A.Asm O O
 genPushRegs pos regs = catGraphs $ map genpush regs
@@ -200,14 +235,14 @@ expITo' f m = do a <- m
                  return $ (GNil, f a)
 
 expToIRM :: MidIRExpr -> CGM (Graph A.Asm O O, A.OperIRM)
-expToIRM e = expITo' A.IRM_I (expToI e)
+expToIRM e = mcut $ expITo' A.IRM_I (expToI e)
              `mplus` expTo' A.IRM_M (expToM e)
              `mplus` expTo' A.IRM_R (expToR e)
 expToIR :: MidIRExpr -> CGM (Graph A.Asm O O, A.OperIR)
-expToIR e = expITo' A.IR_I (expToI e)
+expToIR e = mcut $ expITo' A.IR_I (expToI e)
             `mplus` expTo' A.IR_R (expToR e)
 expToRM :: MidIRExpr -> CGM (Graph A.Asm O O, A.OperRM)
-expToRM e = expTo' A.RM_M (expToM e)
+expToRM e = mcut $ expTo' A.RM_M (expToM e)
             `mplus` expTo' A.RM_R (expToR e)
 
 withNode :: MidIRExpr -> CGM MidIRExpr
@@ -337,11 +372,11 @@ expToR e = mcut $ msum rules
                                           , A.Shl pos (A.Imm8 $ fromIntegral logb') (A.RM_R dr) ]
                           , dr )
               , do I.BinOp pos I.OpMul expa expb <- withNode e
-                   b <- expToI expb
-                   (ga, a) <- expToRM expa
+                   a <- expToI expa
+                   (gb, b) <- expToRM expb
                    dr <- genTmpReg
-                   return ( ga
-                            <*> mkMiddle (A.IMulImm pos b a dr)
+                   return ( gb
+                            <*> mkMiddle (A.IMulImm pos a b dr)
                           , dr )
               , do I.BinOp pos I.OpMul expa expb <- withNode e
                    (ga, a) <- expToIRM expa
@@ -363,12 +398,12 @@ expToR e = mcut $ msum rules
               ]
 
 expToMem :: MidIRExpr -> CGM (Graph A.Asm O O, A.MemAddr)
-expToMem e = do let exp = flattenOp I.OpAdd e
-                (exp', disp) <- disp exp
-                (exp'', gind, ind, sc) <- getScalar exp'
-                (gbase, base) <- getBase exp''
-                let mem = A.MemAddr base disp ind sc
-                return (gind <*> gbase, mem)
+expToMem e = mcut $ do let exp = flattenOp I.OpAdd e
+                       (exp', disp) <- disp exp
+                       (exp'', gind, ind, sc) <- getScalar exp'
+                       (gbase, base) <- getBase exp''
+                       let mem = A.MemAddr base disp ind sc
+                       return (gind <*> gbase, mem)
     where
       disp exp = msum
                  [ -- do not deal with labels here.  They should be leaq'd to work on macs.
@@ -494,22 +529,22 @@ labelToAsmOut macmode graph (lbl, mnlabel)
         show' x = if macmode
                   then case x of
                          A.Callout pos args (A.Imm32Label s 0)
-                             -> show $ A.Callout pos args (A.Imm32Label ("_" ++ s) 0)
-                         A.Realign pos nstackargs
-                             -> let code=[ A.mov pos (A.MReg A.RSP) (A.MReg A.R12)
-                                         , A.ALU_IRMtoR pos A.Sub 
-                                                        (A.IRM_I $ A.Imm32 16)
-                                                        (A.MReg A.RSP)
-                                         , A.ALU_IRMtoR pos A.And
-                                                        (A.IRM_I $ A.Imm32 (-10))
-                                                        (A.MReg A.RSP)
-                                         , A.ALU_IRMtoR pos A.Sub
-                                                        (A.IRM_I $ A.Imm32 $ fromIntegral corr)
-                                                        (A.MReg A.RSP) ]
-                                    corr=(nstackargs `mod` 2) * 8
-                                in intercalate "\n" $ map (ind . show) code
-                         A.Unrealign pos
-                             -> show $ A.mov pos (A.MReg A.R12) (A.MReg A.RSP)
+                             -> ind $ show $ A.Callout pos args (A.Imm32Label ("_" ++ s) 0)
+--                          A.Realign pos nstackargs
+--                              -> let code=[ A.mov pos (A.MReg A.RSP) (A.MReg A.R12)
+--                                          , A.ALU_IRMtoR pos A.Sub 
+--                                                         (A.IRM_I $ A.Imm32 16)
+--                                                         (A.MReg A.RSP)
+--                                          , A.ALU_IRMtoR pos A.And
+--                                                         (A.IRM_I $ A.Imm32 (-10))
+--                                                         (A.MReg A.RSP)
+--                                          , A.ALU_IRMtoR pos A.Sub
+--                                                         (A.IRM_I $ A.Imm32 $ fromIntegral corr)
+--                                                         (A.MReg A.RSP) ]
+--                                     corr=(nstackargs `mod` 2) * 8
+--                                 in intercalate "\n" $ map (ind . show) code
+--                          A.Unrealign pos
+--                              -> show $ A.mov pos (A.MReg A.R12) (A.MReg A.RSP)
                          _ -> ind $ show x
                   else ind $ show x
         fallthrough = case mnlabel of
@@ -541,8 +576,10 @@ lowIRToAsm m opts
           , ".globl _main" 
           , "main:"
           , "_main:"
+          , "subq $8, %rsp"
           , "call method_main"
           , "movq $0, %rax"
+          , "addq $8, %rsp"
           , "ret" ]
       ++ ["# methods"]
       ++ (concatMap (showMethod (macMode opts) (lowIRGraph m)) (lowIRMethods m))

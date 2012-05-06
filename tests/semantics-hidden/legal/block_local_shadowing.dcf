@@ -1,0 +1,11 @@
+class Program
+{
+    void foo(int x) {
+        {
+            int x;
+        }
+    }
+    int main() {
+        foo(10);
+    }  
+}

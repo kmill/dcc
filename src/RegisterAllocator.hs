@@ -1,41 +1,91 @@
-{-# LANGUAGE RankNTypes, GADTs, ScopedTypeVariables #-}
+{-# LANGUAGE RankNTypes, GADTs, ScopedTypeVariables, FlexibleInstances #-}
 
+-- | We kind of follow "Iterated Register Coalescing" by Lal George
+-- and Andrew Appel.
 module RegisterAllocator where 
 
-import qualified Data.Map as Map 
+import qualified Data.Map as M
 import Assembly
 import qualified Assembly as A
+import AliveDead
 import CodeGenerate
 import qualified IR as I
 import Dataflow
+import Dataflow.DeadCodeAsm
 import qualified Data.Set as S
 import Data.List
+import Data.Int
 import Control.Monad.State
 import Compiler.Hoopl
 import Data.Maybe
 import AST (SourcePos, noPosition)
 import Debug.Trace
+import Data.Function
+import Util.NodeLocate
 
+
+dotrace = False
+
+trace' a b = if dotrace then trace a b else b 
+
+-- | Main entry point to allocating registers for the IR
 regAlloc :: LowIRRepr -> I.GM LowIRRepr
-regAlloc (LowIRRepr fields strs meths graph)
-    = do graph'' <- evalStupidFuelMonad (collectSpill mlabels graph') 22222222
+regAlloc lir
+    = do LowIRRepr fields strs meths graph <- evalStupidFuelMonad (performDeadAsmPass lir) 2222222
+         let GMany _ body _ = graph
+             mlabels = map I.methodEntry meths
+         massgraph <- evalStupidFuelMonad (massageGraph mlabels graph) 22222222
+         --graph' <- error $ I.graphToGraphViz show massgraph
+         let graph' = foldl (flip id) massgraph (map (doRegAlloc freeSpillLocs) mlabels)
+         graph'' <- evalStupidFuelMonad (collectSpill mlabels graph') 22222222
          return $ LowIRRepr fields strs meths graph''
-      where GMany _ body _ = graph
-            graph' = foldl (|*><*|) emptyClosedGraph bodies
-            bodies = map f (mapElems body)
-            f :: Block Asm C C -> Graph Asm C C
-            f block = mkFirst e
-                      <*> catGraphs (map withSpills inner)
-                      <*> mkLast x
-                where (me, inner, mx) = blockToNodeList block
-                      e :: Asm C O
-                      x :: Asm O C
-                      e = case me of
-                            JustC e' -> e'
-                      x = case mx of
-                            JustC x' -> x'
-            mlabels = map I.methodEntry meths
 
+-- | Inserts moves for each fixed register so that we can properly
+-- spill them.  This is run before register allocation itself.
+massageGraph :: [Label] -> Graph A.Asm C C -> RM (Graph A.Asm C C)
+massageGraph mlabels graph
+    = do (g, _ ,_) <- analyzeAndRewriteFwd
+                      massageGraphPass
+                      (JustC mlabels)
+                      graph
+                      (mapFromList (map (\l -> (l, ())) mlabels))
+         return g
+    where
+      massageGraphPass :: FuelMonad m => FwdPass m Asm ()
+      massageGraphPass = FwdPass
+                         { fp_lattice = noLattice
+                         , fp_transfer = noTransfer
+                         , fp_rewrite = mkFRewrite3 mCO mOO mOC }
+      noLattice :: DataflowLattice ()
+      noLattice = DataflowLattice
+                  { fact_name = "no lattice"
+                  , fact_bot = ()
+                  , fact_join = add }
+              where add _ (OldFact old) (NewFact new) = (NoChange, ())
+      noTransfer :: FwdTransfer Asm ()
+      noTransfer = mkFTransfer3 g g' g''
+          where 
+            g e f = f
+            g' e f = f
+            g'' e f = mkFactBase noLattice $ zip (successors e) (repeat f)
+      
+      mkMove pos r = MovIRMtoR pos (IRM_R r) r
+      mkMoves pos regs = mkMiddles [mkMove pos r | r <- nub regs, r /= MReg RSP]
+      ifNotNull l x = return $ if null l then Nothing else Just x
+      
+      mCO n f = ifNotNull defined $ mkFirst n <*> mkMoves pos defined
+          where (used, defined) = getFixed n
+                pos = noPosition
+      mOO n f = ifNotNull (used ++ defined) $
+                mkMoves pos used <*> mkMiddle n <*> mkMoves pos defined
+          where (used, defined) = getFixed n
+                pos = noPosition
+      mOC n f = ifNotNull used $ mkMoves pos used <*> mkLast n
+          where (used, defined) = getFixed n
+                pos = noPosition
+
+
+-- | Collects and rewrites the spills in the graph to moves.
 collectSpill :: [Label] -> Graph A.Asm C C -> RM (Graph A.Asm C C)
 collectSpill mlabels graph
     = do (_, f, _) <- analyzeAndRewriteBwd
@@ -51,15 +101,16 @@ collectSpill mlabels graph
          return g
 
 
-
+-- | Gets the list of spills for each entry point. TODO: make it also
+-- find live ranges for spills so we can reuse stack space.
 collectSpillPass :: (CheckpointMonad m, FuelMonad m)
-                    => BwdPass m A.Asm (S.Set String)
+                    => BwdPass m A.Asm (S.Set SpillLoc)
 collectSpillPass = BwdPass
                    { bp_lattice = getSpillLattice
                    , bp_transfer = getSpillTransfer
                    , bp_rewrite = noBwdRewrite }
     where
-      getSpillLattice :: DataflowLattice (S.Set String)
+      getSpillLattice :: DataflowLattice (S.Set SpillLoc)
       getSpillLattice = DataflowLattice
                         { fact_name = "spill lattice"
                         , fact_bot = S.empty
@@ -69,29 +120,30 @@ collectSpillPass = BwdPass
                     where j = S.union new old
                           ch = changeIf $ S.size j > S.size old
 
-      getSpillTransfer :: BwdTransfer A.Asm (S.Set String)
+      getSpillTransfer :: BwdTransfer A.Asm (S.Set SpillLoc)
       getSpillTransfer = mkBTransfer3 usedCO usedOO usedOC
           where
-            usedCO :: A.Asm C O -> (S.Set String) -> (S.Set String)
+            usedCO :: A.Asm C O -> (S.Set SpillLoc) -> (S.Set SpillLoc)
             usedCO _ f = f
 
-            usedOO :: A.Asm O O -> (S.Set String) -> (S.Set String)
+            usedOO :: A.Asm O O -> (S.Set SpillLoc) -> (S.Set SpillLoc)
             usedOO (A.Spill _ _ s) f = S.insert s f
             usedOO (A.Reload _ s _) f = S.insert s f
             usedOO _ f = f
 
-            usedOC :: A.Asm O C -> FactBase (S.Set String) -> (S.Set String)
+            usedOC :: A.Asm O C -> FactBase (S.Set SpillLoc) -> (S.Set SpillLoc)
             usedOC x f = S.unions $ map
                          ((fromMaybe S.empty) . (flip lookupFact f))
                          (successors x)
 
+-- | Rewrites the spills to moves.
 rewriteSpillPass :: (CheckpointMonad m, FuelMonad m) =>
-                    FactBase (S.Set String) -> FwdPass m Asm (S.Set String)
+                    FactBase (S.Set SpillLoc) -> FwdPass m Asm (S.Set SpillLoc)
 rewriteSpillPass fb = FwdPass 
                       { fp_lattice = noLattice
                       , fp_transfer = sTransfer
                       , fp_rewrite = rewriteSpill }
-    where noLattice :: DataflowLattice (S.Set String)
+    where noLattice :: DataflowLattice (S.Set SpillLoc)
           noLattice = DataflowLattice
                       { fact_name = "simple replicate"
                       , fact_bot = S.empty
@@ -99,204 +151,1066 @@ rewriteSpillPass fb = FwdPass
               where add _ (OldFact old) (NewFact new) = (ch, j)
                         where j = S.union new old
                               ch = changeIf $ S.size j > S.size old
-          sTransfer :: FwdTransfer Asm (S.Set String)
+          sTransfer :: FwdTransfer Asm (S.Set SpillLoc)
           sTransfer = mkFTransfer3 g g' g''
               where 
-                g :: Asm C O -> S.Set String -> S.Set String
-                g (Enter p l _) _ = fromMaybe S.empty (lookupFact l fb)
+                g :: Asm C O -> S.Set SpillLoc -> S.Set SpillLoc
+                g (Enter p l _ _) _ = fromMaybe S.empty (lookupFact l fb)
                 g e f = f
                 g' e f = f
                 g'' e f = mkFactBase noLattice $ zip (successors e) (repeat f)
 
-          rewriteSpill :: forall m. FuelMonad m => FwdRewrite m Asm (S.Set String)
+          rewriteSpill :: forall m. FuelMonad m => FwdRewrite m Asm (S.Set SpillLoc)
           rewriteSpill = mkFRewrite d
               where 
-                d :: Asm e x -> S.Set String -> m (Maybe (Graph Asm e x))
+                d :: Asm e x -> S.Set SpillLoc -> m (Maybe (Graph Asm e x))
                 d (A.Spill pos reg s) f
-                    = return $ Just $ mkMiddle $ A.mov pos reg mem
-                      where offset = negate (8 + 8 * (fromJust $ elemIndex s f'))
-                            f' = S.toAscList (S.insert s f)
-                            mem = A.MemAddr (Just $ A.MReg A.RBP)
-                                  (A.Imm32 $ fromIntegral offset)
-                                  Nothing A.SOne
+                    = return $ Just $ mkMiddle $ A.mov pos reg (toMem s f)
                 d (A.Reload pos s reg) f
-                    = return $ Just $ mkMiddle $ A.mov pos mem reg
-                      where offset = negate (8 + 8 * (fromJust $ elemIndex s f'))
-                            f' = S.toAscList (S.insert s f)
-                            mem = A.MemAddr (Just $ A.MReg A.RBP)
-                                  (A.Imm32 $ fromIntegral offset)
-                                  Nothing A.SOne
-                d (A.Enter pos l x) f = if x' == x
-                                        then return Nothing
-                                        else return $ Just $ mkFirst $
-                                             A.Enter pos l x'
-                    where x' = fromIntegral $ 8 * (S.size f) + 8
+                    = return $ Just $ mkMiddle $ A.mov pos (toMem s f) reg
+                d (A.Enter pos l n x) f = if x' == x
+                                          then return Nothing
+                                          else return $ Just $ mkFirst $
+                                               A.Enter pos l n x'
+                    where x' = toNearestSafeSP $ fromIntegral $ 8 * (countSpillID f)
+                d (A.Leave pos x) f = if x' == x
+                                      then return Nothing
+                                      else return $ Just $ mkMiddle $
+                                           A.Leave pos x'
+                    where x' = toNearestSafeSP $ fromIntegral $ 8 * (countSpillID f)
+
                 d _ f = return Nothing
+                
+                countSpillID f = length $ normalSpills f
+                normalSpills f = S.toList $ S.filter (\s -> case s of
+                                                              SpillID i -> True
+                                                              SpillArg _ -> False) f
+
+                toMem :: SpillLoc -> S.Set SpillLoc -> MemAddr
+                toMem sl@(SpillID i) f = A.MemAddr (Just $ A.MReg A.RSP)
+                                         (A.Imm32 $ fromIntegral (8 * fromJust (findIndex (==sl) $ normalSpills f)))
+                                         Nothing A.SOne
+                toMem (SpillArg r) f = A.MemAddr (Just $ A.MReg A.RSP)
+                                       (A.Imm32 $ fromIntegral (8*r + 16 + 8 * countSpillID f))
+                                       Nothing A.SOne
+                
+                toNearestSafeSP :: Int32 -> Int32
+                toNearestSafeSP i = i + ((i+8) `rem` (8*2))
 
 
+---
+--- Webs
+---
+      
+data DU = DU { duReg :: Reg
+             , duSpilled :: Bool
+             , duMoveNodes :: S.Set MovePtr
+             , duPrecolored :: Bool
+             , duDef :: NodePtr
+             , duExtent :: S.Set NodePtr
+             , duUse :: NodePtr }
+        | DUv { duReg :: Reg
+              , duSpilled :: Bool
+              , duPrecolored :: Bool
+              , duDef :: NodePtr } -- ^ Represents a register which is
+                                   -- defined but not used.  It should
+                                   -- still be given a chance to
+                                   -- interfere!
+          deriving (Eq, Ord, Show)
+data Web = Web { webReg :: Reg
+               , webSpilled :: Bool
+               , webMoveNodes :: S.Set MovePtr
+               , webPrecolored :: Bool
+               , webDUs :: S.Set DU
+               , webDefs :: S.Set NodePtr
+               , webExtent :: S.Set NodePtr
+               , webUses :: S.Set NodePtr }
+         deriving (Show, Eq, Ord)
 
-freeRegs :: [Reg]
-freeRegs = map MReg [R10, R11, R12, R13, R14, R15] -- put this in optimal order!
+-- | A short web is one which shouldn't be spilled because it's just so short.
+isShortWeb :: Web -> Bool
+isShortWeb w = S.null $ webExtent w
 
-getSRegs :: [Reg] -> [String]
-getSRegs [] = []
-getSRegs ((SReg s):xs) = s:(getSRegs xs)
-getSRegs (_:xs) = getSRegs xs
+type MovePtr = NodePtr
 
-withSpills :: Asm O O -> Graph Asm O O
-withSpills expr = reloads <*> expr' <*> spills
+-- | Represents the reg to reg moves
+type RRFact = S.Set (MovePtr, Reg, Reg)
+type WebID = Int
+
+data InterfGraph = InterfGraph
+    { igIDToWeb :: M.Map WebID Web
+    , igAdjLists :: M.Map WebID (S.Set WebID)
+    , igRRMoves :: RRFact
+    , igFixedRegs :: M.Map Reg (S.Set WebID)
+    }
+                   deriving Show
+
+type InterfGraphs = M.Map Label InterfGraph
+
+-- | Adds an edge (commutitatively) to the interference graph.
+addInterfEdge :: WebID -> WebID -> InterfGraph -> InterfGraph
+addInterfEdge u v g = g { igAdjLists = add u v $ add v u $ igAdjLists g }
+    where add a b adj = M.adjust (S.insert b) a adj
+
+-- | Checks whether two webs interfere
+wInterf :: Web -> Web -> Bool
+wInterf (Web r1 _ _ _ dus1 ds1 ex1 us1) (Web r2 _ _ _ dus2 ds2 ex2 us2)
+    = if notUsable r1 || notUsable r2 -- basically, we don't want RSP to interfere
+      then False
+      else (S.union ds1 ex1 `ints` S.union ds2 ex2)
+               || (S.union ex1 us1 `ints` S.union ex2 us2)
+      where ints s1 s2 = not $ S.null $ S.intersection s1 s2
+            notUsable (MReg r) = r `notElem` usableRegisters
+            notUsable (SReg _) = False
+
+
+-- | Gets the degree of a web in the interference graph.
+webDegree :: WebID -> InterfGraph -> Int
+webDegree i g = S.size $ igAdjLists g M.! i
+
+-- | Gets the list of web ids from an interference graph.
+igWebIDs :: InterfGraph -> [WebID]
+igWebIDs g = M.keys $ igIDToWeb g
+
+-- | Gets the web by id from the interference graph.
+igGetWeb :: WebID -> InterfGraph -> Web
+igGetWeb i g = igIDToWeb g M.! i
+
+-- | (dus, tomatch, extents)
+type DUBuildFact = (S.Set DU, S.Set (Reg, Bool, NodePtr), S.Set (Reg, NodePtr))
+
+duLattice :: DataflowLattice DUBuildFact
+duLattice = DataflowLattice
+            { fact_name = "du lattice"
+            , fact_bot = (S.empty, S.empty, S.empty)
+            , fact_join = add }
+    where add _ (OldFact (oldDUs, oldUndefs, oldExtents)) (NewFact (newDUs, newUndefs, newExtents))
+              = (ch, (dus', undefs', extents'))
+              where dus' = S.union oldDUs newDUs
+                    undefs' = S.union oldUndefs newUndefs
+                    extents' = S.union oldExtents newExtents
+                    bigger = (>) `on` S.size
+                    ch = changeIf (undefs' `bigger` oldUndefs
+                                   || dus' `bigger` oldDUs
+                                   || extents' `bigger` newExtents)
+
+duTransfer :: BwdTransfer (PNode Asm) DUBuildFact
+duTransfer = mkBTransfer3 fe fm fx
+    where fe :: (PNode Asm) C O -> DUBuildFact -> DUBuildFact
+          fe (PNode l n) f
+              = handle l False S.empty (getAliveDead n) (getPinned n) (getFixed n) f
+                
+          fm :: (PNode Asm) O O -> DUBuildFact -> DUBuildFact
+          fm (PNode l n@(Spill{})) f
+              = handle l True S.empty (getAliveDead n) (getPinned n) (getFixed n) f
+          fm (PNode l n@(Reload{})) f
+              = handle l True S.empty (getAliveDead n) (getPinned n) (getFixed n) f
+          fm (PNode l n@(MovIRMtoR _ (IRM_R _) _)) f
+              = handle l False (S.singleton l) (getAliveDead n) (getPinned n) (getFixed n) f
+          fm (PNode l n) f
+              = handle l False S.empty (getAliveDead n) (getPinned n) (getFixed n) f
+                
+          fx :: (PNode Asm) O C -> FactBase DUBuildFact -> DUBuildFact
+          fx (PNode l n) fb
+              = handle l False S.empty (getAliveDead n) (getPinned n) (getFixed n)
+                (joinOutFacts duLattice n fb)
+          
+          handle :: NodePtr
+                 -> Bool -- ^ whether it's "spill-related"
+                 -> S.Set NodePtr -- ^ the set of associated moves
+                 -> AliveDead -- ^ the alive/dead (i.e., uses/defs) for the node
+                 -> [Reg] -- ^ the pinned registers for the node
+                 -> ([Reg], [Reg]) -- ^ the fixed uses/defs for the node
+                 -> DUBuildFact
+                 -> DUBuildFact
+          handle l sr mr (uses, defs) pinned (fixedUses, fixedDefs) (dus, tomatch, extents)
+              = let withdef d = S.map makeDU rps
+                        where rps = S.filter (\(reg, fixed, ptr) -> reg == d) tomatch
+                              makeDU (reg, fixed, ptr)
+                                  = DU reg sr mr (fixed || reg `elem` fixedDefs) l (ptrs reg) ptr
+                    -- takes the NodePtrs from the current extents for a given register
+                    ptrs r = S.map snd $ S.filter (\(reg, ptr) -> reg == r) extents
+                    -- we can remove things which have been defined
+                    tomatch' = S.filter (\(reg, fixed, ptr) -> reg `notElem` defs) tomatch
+                    -- we want to add the used things to the tomatch list
+                    dtomatch = S.fromList $ map (\r -> (r, r `elem` fixedUses, l)) uses
+                    -- we add entries for things which are defined but
+                    -- not used so caller-saved registers work
+                    ddvirtused = S.fromList [DUv reg sr (reg `elem` fixedDefs) l
+                                            | reg <- defs, reg `S.notMember` matchregs]
+                    matchregs = S.map (\(reg, fixed, ptr) -> reg) tomatch
+                    -- these are the matched definitions to put in the
+                    -- dus set
+                    ddu = S.unions $ map withdef defs
+                    -- some variables are "pinned" across use/def boundaries
+                    dduPinned = S.fromList $ map (\reg -> DU reg False S.empty False l S.empty l) pinned
+                    alive = S.map fst extents
+                    -- we clear the extents list of things which have been defined
+                    extents' = S.filter (\(reg, ptr) -> reg `notElem` defs) extents
+                    -- and extend the list for those which are still there
+                    dextents = S.map (\(reg, fixed, ptr) -> (reg, l)) tomatch'
+                               `S.union` (S.fromList $ map (\reg -> (reg, l)) pinned)
+                in ( S.unions [dus, ddu, dduPinned, ddvirtused]
+                   , S.unions [tomatch', dtomatch]
+                   , S.unions [extents', dextents] )
+
+duPass :: Monad m => BwdPass m (PNode Asm) DUBuildFact
+duPass = BwdPass
+         { bp_lattice = duLattice
+         , bp_transfer = duTransfer
+         , bp_rewrite = noBwdRewrite }
+
+collectDU :: [Label] -> Graph (PNode Asm) C C -> M.Map Label (S.Set DU)
+collectDU mlabels graph
+    = M.fromList $ map (\l -> (l, getDUs $ fromJust $ lookupFact l f)) mlabels
+      where f :: FactBase DUBuildFact
+            f = I.runGM $ evalStupidFuelMonad getf 2222222
+            getf :: RM (FactBase DUBuildFact)
+            getf = do (_, f, _) <- analyzeAndRewriteBwd
+                                   duPass
+                                   (JustC mlabels)
+                                   graph
+                                   mapEmpty
+                      return f
+            getDUs (a, b, c) = a
+
+collectWebs :: S.Set DU -> [Web]
+collectWebs dus = iteration' webs webs
+    where webs = map duToWeb (S.toList dus)
+          
+          duToWeb :: DU -> Web
+          duToWeb du@(DU r sr mr fixed d ex u)
+              = Web r sr mr (r == MReg RSP || fixed)
+                (S.singleton du) (S.singleton d) ex (S.singleton u)
+          duToWeb du@(DUv r sr fixed d)
+              = Web r sr S.empty (r == MReg RSP || fixed) 
+                (S.singleton du) (S.singleton d) S.empty S.empty
+          
+          -- | Checks whether two webs should be coalesced because
+          -- they have the same register and because they either share
+          -- a definition or use.  If they are precolored webs, then
+          -- they can be coalesced by the fact they have the same
+          -- register.
+          wToCoalesce :: Web -> Web -> Bool
+          wToCoalesce (Web r1 sr1 mr1 pc1 dus1 ds1 ex1 us1)
+                      (Web r2 sr2 mr2 pc2 dus2 ds2 ex2 us2)
+              = r1 == r2 && ((pc1 && pc2)
+                             || not (S.null $ ds1 `S.intersection` ds2)
+                             || not (S.null $ us1 `S.intersection` us2))
+          
+          wUnion :: Web -> Web -> Web
+          wUnion (Web r1 sr1 mr1 pc1 dus1 ds1 ex1 us1)
+                 (Web r2 sr2 mr2 pc2 dus2 ds2 ex2 us2)
+              = Web 
+                { webReg = r1 
+                , webSpilled = sr1 || sr2
+                , webMoveNodes = mr1 `S.union` mr2
+                , webPrecolored = pc1 || pc2
+                , webDUs = dus1 `S.union` dus2
+                , webDefs = ds1 `S.union` ds2 
+                , webExtent = ex1 `S.union` ex2 
+                , webUses = us1 `S.union` us2 }
+          
+          iteration'' :: Web -> [Web] -> Maybe [Web]
+          iteration'' w webs
+              = let (int, nint) = partition (wToCoalesce w) webs
+                in case length int of
+                     1 -> Nothing
+                     _ -> Just $ (foldl1 wUnion int):nint
+          
+          -- | Not really efficient... Iteratively coalesces webs
+          -- which should be coalesced by wToCoalesce.
+          iteration' :: [Web] -> [Web] -> [Web]
+          iteration' [] webs = webs
+          iteration' (w:tocheck) webs
+              = case iteration'' w webs of
+                  Nothing -> iteration' tocheck webs
+                  Just webs' -> iteration' webs' webs'
+
+-- | Builds the interference graph for all the webs by running wInterf
+-- on all pairs of webs.
+makeInterfGraph :: [Web] -> RRFact -> InterfGraph
+makeInterfGraph webs rrmoves = InterfGraph idToWebMap mkAdjs rrmoves fixedRegs
+    where idToWeb = zip [0..] webs
+          idToWebMap = M.fromList idToWeb
+          mkAdj i w = S.fromList $ do
+                        (j, w') <- idToWeb
+                        guard $ i /= j
+                        guard $ wInterf w w'
+                        return j
+          mkAdjs = M.fromList $ do
+                     (i, w) <- idToWeb
+                     return (i, mkAdj i w)
+          fixedRegs = M.mapKeysWith S.union webReg $
+                      M.fromList $ do (i, w) <- idToWeb
+                                      return (w, S.singleton i)
+                                      
+--          webToInt = zip webs [0..]
+--          webToIntMap = M.fromList webToInt
+--           -- | This is a map from the web number of fixed webs to a
+--           -- list of all the web numbers webs with that same register
+--           -- interfere with.  This helps make it appear like the webs
+--           -- for a particular fixed register are all one big web.
+--           fixedClasses :: M.Map Int [Int]
+--           fixedClasses = M.fromList [(i, S.toList $ combinedFixed M.! (webReg w))
+--                                     | (i, w) <- intToWeb, webFixed w]
+--           -- | This is a map from fixed webs to their adjacency lists.
+--           fixedWebAdjs :: M.Map Web (S.Set Int)
+--           fixedWebAdjs = M.map (mkAdjs M.!) $ M.filterWithKey (\k v -> webFixed k) webToIntMap
+--           -- | This is a mapping from fixed registers to the union
+--           -- of all of the webs those registers interfere with.
+--           combinedFixed :: M.Map Reg (S.Set Int)
+--           combinedFixed = M.mapKeysWith S.union webReg fixedWebAdjs
+          
+--           augAdjs :: M.Map Int (S.Set Int)
+--           augAdjs = M.mapWithKey f mkAdjs
+--               where f k v
+--                         | webFixed web = case M.lookup (webReg web) combinedFixed of
+--                                            Just adjs -> v `S.union` adjs
+--                                            Nothing -> v
+--                         | otherwise = S.fromList $ do i <- S.toList v
+--                                                       M.findWithDefault [i] i fixedClasses
+--                         where web = intToWebMap M.! k
+
+-- | Finds all register-to-register moves in the graph.
+getRegRegMoves :: [Label] -> Graph (PNode Asm) C C -> M.Map Label RRFact
+getRegRegMoves mlabels graph
+    = M.fromList $ map (\l -> (l, fromJust $ lookupFact l facts)) mlabels
+    where rrLattice :: DataflowLattice RRFact
+          rrLattice = DataflowLattice
+                      { fact_name = "rrLatice"
+                      , fact_bot = S.empty
+                      , fact_join = add }
+              where add _ (OldFact s1) (NewFact s2) = (ch, s')
+                        where s' = S.union s1 s2
+                              ch = changeIf $ S.size s' > S.size s1
+          rrTransfer :: BwdTransfer (PNode Asm) RRFact
+          rrTransfer = mkBTransfer3 fe fm fx
+              where fe :: PNode Asm C O -> RRFact -> RRFact
+                    fe _ f = f
+                    fm :: PNode Asm O O -> RRFact -> RRFact
+                    fm (PNode l (MovIRMtoR _ (IRM_R sreg) dreg)) f
+                        = S.insert (l, sreg, dreg) f
+                    fm _ f = f
+                    fx :: PNode Asm O C -> FactBase RRFact -> RRFact
+                    fx n fs = joinOutFacts rrLattice n fs
+          rrPass :: Monad m => BwdPass m (PNode Asm) RRFact
+          rrPass = BwdPass
+                   { bp_lattice = rrLattice
+                   , bp_transfer = rrTransfer
+                   , bp_rewrite = noBwdRewrite }
+          doRR :: RM (FactBase RRFact)
+          doRR = do (_, f, _) <- analyzeAndRewriteBwd
+                                 rrPass
+                                 (JustC mlabels)
+                                 graph
+                                 mapEmpty
+                    return f
+          facts :: FactBase RRFact
+          facts = I.runGM $ evalStupidFuelMonad doRR 2222222
+
+          
+data RWorklists = RWorklists
+    { wInterfGraph :: InterfGraph
+      
+      -- Every web is in exactly one of the following:
+    , wSpillWorklist :: [WebID] -- ^ high-degree webs
+    , wFreezeWorklist :: [WebID] -- ^ low-degree move-related webs
+    , wSimplifyWorklist :: [WebID] -- ^ list of low-degree non-move-related webs
+    , wSpilledWebs :: [WebID] -- ^ webs marked for spilling
+    , wCoalescedWebs :: S.Set WebID -- ^ webs that have been coalesced
+    , wColoredWebs :: M.Map WebID X86Reg -- ^ webs successfully colored
+    , wPrecoloredWebs :: S.Set WebID -- ^ webs which are precolored
+                                     -- and shouldn't be spilled
+    , wSelectStack :: [WebID] -- ^ stack containing temporaries
+      
+    , wCoalescedAlias :: M.Map WebID WebID -- ^ when (u,v) coalesced and v
+                                           -- is in coalesced webs, then
+                                           -- wCoalescedAlias[v]==u
+    , wHaveSpilled :: Bool -- ^ whether a spill has been selected yet
+    , wPreSpillCoalesced :: S.Set WebID -- ^ webs that have been coalesced before the first spill
+    , wPreSpillAlias :: M.Map WebID WebID
+      
+    , wDegrees :: M.Map WebID Int -- ^ web to degree mapping.  fixed
+                                  -- registers have maxBound degree
+      
+      -- Every move is in exactly one of the following
+    , wWorklistMoves :: S.Set MovePtr -- ^ moves enabled for possible coalescing
+    , wCoalescedMoves :: [MovePtr] -- ^ moves that have been coalesced
+    , wConstrainedMoves :: [MovePtr] -- ^ moves whose source and target interfere
+    , wFrozenMoves :: [MovePtr] -- ^ moves that will no longer be considered for coalescing
+    , wActiveMoves :: S.Set MovePtr -- ^ moves not yet ready for coalescing
+      
+    , wMoves :: M.Map MovePtr [WebID] -- ^ a map from move nodes to web ids
+    , wIdealRegs :: M.Map WebID [X86Reg] -- ^ a map from webs to fixed
+                                         -- registers from associated moves
+    }
+                  deriving Show
+
+-- | Updates webMoveNodes to the given value for the web id
+updateWebMoves' :: S.Set MovePtr -> WebID -> RWorklists -> RWorklists
+updateWebMoves' s i wl
+    = wl { wInterfGraph = g { igIDToWeb = M.insert i web' $ igIDToWeb g }}
+    where g = wInterfGraph wl
+          web = igIDToWeb g M.! i
+          web' = web { webMoveNodes = s }
+
+wGetWeb :: WebID -> RWorklists -> Web
+wGetWeb i wl = igGetWeb i (wInterfGraph wl)
+
+getWebMoves' :: WebID -> RWorklists -> S.Set MovePtr
+getWebMoves' i wl = webMoveNodes $ wGetWeb i wl
+
+addToAdjList :: WebID -> WebID -> AM ()
+addToAdjList u v =
+    do g <- gets wInterfGraph
+       let adjs = igAdjLists g
+       when (u /= v && not (v `S.member` (adjs M.! u))) $ do
+         degrees <- gets wDegrees
+         modify $ \wl -> wl { wInterfGraph = addInterfEdge u v g
+                            , wDegrees = inc u $ inc v $ degrees }
+    where inc i m = M.adjust (\d -> if d == maxBound then maxBound else d + 1) i m
+         
+-- | The allocator monad
+type AM = State RWorklists
+
+pushSelect :: WebID -> AM ()
+pushSelect i = modify $ \wl -> wl { wSelectStack = i:(wSelectStack wl) }
+
+popSelect :: AM WebID
+popSelect =  do wl@(RWorklists { wSelectStack = i:is }) <- get
+                put $ wl { wSelectStack = is }
+                return i
+
+
+-- | Takes a web id and gives the current list of adjacent web ids. "Adjacent"
+adjacentWebs :: WebID -> AM (S.Set WebID)
+adjacentWebs i =
+  do g <- gets wInterfGraph
+     select <- gets $ S.fromList . wSelectStack
+     coalesced <- gets wCoalescedWebs
+     return $ (igAdjLists g M.! i) S.\\ (select `S.union` coalesced)
+
+-- | Takes a web id and gives the current list of "move-related" webs. "NodeMoves"
+webMoves :: Int -> AM (S.Set NodePtr)
+webMoves i = 
+    do wmoves <- gets $ getWebMoves' i
+       actives <- gets wActiveMoves
+       worklist <- gets wWorklistMoves
+       return $ wmoves `S.intersection` (actives `S.union` worklist)
+
+-- | Takes a web id and tells whether it's "move-related"
+moveRelated :: WebID -> AM Bool
+moveRelated i = (not . S.null) `fmap` webMoves i
+
+makeWorklists :: InterfGraph -> RWorklists
+makeWorklists g = iter (igWebIDs g) (initWorklists g initMoves moves idealRegs)
+    where iter [] wlists = wlists
+          iter (i:is) wlists
+              | webPrecolored web
+                  = iter is (wlists
+                             { wColoredWebs = M.insert i (x86Reg $ webReg web)
+                                              (wColoredWebs wlists)
+                             , wPrecoloredWebs = S.insert i (wPrecoloredWebs wlists)
+                             , wDegrees = M.insert i maxBound (wDegrees wlists) })
+              | webDegree i g >= numUsableRegisters
+                  = iter is (wlists { wSpillWorklist = i:(wSpillWorklist wlists) })
+              | evalState (moveRelated i) wlists
+                  = iter is (wlists { wFreezeWorklist = i:(wFreezeWorklist wlists) })
+              | otherwise
+                  = iter is (wlists { wSimplifyWorklist = i:(wSimplifyWorklist wlists) })
+              where web = igGetWeb i g
+          initMoves = S.map (\(l,_,_) -> l) $ igRRMoves g
+          moves = M.fromList $ map (\(l,_,_) -> (l, websWithLabel l)) $ S.toList $ igRRMoves g
+          websWithLabel l = M.keys $ M.filter cond $ igIDToWeb g
+              where cond w = l `S.member` (webDefs w) || l `S.member` (webUses w)
+          
+          idealRegs :: M.Map WebID [X86Reg]
+          idealRegs = M.fromList $ do w <- igWebIDs g
+                                      let web = igGetWeb w g
+                                          wmoves = S.toList $ webMoveNodes web
+                                          nwebs = concatMap (moves M.!) wmoves
+                                          mr web (MReg r) = if webPrecolored web then [r] else []
+                                          mr web _ = []
+                                          nregs = do wn <- nwebs
+                                                     let webn = igGetWeb wn g
+                                                     mr webn (webReg webn)
+                                      return (w, nregs)
+                                       
+
+          -- | Sets up everything but the web worklists.
+          initWorklists :: InterfGraph -> S.Set NodePtr -> M.Map NodePtr [WebID] -> M.Map WebID [X86Reg]
+              -> RWorklists
+          initWorklists g wm moves idealRegs
+              = RWorklists
+                { wInterfGraph = g
+                , wSpillWorklist = []
+                , wFreezeWorklist = []
+                , wSimplifyWorklist = []
+                , wSpilledWebs = []
+                , wCoalescedWebs = S.empty
+                , wColoredWebs = M.empty
+                , wPrecoloredWebs = S.empty
+                , wSelectStack = []
+                , wCoalescedAlias = M.empty
+                , wHaveSpilled = False
+                , wPreSpillCoalesced = S.empty
+                , wPreSpillAlias = M.empty
+                , wDegrees = M.fromList $ map (\i -> (i, webDegree i g)) (igWebIDs g)
+                , wWorklistMoves = wm
+                , wCoalescedMoves = []
+                , wConstrainedMoves = []
+                , wFrozenMoves = []
+                , wActiveMoves = S.empty
+                , wMoves = moves
+                , wIdealRegs = idealRegs
+                }
+
+-- | "main"
+doRegAlloc :: SpillLocSupply -> Label -> Graph Asm C C -> Graph Asm C C
+doRegAlloc spillLocs mlabel graph
+    = let pg = toPGraph graph
+          dus = collectDU [mlabel] pg
+          webs = collectWebs (dus M.! mlabel)
+          rrfacts = getRegRegMoves [mlabel] pg
+          interfgraph = makeInterfGraph webs (rrfacts M.! mlabel)
+          initState = makeWorklists interfgraph
+          spilledNodes = evalState (return pg) initState
+          -- | runs simplify/coalesce/freeze/selectspill until work
+          -- lists are empty
+          mainLoop = do wl <- get
+                        let mtodo = msum
+                                    [ do guard $ not (null $ wSimplifyWorklist wl)
+                                         return $ trace' "simplify" simplify
+                                    , do guard $ not (S.null $ wWorklistMoves wl)
+                                         return $ trace' "coalesce" coalesce
+                                    , do guard $ not (null $ wFreezeWorklist wl)
+                                         return $ trace' "freeze" freeze
+                                    , do guard $ not (null $ wSpillWorklist wl)
+                                         return $ trace' "selectSpill" selectSpill
+                                    ]
+                        case mtodo of
+                          Just action -> do action
+                                            mainLoop
+                          Nothing -> return ()
+          main = do trace' ("asm:\n" ++ I.graphToGraphViz show graph ++ "\ninterfgraph\n" ++ outputWebGraph interfgraph ++ "\nmainLoop") mainLoop
+                    trace' "assignColors" assignColors
+                    spilledWebs <- wSpilledWebs `fmap` get
+                    wl <- get
+                    if trace' ("\nspilledWebs: " ++ show spilledWebs ++ " colors: " ++ show (wColoredWebs wl) ++ "\n") $ not $ null spilledWebs
+                       then let (spillLocs', graph') = insertSpills spillLocs pg wl
+                            in return $ doRegAlloc spillLocs' mlabel graph'
+                       else return $ trace' ("done: " ++ show wl) $ rewriteGraph pg wl
+      in evalState main (trace' ("initState: " ++ show initState) initState)
+
+insertSpills :: SpillLocSupply -> Graph (PNode Asm) C C -> RWorklists 
+             -> (SpillLocSupply, Graph Asm C C)
+insertSpills spillLocs pg wl = trace' ("insertSpills: " ++ show toSpill ++ show toReload) (spillLocs', graph')
+    where GMany _ body _ = pg
+          graph' = foldl (|*><*|) emptyClosedGraph bodies
+          bodies = map f (mapElems body)
+          f :: Block (PNode Asm) C C -> Graph Asm C C
+          f block = fe e
+                    <*> catGraphs (map fm inner)
+                    <*> fx x
+              where (me, inner, mx) = blockToNodeList block
+                    e :: (PNode Asm) C O
+                    x :: (PNode Asm) O C
+                    e = case me of
+                          JustC e' -> e'
+                    x = case mx of
+                          JustC x' -> x'
+          
+          fe :: PNode Asm C O -> Graph Asm C O
+          fe (PNode l n) = mkFirst n' <*> mkMiddles (map genSpill defined')
+              where n' = rewriteCoal l n
+                    (used, defined) = getAliveDead n'
+                    defined' = filter (\d -> (l, d) `M.member` toSpill) defined
+                    genSpill reg = Spill noPosition reg (toSpill M.! (l, reg))
+          
+          fm :: PNode Asm O O -> Graph Asm O O
+          fm (PNode l n) = mkMiddles $ map genReload used' ++ [n'] ++ map genSpill defined'
+              where n' = rewriteCoal l n
+--                           MovIRMtoR _ (IRM_R rs) rd
+--                               | -> emptyGraph
+--                           n -> n
+                    (used, defined) = getAliveDead n'
+                    used' = filter (\u -> (l, u) `M.member` toReload) used
+                    defined' = filter (\d -> (l, d) `M.member` toSpill) defined
+                    genReload reg = Reload noPosition (toReload M.! (l, reg)) reg
+                    genSpill reg = Spill noPosition reg (toSpill M.! (l, reg))
+                    
+          fx :: PNode Asm O C -> Graph Asm O C
+          fx (PNode l n) = mkMiddles (map genReload used') <*> mkLast n'
+              where n' = rewriteCoal l n
+                    (used, defined) = getAliveDead n'
+                    used' = filter (\u -> (l, u) `M.member` toReload) used
+                    genReload reg = Reload noPosition (toReload M.! (l, reg)) reg
+                    
+          rewriteCoal l n = mapAsm (ms l) (md l) n
+          ms l r = fromMaybe r $ M.lookup (l, r) usesMap
+          md l r = fromMaybe r $ M.lookup (l, r) defsMap
+          
+          idToWeb = M.toList $ igIDToWeb (wInterfGraph wl)
+          
+          usesMap, defsMap :: M.Map (NodePtr, Reg) Reg
+          usesMap = M.fromList $ do (i, w) <- idToWeb
+                                    let i' = getPreAlias' i wl
+                                        r' = webReg $ (igIDToWeb (wInterfGraph wl)) M.! i'
+                                    u <- S.toList $ webUses w
+                                    return ((u, webReg w), r')
+          defsMap = M.fromList $ do (i, w) <- idToWeb
+                                    let i' = getPreAlias' i wl
+                                        r' = webReg $ (igIDToWeb (wInterfGraph wl)) M.! i'
+                                    u <- S.toList $ webDefs w
+                                    return ((u, webReg w), r')
+          
+          spillLocs' = drop (length $ spilled') spillLocs
+          
+          slmap :: M.Map WebID SpillLoc
+          slmap = M.fromList $ zip spilled' spillLocs
+          
+          spilled' :: [WebID]
+          spilled' = map (\i -> getPreAlias' i wl) (wSpilledWebs wl)
+          
+          spilledWebs :: [(Web, SpillLoc)]
+          spilledWebs = do (i, w) <- idToWeb
+                           let i' = getPreAlias' i wl
+                           guard $ i' `elem` spilled'
+                           return (w, slmap M.! i')
+          
+          toReload, toSpill :: M.Map (NodePtr, Reg) SpillLoc
+          toReload = M.fromList $ do (w, sl) <- spilledWebs
+                                     u <- S.toList $ webUses w
+                                     return $ ((u, webReg w), sl)
+          toSpill = M.fromList $ do (w, sl) <- spilledWebs
+                                    d <- S.toList $ webDefs w
+                                    return $ ((d, webReg w), sl)
+
+rewriteGraph :: Graph (PNode Asm) C C -> RWorklists -> Graph Asm C C
+rewriteGraph pg wl = trace' ("rewriteGraph: " ++ show usesColorMap ++ show defsColorMap) graph'
+    where GMany _ body _ = pg
+          graph' = foldl (|*><*|) emptyClosedGraph bodies
+          bodies = map f (mapElems body)
+          f :: Block (PNode Asm) C C -> Graph Asm C C
+          f block = fe e
+                    <*> catGraphs (map fm inner)
+                    <*> fx x
+              where (me, inner, mx) = blockToNodeList block
+                    e :: (PNode Asm) C O
+                    x :: (PNode Asm) O C
+                    e = case me of
+                          JustC e' -> e'
+                    x = case mx of
+                          JustC x' -> x'
+          
+          fe :: PNode Asm C O -> Graph Asm C O
+          fe (PNode l n) = mkFirst n
+          
+          fm :: PNode Asm O O -> Graph Asm O O
+          fm (PNode l n) = case mapAsm fs fd n of
+                             MovIRMtoR _ (IRM_R rs) rd
+                                 | rs == rd -> emptyGraph
+                             n -> mkMiddle n
+              where fs r = fromMaybe r $ M.lookup (l, r) usesColorMap
+                    fd r = fromMaybe r $ M.lookup (l, r) defsColorMap
+          
+          fx :: PNode Asm O C -> Graph Asm O C
+          fx (PNode l n) = mkLast n
+          
+          idToWeb = M.toList $ igIDToWeb (wInterfGraph wl)
+          usesColorMap = M.fromList $ do (i, w) <- idToWeb
+                                         u <- S.toList $ webUses w
+                                         case M.lookup i (wColoredWebs wl) of
+                                           Just r -> return ((u, webReg w), MReg r)
+                                           Nothing -> mzero
+          defsColorMap = M.fromList $ do (i, w) <- idToWeb
+                                         d <- S.toList $ webDefs w
+                                         case M.lookup i (wColoredWebs wl) of
+                                           Just r -> return ((d, webReg w), MReg r)
+                                           Nothing -> mzero
+
+
+-- | "Simplify"
+simplify :: AM ()
+simplify = do u <- selectSimplify
+              modify $ \wl -> wl { wSimplifyWorklist = delete u $ wSimplifyWorklist wl }
+              web <- gets $ wGetWeb u
+              trace' ("pushSelect " ++ show u ++ " = " ++ show (webReg web)) $ pushSelect u
+              (S.toList `fmap` adjacentWebs u) >>= mapM_ decrementDegree
+
+-- | Chooses the web to simplify
+selectSimplify :: AM WebID
+selectSimplify =
+  do wl@(RWorklists { wSimplifyWorklist = choices }) <- get
+     x <- choose choices
+     return x
     where
-      (alive, dead) = getAliveDead expr
-      salive = getSRegs alive
-      sdead = getSRegs dead
-      sToRegs = zip (salive ++ sdead) freeRegs
-      f :: Reg -> Reg
-      f (SReg s) = getMReg s
-      f r = r
-      getMReg s = fromJust $ lookup s sToRegs
-      expr' = mkMiddle $ mapRR f expr
-      mkReload s = mkMiddle $ Reload noPosition s (getMReg s)
-      mkSpill s = mkMiddle $ Spill noPosition (getMReg s) s
-      reloads = catGraphs $ map mkReload salive
-      spills = catGraphs $ map mkSpill sdead
+      choose (x:xs) = return x
+      choose _ = error "nothing to select for simplify! :-("
+
+ -- | Decrements the degree of the web in the
+ -- worklist. "DecrementDegree"
+decrementDegree :: WebID -> AM ()
+decrementDegree i =
+    do wl <- get
+       let d = wDegrees wl M.! i
+       put $ wl { wDegrees = M.adjust (subtract 1) i (wDegrees wl) }
+       when (d == numUsableRegisters) $ do
+         enableMoves i
+         adj <- S.toList `fmap` adjacentWebs i
+         mapM_ enableMoves adj
+         modify $ \wl -> wl { wSpillWorklist = delete i (wSpillWorklist wl) }
+         mr <- moveRelated i
+         modify $ \wl -> if mr
+                         then wl { wFreezeWorklist = i:(wFreezeWorklist wl) }
+                         else wl { wSimplifyWorklist = i:(wSimplifyWorklist wl) }
+
+-- | "EnableMoves"
+enableMoves :: WebID -> AM ()
+enableMoves i = do moves <- S.toList `fmap` webMoves i
+                   forM_ moves $ \m -> do
+                     activeMoves <- gets wActiveMoves
+                     when (m `S.member` activeMoves) $
+                          do modify $ \wl -> wl { wActiveMoves = S.delete m activeMoves
+                                                , wWorklistMoves = S.insert m (wWorklistMoves wl) }
+
+-- | "Coalesce"
+coalesce :: AM ()
+coalesce = do m <- selectMove
+              [x, y] <- gets $ \wl -> fixList $ wMoves wl M.! m
+              [x, y] <- mapM getAlias [x, y]
+              idToWeb <- gets $ igIDToWeb . wInterfGraph
+              let yPC = webPrecolored $ idToWeb M.! y
+              let (u, v) = if yPC then (y, x) else (x, y)
+              -- Invariant: if either u,v is fixed, then u is fixed.
+              wl <- get
+              let uweb = idToWeb M.! u
+                  vweb = idToWeb M.! v
+                  adjuv = S.member v $ (igAdjLists $ wInterfGraph wl) M.! u
+              adjacentu <- adjacentWebs u
+              adjacentv <- adjacentWebs v
+              okadjv <- and `fmap` mapM (\t -> ok t u) (S.toList adjacentv)
+              conserv <- conservative $ adjacentu `S.union` adjacentv
+              fixedRegAdj <- gets $ igFixedRegs . wInterfGraph
+              cond $
+                [
+                 ( u == v
+                 , do modify $ \wl -> wl { wCoalescedMoves = m:(wCoalescedMoves wl) }
+                      addWorklist u
+                 )
+                ,( webPrecolored vweb || adjuv
+                 , do modify $ \wl -> wl { wConstrainedMoves = m:(wConstrainedMoves wl) }
+                      addWorklist u
+                      addWorklist v
+                 )
+                ,( (webPrecolored uweb && (okadjv || isShortWeb vweb))
+                    || (not (webPrecolored uweb) && conserv)
+                 , do modify $ \wl -> wl { wCoalescedMoves = m:(wCoalescedMoves wl) }
+                      combine u v
+                      addWorklist u
+                 )
+                ,( True
+                 , do modify $ \wl -> wl { wActiveMoves = S.insert m $ wActiveMoves wl }
+                 )
+                ]
+    where cond :: Monad m => [(Bool, m ())] -> m ()
+          cond opts = fromMaybe (return ()) $ msum $ map (\(b,m) -> guard b >> return m) opts
+          
+          fixList [a] = [a,a]
+          fixList xs = xs
+          
+          -- r is the web of a fixed register
+          ok t r = do wl <- get
+                      let degt = wDegrees wl M.! t
+                          tweb = igIDToWeb (wInterfGraph wl) M.! t
+                          adjtr = S.member r (igAdjLists (wInterfGraph wl) M.! t)
+                      return $ webPrecolored tweb || degt < numUsableRegisters || adjtr
+          
+          conservative nodes = do wl <- get
+                                  return $ length (sigDegs wl) < numUsableRegisters
+              where sigDegs wl
+                        = [n | n <- S.toList nodes, wDegrees wl M.! n >= numUsableRegisters]
+          
+          addWorklist :: Int -> AM ()
+          addWorklist u =
+              do wl <- get
+                 let uweb = igIDToWeb (wInterfGraph wl) M.! u
+                     deg = wDegrees wl M.! u
+                     precolored = webPrecolored uweb
+                 moverelated <- moveRelated u
+                 when (not precolored && not moverelated && deg < numUsableRegisters) $ do
+                   modify $ \wl -> wl { wFreezeWorklist = delete u $ wFreezeWorklist wl
+                                      , wSimplifyWorklist = u:(wSimplifyWorklist wl) }
+
+selectMove :: AM NodePtr
+selectMove = do wl@(RWorklists { wWorklistMoves = choices }) <- get
+                x <- choose $ S.toList choices
+                put $ wl { wWorklistMoves = S.delete x choices }
+                return x
+    where choose (x:xs) =
+              do return x
 
 
-type AliveDead = ([Reg], [Reg])
-class GetRegs x where
-    getRSrc :: x -> AliveDead
-    getRDst :: x -> AliveDead
+-- | "Combine"
+combine :: Int -> Int -> AM ()
+combine u v =
+    do wl <- get
+       modify $ \wl ->
+           case v `elem` wFreezeWorklist wl of
+             True -> wl { wFreezeWorklist = delete v $ wFreezeWorklist wl }
+             False -> wl { wSpillWorklist = delete v $ wSpillWorklist wl }
+       modify $ \wl -> wl { wCoalescedWebs = S.insert v $ wCoalescedWebs wl
+                          , wCoalescedAlias = M.insert v u $ wCoalescedAlias wl 
+                          , wPreSpillCoalesced = (if wHaveSpilled wl
+                                                  then id
+                                                  else S.insert v) (wPreSpillCoalesced wl)
+                          , wPreSpillAlias = (if wHaveSpilled wl
+                                              then id
+                                              else M.insert v u) (wPreSpillAlias wl)
+                          }
+       webmovesu <- gets $ getWebMoves' u
+       webmovesv <- gets $ getWebMoves' v
+       modify $ updateWebMoves' (webmovesu `S.union` webmovesv) u
+       modify $ \wl -> wl { wIdealRegs = M.insert u (nub $
+                                                     (wIdealRegs wl M.! u)
+                                                     ++ (wIdealRegs wl M.! v)) 
+                                         (wIdealRegs wl) }
+       adjv <- S.toList `fmap` adjacentWebs v
+       forM_ adjv $ \t -> do
+         addToAdjList t u
+         decrementDegree t
+       wl <- get
+       let d = wDegrees wl M.! u
+       when (d >= numUsableRegisters
+             && u `elem` wFreezeWorklist wl) $ do
+         modify $ \wl -> wl { wFreezeWorklist = delete u $ wFreezeWorklist wl
+                            , wSpillWorklist = u:(wSpillWorklist wl) }
 
-emptyAD :: AliveDead
-emptyAD = ([], [])
+-- | "GetAlias"
+getAlias :: WebID -> AM WebID
+getAlias i = gets $ getAlias' i
 
-infixl 5 <+>
+getAlias' :: WebID -> RWorklists -> WebID
+getAlias' i wl = case i `S.member` wCoalescedWebs wl of
+                   True -> getAlias' (wCoalescedAlias wl M.! i) wl
+                   False -> i
 
-(<+>) :: AliveDead -> AliveDead -> AliveDead
-(a1,d1) <+> (a2,d2) = (a1++a2, d1++d2)
+getPreAlias' :: WebID -> RWorklists -> WebID
+getPreAlias' i wl = case i `S.member` wPreSpillCoalesced wl of
+                      True -> getPreAlias' (wPreSpillAlias wl M.! i) wl
+                      False -> i
 
-instance GetRegs OperIRM where
-    getRSrc (IRM_I _) = ([],[])
-    getRSrc (IRM_R r) = getRSrc r
-    getRSrc (IRM_M m) = getRSrc m
-    getRDst (IRM_I _) = ([],[])
-    getRDst (IRM_R r) = getRDst r
-    getRDst (IRM_M m) = getRDst m
-instance GetRegs OperIR where
-    getRSrc (IR_I _) = ([],[])
-    getRSrc (IR_R r) = getRSrc r
-    getRDst (IR_I _) = ([],[])
-    getRDst (IR_R r) = getRDst r
-instance GetRegs OperRM where
-    getRSrc (RM_R r) = getRSrc r
-    getRSrc (RM_M m) = getRSrc m
-    getRDst (RM_R r) = getRDst r
-    getRDst (RM_M m) = getRDst m
-instance GetRegs MemAddr where
-    getRSrc (MemAddr br d i s)
-        = (maybeToList br ++ maybeToList i, [])
-    getRDst (MemAddr br d i s)
-        = (maybeToList br ++ maybeToList i, [])
-instance GetRegs Reg where
-    getRSrc r = ([r],[])
-    getRDst r = ([],[r])
+-- | "Freeze"
+freeze :: AM ()
+freeze = do u <- selectFreeze
+            modify $ \wl -> wl { wFreezeWorklist = delete u $ wFreezeWorklist wl
+                               , wSimplifyWorklist = u:(wSimplifyWorklist wl) }
+            freezeMoves(u)
+    where selectFreeze = do (u:_) <- gets wFreezeWorklist
+                            return u
 
-map_IRM :: (Reg -> Reg) -> OperIRM -> OperIRM
-map_IRM f (IRM_I i) = IRM_I i
-map_IRM f (IRM_R r) = IRM_R $ f r
-map_IRM f (IRM_M m) = IRM_M $ map_M f m
+-- | "FreezeMoves"
+freezeMoves :: Int -> AM ()
+freezeMoves u = do wmoves <- webMoves u
+                   wl <- get
+                   let wmoves' = map (\l -> (l, wMoves wl M.! l)) $ S.toList wmoves
+                   forM_ (filter (elem u . snd) wmoves') $ \(m,uv) -> do
+                     let [v] = delete u uv
+                     modify $ \wl ->
+                       case m `S.member` wActiveMoves wl of
+                         True -> wl { wActiveMoves = S.delete m $ wActiveMoves wl }
+                         False -> wl { wWorklistMoves = S.delete m $ wWorklistMoves wl }
+                     modify $ \wl -> wl { wFrozenMoves = m:(wFrozenMoves wl) }
+                     wmv <- webMoves v
+                     degv <- gets $ \wl -> wDegrees wl M.! v
+                     when (S.null wmv && degv < numUsableRegisters) $ do
+                       modify $ \wl -> wl { wFreezeWorklist = delete v $ wFreezeWorklist wl
+                                          , wSimplifyWorklist = v:(wSimplifyWorklist wl) }
 
-map_IR :: (Reg -> Reg) -> OperIR -> OperIR
-map_IR f (IR_I i) = IR_I i
-map_IR f (IR_R r) = IR_R $ f r
 
-map_RM :: (Reg -> Reg) -> OperRM -> OperRM
-map_RM f (RM_R r) = RM_R $ f r
-map_RM f (RM_M m) = RM_M $ map_M f m
+-- | "SelectSpill"
+selectSpill :: AM ()
+selectSpill = do m <- chooseSpill
+                 modify $ \wl -> wl { wSpillWorklist = delete m $ wSpillWorklist wl
+                                    , wSimplifyWorklist = m:(wSimplifyWorklist wl)
+                                    , wHaveSpilled = True }
+                 freezeMoves m
+    where chooseSpill =
+              do wl <- get
+                 let spillList = wSpillWorklist wl
+                 let costs = map (\i -> (i, cost wl i)) spillList
+                 return $ trace' ("costs: " ++ show costs) $ fst $ maximumBy (compare `on` snd) costs
+          cost wl i = let web = igGetWeb i $ wInterfGraph wl
+                          deg = wDegrees wl M.! i
+                          dus = S.toList $ webDUs web
+                          len (DU {duExtent = ext}) = S.size ext
+                          len (DUv{}) = 0
+                          uses = max 1 (S.size $ webUses web)
+                          size = S.size (webExtent web) --sum (map len dus)
+--                          score = (deg * size) `div` (uses)
+                          score = 10 * deg * size `div` (1 + S.size (webDefs web) + S.size (webUses web))
+                      in if isShortWeb web then 0 else score
 
-map_M :: (Reg -> Reg) -> MemAddr -> MemAddr
-map_M f (MemAddr br d i s) = MemAddr (fmap f br) d (fmap f i) s
+-- | "AssignColors"
+assignColors :: AM ()
+assignColors = do emptyStack
+                  wl <- get
+                  forM_ (S.toList $ wCoalescedWebs (trace' (outputWebGraph $ wInterfGraph wl) wl)) $ \n -> do
+                    alias <- getAlias n
+                    modify $ \wl -> wl { wColoredWebs = M.insert n (wColoredWebs wl M.! alias) 
+                                                        (wColoredWebs wl) }
+    where emptyStack :: AM ()
+          emptyStack
+              = do wl <- get
+                   when (not $ null $ wSelectStack wl) $ do
+                     n <- popSelect
+                     web <- gets $ igGetWeb n . wInterfGraph
+                     wl <- get
+                     okColors <- determineColors n 
+                     case trace' (show n ++ " " ++ show (webReg web) ++ " okColors: " ++ show okColors ++ " " ++ show (igAdjLists (wInterfGraph wl) M.! n) ++ " " ++ show (wColoredWebs wl)) okColors of
+                       [] -> modify $ \wl -> wl { wSpilledWebs = n:(wSpilledWebs wl) }
+                       (c:_) -> modify $ \wl ->
+                                   wl { wColoredWebs = M.insert n c (wColoredWebs wl) }
+                     emptyStack
+          
+          determineColors :: WebID -> AM [X86Reg]
+          determineColors n = do wl <- get
+                                 let adj = S.toList $ igAdjLists (wInterfGraph wl) M.! n
+                                 adj' <- mapM getAlias adj
+                                 allcolored <- gets wColoredWebs
+                                 let colored = filter (`M.member` allcolored) adj'
+                                     usedColors = map (allcolored M.!) colored
+                                     ok = usableRegisters \\ usedColors
+                                     nregs = wIdealRegs wl M.! n
+                                     nnregs = concatMap (wIdealRegs wl M.!) adj'
+                                     (ok1, ok2) = partition (`notElem` nnregs) ok
+                                     (ok1', ok2') = partition (`elem` nregs) (ok1 ++ ok2)
+--                                     fixedAdjRegs = do a <- adj'
+--                                                       let w = igGetWeb a (wInterfGraph wl)
+--                                                       guard $ webFixed w
+--                                                       return $ x86reg $ webReg w
+                                 return $ ok1' ++ ok2'
 
-mapRR :: forall e x. (Reg -> Reg) -> Asm e x -> Asm e x
-mapRR f a@(Label{}) = a
-mapRR f (Spill pos r d) = Spill pos (f r) d
-mapRR f (Reload pos s r) = Reload pos s (f r)
-mapRR f (MovIRMtoR p irm r) = MovIRMtoR p (map_IRM f irm) (f r)
-mapRR f (MovIRtoM p ir m) = MovIRtoM p (map_IR f ir) (map_M f m)
-mapRR f (Mov64toR p i r) = Mov64toR p i (f r)
-mapRR f (CMovRMtoR p fl rm r) = CMovRMtoR p fl (map_RM f rm) (f r)
-mapRR f a@(Enter{}) = a
-mapRR f a@(Leave{}) = a
-mapRR f a@(Call{}) = a
-mapRR f a@(Callout{}) = a
-mapRR f a@(Ret{}) = a
-mapRR f a@(RetPop{}) = a
-mapRR f a@(ExitFail{}) = a
-mapRR f a@(Realign{}) = a
-mapRR f a@(Unrealign{}) = a
-mapRR f (Lea p m r) = Lea p (map_M f m) (f r)
-mapRR f (Push p irm) = Push p (map_IRM f irm)
-mapRR f (Pop p rm) = Pop p (map_RM f rm)
-mapRR f a@(Jmp{}) = a
-mapRR f a@(JCond{}) = a
-mapRR f (ALU_IRMtoR p op irm r) = ALU_IRMtoR p op (map_IRM f irm) (f r)
-mapRR f (ALU_IRtoM p op ir m) = ALU_IRtoM p op (map_IR f ir) (map_M f m)
-mapRR f (Cmp p ir rm) = Cmp p (map_IR f ir) (map_RM f rm)
-mapRR f (Test p ir rm) = Test p (map_IR f ir) (map_RM f rm)
-mapRR f (Inc p rm) = Inc p (map_RM f rm)
-mapRR f (Dec p rm) = Dec p (map_RM f rm)
-mapRR f (Neg p rm) = Neg p (map_RM f rm)
-mapRR f (IMulRAX p rm) = IMulRAX p (map_RM f rm)
-mapRR f (IMulRM p rm r) = IMulRM p (map_RM f rm) (f r)
-mapRR f (IMulImm p i rm r) = IMulImm p i (map_RM f rm) (f r)
-mapRR f (IDiv p rm) = IDiv p (map_RM f rm)
-mapRR f (Cqo p) = Cqo p
-mapRR f (Shl p i rm) = Shl p i (map_RM f rm)
-mapRR f (Shr p i rm) = Shr p i (map_RM f rm)
-mapRR f (Sar p i rm) = Sar p i (map_RM f rm)
-mapRR f (Nop p) = Nop p
+outputWebGraph :: InterfGraph -> String
+outputWebGraph ig
+    = "graph {\n"
+      ++ "_webs_ [shape=record,label=\"{" ++ intercalate "|" (map showWeb webs) ++ "}\"];\n"
+      ++ "_moves_ [shape=record,label=\"" ++ show (igRRMoves ig) ++ "\"];\n"
+      ++ labels
+      ++ edges
+      ++ "}"
+    where mkEdges i web = do
+            j <- S.toList $ g M.! i
+            guard $ i < j
+            show i ++ " -- " ++ show j ++ ";\n"
+          edges = do (i, web) <- webs
+                     mkEdges i web
+          labels = do (i, web) <- webs
+                      show i ++ " [label=\"" ++ show i ++ ": " ++ show (webReg web) ++ "\"];\n"
+          showWeb (i, web) = "{" ++ intercalate "|" [show i, wr, wmr, wf, wd, we, wu] ++ "}"
+              where wr = show $ webReg web
+                    wmr = "moves: " ++ show (S.toList $ webMoveNodes web)
+                    wf = if webPrecolored web then "precolored" else "free"
+                    wd = show $ webDefs web
+                    we = show $ webExtent web
+                    wu = show $ webUses web
+          webs = M.toList $ igIDToWeb ig
+          g = igAdjLists ig
 
-getAliveDead :: forall e x. Asm e x -> AliveDead
-getAliveDead expr
+
+
+-- | Gets the registers which are "pinned" by the instruction.  That
+-- is, those registers which are both used and defined by the
+-- instruction, and two registers cannot be used instead.  For
+-- instance, %rax in "addq $5, %rax".
+getPinned :: forall e x. Asm e x -> [Reg]
+getPinned expr
     = case expr of
-        Label{} -> emptyAD
-        Spill _ r d -> getRSrc r
-        Reload _ s r -> getRDst r
-        MovIRMtoR _ irm r -> getRSrc irm <+> getRDst r
-        MovIRtoM _ ir m -> getRSrc ir <+> getRDst m
-        Mov64toR _ i r -> getRDst r
-        CMovRMtoR _ _ rm r -> getRSrc rm <+> getRSrc r <+> getRDst r
-        Enter _ _ i -> (x, x)
-                where x = map MReg (catMaybes $ take i argOrder)
-        Leave{} -> emptyAD
-        Call p nargs i -> (x, [MReg RAX])
-                where x = map MReg (catMaybes $ take nargs argOrder)
-        Callout p nargs i -> (x ++ [MReg RAX], [MReg RAX])
-                             -- :-O  should add Caller-saved registers
-                where x = map MReg (catMaybes $ take nargs argOrder)
-        Ret p rets -> (if rets then [MReg RAX] else [], [])
-        RetPop p rets num -> (if rets then [MReg RAX] else [], [])
-        ExitFail{} -> emptyAD
-        Realign{} -> emptyAD
-        Unrealign{} -> emptyAD
-        Lea p m r -> getRSrc m <+> getRDst r
-        Push p irm -> getRSrc irm
-        Pop p rm -> getRDst rm
-        Jmp{} -> emptyAD
-        JCond{} -> emptyAD
-        ALU_IRMtoR _ _ irm r -> getRSrc irm <+> getRSrc r <+> getRDst r
-        ALU_IRtoM _ _ ir m -> getRSrc ir <+> getRSrc m <+> getRDst m
-        Cmp _ ir rm -> getRSrc ir <+> getRSrc rm
-        Test _ ir rm -> getRSrc ir <+> getRSrc rm
-        Inc _ rm -> getRSrc rm <+> getRDst rm
-        Dec _ rm -> getRSrc rm <+> getRDst rm
-        Neg _ rm -> getRSrc rm <+> getRDst rm
-        IMulRAX _ rm -> getRSrc rm <+> ([MReg RAX], [MReg RAX, MReg RDX])
-        IMulRM _ rm r -> getRSrc rm <+> getRSrc r <+> getRDst r
-        IMulImm _ i rm r -> getRSrc rm <+> getRDst r
-        IDiv _ rm -> getRSrc rm <+> ([MReg RDX, MReg RAX], [MReg RAX, MReg RDX])
-        Cqo _ -> ([MReg RAX], [MReg RDX])
-        Shl _ _ rm -> getRSrc rm <+> getRDst rm
-        Shr _ _ rm -> getRSrc rm <+> getRDst rm
-        Sar _ _ rm -> getRSrc rm <+> getRDst rm
-        Nop _ -> emptyAD
+        Label{} -> []
+        Spill _ r d -> []
+        Reload _ s r -> []
+        MovIRMtoR _ irm r -> []
+        MovIRtoM _ ir m -> []
+        Mov64toR _ i r -> []
+        CMovRMtoR _ _ rm r -> [r]
+        Enter _ _ i _ -> []
+        Leave{} -> [MReg RSP]
+        Call p nargs i -> [MReg RSP]
+        Callout p nargs i -> [MReg RSP]
+        Ret p rets -> []
+        RetPop p rets num -> []
+        ExitFail{} -> []
+--        Realign{} -> []
+--        Unrealign{} -> []
+        Lea p m r -> []
+        Push p irm -> [MReg RSP]
+        Pop p rm -> [MReg RSP]
+        Jmp{} -> []
+        JCond{} -> []
+        ALU_IRMtoR _ _ irm r -> [r]
+        ALU_IRtoM _ _ ir m -> []
+        Cmp _ ir rm -> []
+        Test _ ir rm -> []
+        Inc _ rm -> snd $ getRDst rm
+        Dec _ rm -> snd $ getRDst rm
+        Neg _ rm -> snd $ getRDst rm
+        IMulRAX _ rm -> [MReg RAX]
+        IMulRM _ rm r -> [r]
+        IMulImm _ i rm r -> []
+        IDiv _ rm -> [MReg RDX, MReg RAX]
+        Cqo _ -> []
+        Shl _ _ rm -> snd $ getRDst rm
+        Shr _ _ rm -> snd $ getRDst rm
+        Sar _ _ rm -> snd $ getRDst rm
+        Nop _ -> []
 
+
+-- | Gets those registers which are fixed by the instruction, such as
+-- %rax for ret.
+getFixed :: forall e x. Asm e x -> ([Reg], [Reg]) -- ^ (used, defined)
+getFixed expr
+    = case expr of
+        Label{} -> noFixed
+        Spill _ r d -> ([MReg RSP], [])
+        Reload _ s r -> ([MReg RSP], [])
+        MovIRMtoR _ irm r -> noFixed
+        MovIRtoM _ ir m -> noFixed
+        Mov64toR _ i r -> noFixed
+        CMovRMtoR _ _ rm r -> noFixed
+        Enter _ _ nargs _ -> ([], x ++ map MReg A.calleeSaved ++ [MReg RSP]) 
+            where x = map MReg (catMaybes $ take nargs argOrder)
+        Leave{} -> ([MReg RSP] ++ map MReg A.calleeSaved, [MReg RSP])
+        Call p nargs i -> (x, x ++ [MReg RAX])
+                          <+> ([MReg RSP], map MReg A.callerSaved ++ [MReg RSP])
+            where x = map MReg (catMaybes $ take nargs argOrder)
+        Callout p nargs i -> (x ++ [MReg RAX], x ++ [MReg RAX])
+                             <+> ([MReg RSP], map MReg A.callerSaved ++ [MReg RSP])
+            where x = map MReg (catMaybes $ take nargs argOrder)
+        Ret p rets -> (if rets then [MReg RAX] else [], []) <+> ([MReg RSP], [])
+        RetPop p rets num -> (if rets then [MReg RAX] else [], []) <+> ([MReg RSP], [])
+        ExitFail{} -> noFixed
+--        Realign{} -> []
+--        Unrealign{} -> []
+        Lea p m r -> noFixed
+        Push p irm -> ([MReg RSP], [MReg RSP])
+        Pop p rm -> ([MReg RSP], [MReg RSP])
+        Jmp{} -> noFixed
+        JCond{} -> noFixed
+        ALU_IRMtoR _ _ irm r -> noFixed
+        ALU_IRtoM _ _ ir m -> noFixed
+        Cmp _ ir rm -> noFixed
+        Test _ ir rm -> noFixed
+        Inc _ rm -> noFixed
+        Dec _ rm -> noFixed
+        Neg _ rm -> noFixed
+        IMulRAX _ rm -> ([MReg RAX], [MReg RAX, MReg RDX])
+        IMulRM _ rm r -> noFixed
+        IMulImm _ i rm r -> noFixed
+        IDiv _ rm -> ([MReg RDX, MReg RAX], [MReg RDX, MReg RAX])
+        Cqo _ -> ([MReg RAX], [MReg RDX])
+        Shl _ _ rm -> noFixed
+        Shr _ _ rm -> noFixed
+        Sar _ _ rm -> noFixed
+        Nop _ -> noFixed
+      where noFixed = ([], [])

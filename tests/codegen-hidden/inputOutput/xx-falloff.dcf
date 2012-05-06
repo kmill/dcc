@@ -1,0 +1,15 @@
+//!
+//> expecting an error next:
+//> *** RUNTIME ERROR ***: No return value from non-void method "foo"
+// This should produce a runtime error
+class Program {
+  int a;
+
+  int foo() {
+  }
+  
+  void main() {
+    callout("printf", "expecting an error next:\n");
+    a = foo();
+  }
+}

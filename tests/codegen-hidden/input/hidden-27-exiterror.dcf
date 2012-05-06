@@ -1,0 +1,9 @@
+class Program
+{
+    int foo ()
+    { } // should produce an error (non-void func not returning a value)
+    void main()
+    {
+      foo ();
+    }
+}
