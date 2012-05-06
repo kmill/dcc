@@ -1,10 +1,15 @@
-{-# LANGUAGE GADTs #-}
+{-# LANGUAGE GADTs, TypeSynonymInstances, TypeFamilies, RankNTypes, ScopedTypeVariables #-}
 module Dataflow.OptSupport where 
 
 import IR
 import Compiler.Hoopl
+import Compiler.Hoopl.Fuel
 import Control.Monad
+import Control.Monad.Trans
 import Data.Maybe
+
+
+
 
 -- Useful functions 
 

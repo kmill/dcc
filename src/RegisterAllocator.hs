@@ -11,7 +11,7 @@ import AliveDead
 import CodeGenerate
 import qualified IR as I
 import Dataflow
-import Dataflow.DeadCodeAsm
+import DataflowTypes
 import qualified Data.Set as S
 import Data.List
 import Data.Int
