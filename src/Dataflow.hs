@@ -94,7 +94,8 @@ dataflows
       -- doing constprop after flatten/cse does great good! see tests/codegen/fig18.6.dcf
       , DFA optConstProp performConstPropPass
       , DFA optDeadCode performDeadCodePass
-      , DFA (\opts -> optCommonSubElim opts || optFlat opts || optUnflat opts ) performUnflattenPass 
+      , DFA optLICM performLICMPass
+      --, DFA (\opts -> optCommonSubElim opts || optFlat opts || optUnflat opts ) performUnflattenPass 
       , DFA optCopyProp performCopyPropPass
       , DFA optConstProp performConstPropPass
       , DFA optDeadCode performDeadCodePass

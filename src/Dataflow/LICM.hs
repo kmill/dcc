@@ -35,19 +35,19 @@ unStoreInst SOtherInst = Nothing
 type MSInst = SInst VarName
 
 -- Set of instructions which can be moved to this point
-type MotionSet = S.Set MSInst
+type MotionSet = WithBot (S.Set MSInst)
 type MotionFact = (MotionSet, Live)
 motionLattice :: DataflowLattice MotionFact
 motionLattice = DataflowLattice { fact_name = "Code Motion Lattice"
                                 , fact_bot = emptyMotionFact
                                 , fact_join = intersectFacts }
     where intersectFacts :: Label -> OldFact MotionFact -> NewFact MotionFact -> (ChangeFlag, MotionFact)
-          intersectFacts l (OldFact (oldSet, oldLive)) (NewFact (newSet, newLive))
+          {-intersectFacts l (OldFact (oldSet, oldLive)) (NewFact (newSet, newLive))
               = (c, (resSet', resLive))
               where c = changeIf $ setBool && (changeBool lc)
                     setBool = not $ resSet' == oldSet
                     -- instruction survives if variable is in newSet or is dead
-                    resSet = S.union (S.intersection oldSet newSet) (S.filter (isDeadIn newLive) oldSet)
+                    resSet = S.union (S.intersection oldSet' newSet') (S.filter (isDeadIn newLive) oldSet')
                     resSet'
                         | killIndStores = S.filter (not . isIndStore) resSet
                         | otherwise = resSet
@@ -58,10 +58,41 @@ motionLattice = DataflowLattice { fact_name = "Code Motion Lattice"
                     isDeadIn _ _ = False
                     (lc, resLive) = fact_join liveLattice l (OldFact oldLive) (NewFact newLive)
                     changeBool SomeChange = True
+                    changeBool NoChange = False-}
+
+          intersectFacts l (OldFact (oldSet, oldLive)) (NewFact (newSet, newLive))
+              = (ch, (resSet, newLive))
+              where ch = changeIf $ setBool || (changeBool lc)
+                    (lc, newLive) = fact_join liveLattice l (OldFact oldLive) (NewFact newLive)
+                    changeBool SomeChange = True
                     changeBool NoChange = False
+                    isDeadIn :: Live -> MSInst -> Bool
+                    isDeadIn live (SStore _ var _) = not $ S.member var live
+                    isDeadIn live (SDivStore _ var _ _ _) = not $ S.member var live
+                    isDeadIn _ _ = False
+                    resSet' :: MotionSet
+                    (setBool', resSet')
+                        = case (oldSet, newSet) of 
+                            (Bot, new) -> (True, new)
+                            (old, Bot) -> (False, old)
+                            (PElem oldSet', PElem newSet') 
+                                -> (intersectSets /= oldSet', PElem intersectSets)
+                                   where intersectSets = S.union (S.intersection oldSet' newSet') (S.filter (isDeadIn newLive) oldSet')
+                    resSet :: MotionSet
+                    resSet = case resSet' of 
+                               Bot -> Bot 
+                               PElem resSet''
+                                   | killIndStores -> PElem $ S.filter (not . isIndStore) resSet''
+                                   | otherwise -> resSet'
+                    setBool = resSet /= oldSet
+                    killIndStores :: Bool
+                    killIndStores = case oldSet of 
+                                      Bot -> False
+                                      PElem oldSet' -> S.filter isIndStore oldSet' == S.filter isIndStore (fromBot resSet')
+
 
 emptyMotionFact :: MotionFact
-emptyMotionFact = (S.empty, S.empty)
+emptyMotionFact = (Bot, S.empty)
 
 exprDepend :: (Ord v) => Expr v -> S.Set v
 exprDepend (Var _ v) = S.singleton v
@@ -97,22 +128,23 @@ isIndStore _ = False
 motionSetTransfer :: BwdTransfer MidIRInst MotionSet
 motionSetTransfer = mkBTransfer3 btCO btOO btOC
     where btCO :: MidIRInst C O -> MotionSet -> MotionSet
-          btCO i@(Enter _ _ args) f = addDefinitions args f
+          btCO i@(Enter _ _ args) f = addDefinitions args (fromBot f)
           btCO _ f = f
 
           btOO :: MidIRInst O O -> MotionSet -> MotionSet
           btOO i@(Store _ var expr) f
-              = (\res -> trace ("store " ++ (show i) ++ " with lattice " ++ (show f) ++ "\n" ++ (show res) ++ "\n") res) $ addDefinition var (S.insert (storeInst i) f)
+             -- = PElem $ addDefinition var (S.insert (storeInst i) (fromBot f))
+              = (\res -> trace ("store " ++ (show i) ++ " with lattice " ++ (show f) ++ "\n" ++ (show res) ++ "\n") res) $ PElem $ addDefinition var (S.insert (storeInst i) (fromBot f))
           btOO i@(DivStore _ var _ expr1 expr2) f
-              = addDefinition var (S.insert (storeInst i) f)
-          btOO i@(IndStore _ _ _) f = S.insert (storeInst i) f
-          btOO (Call _ var _ _) f = addDefinition var f
-          btOO (Callout _ var _ _) f = addDefinition var f
+              = PElem $ addDefinition var (S.insert (storeInst i) (fromBot f))
+          btOO i@(IndStore _ _ _) f = PElem $ S.insert (storeInst i) (fromBot f)
+          btOO (Call _ var _ _) f = PElem $ addDefinition var (fromBot f)
+          btOO (Callout _ var _ _) f = PElem $ addDefinition var (fromBot f)
 
           btOC :: MidIRInst O C -> FactBase MotionSet -> MotionSet
-          btOC _ = S.unions . mapElems
+          btOC _ = PElem . S.unions . fromBots . mapElems
 
-          addDefinition :: VarName -> MotionSet -> MotionSet
+          addDefinition :: VarName -> S.Set MSInst -> S.Set MSInst
           addDefinition var fact = S.filter (not . dependsOn var) fact'
               where fact'
                         | killIndStores = S.filter (not . isIndStore) fact
@@ -121,17 +153,27 @@ motionSetTransfer = mkBTransfer3 btCO btOO btOC
                     indStores = S.filter isIndStore fact
                     dependsOn :: VarName -> MSInst -> Bool
                     dependsOn var = S.member var . instDepend
-          addDefinitions :: [VarName] -> MotionSet -> MotionSet
-          addDefinitions vars initial = foldr addDefinition initial vars
+
+          addDefinitions :: [VarName] -> S.Set MSInst -> MotionSet
+          addDefinitions vars initial = PElem $ foldr addDefinition initial vars
 
 motionTransfer :: BwdTransfer MidIRInst MotionFact
 motionTransfer = pairBwdTransfer motionSetTransfer liveness
 
+
+fromBots bots = map fromBot bots
+
+fromBot Bot = S.empty
+fromBot (PElem set) = set
+
 motionRewrite :: forall m . FuelMonad m => BwdRewrite m MidIRInst MotionFact
 motionRewrite = mkBRewrite3 idRewr idRewr r
     where idRewr :: MidIRInst e x -> Fact x MotionFact -> m (Maybe (Graph MidIRInst e x))
-          idRewr i _ = return $ Just $ insnToG i
+          idRewr i _ = return $ Nothing
           r :: MidIRInst O C -> Fact C MotionFact -> m (Maybe (Graph MidIRInst O C))
-          r inst facts = return $ Just ((mkMiddles $ getInstrs facts) <*> (mkLast inst))
+          r inst facts = case getInstrs facts of 
+                          [] -> return Nothing
+                          xs -> return $ Just ((mkMiddles $ xs) <*> (mkLast inst)) 
           getInstrs :: FactBase MotionFact -> [MidIRInst O O]
-          getInstrs = catMaybes . map unStoreInst . S.toList . S.unions . mapElems . mapMap fst
+          getInstrs = catMaybes . map unStoreInst . S.toList . S.unions . fromBots . mapElems . mapMap fst
+          
