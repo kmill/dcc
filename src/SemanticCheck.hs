@@ -416,7 +416,10 @@ checkVarDecl (VarDecl pos t vars)
 -- because an error will be emitted for having made an unbound error.
 checkIsScalar :: DUTerm -> SourcePos -> SemChecker ()
 checkIsScalar t pos = case t of
-                        (Var _) -> return ()
+                        (Var v) -> do t' <- fromJust <$> (liftS $ getBinding v)
+                                      case t' of
+                                        Just t'' -> checkIsScalar t'' pos
+                                        Nothing -> return ()
                         (Term x _) ->
                              case x of
                                (DUInt _) -> return ()
@@ -483,8 +486,8 @@ checkMethodCall (NormalMethod pos tok args)
          v <- fromJust <$> (liftS genVar)
          targs' <- targs
          case envLookup name env of
-           Just t -> do t <==> tFunc pos (Var v) targs'
-                        return $ Var v
+           Just t  -> do t <==> tFunc pos (Var v) targs'
+                         return $ Var v
            Nothing -> local envRoot $
                       do ft <- lookupOrAdd pos name
                          ft <==> tFunc pos (Var v) targs'

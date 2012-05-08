@@ -8,6 +8,7 @@ import qualified Assembly as A
 import CodeGenerate
 import qualified IR as I
 import Dataflow
+import DataflowTypes
 import qualified Data.Set as S
 import Data.List
 import Control.Monad.State

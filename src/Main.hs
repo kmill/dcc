@@ -22,6 +22,8 @@ import Compiler.Hoopl.Fuel
 import Data.List
 import AST
 
+import Debug.Trace
+
 import qualified IR
 import qualified MidIR
 import qualified RegisterAllocator
