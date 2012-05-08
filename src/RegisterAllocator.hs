@@ -960,7 +960,7 @@ selectMove = do wl@(RWorklists { wWorklistMoves = choices }) <- get
 combine :: Int -> Int -> AM ()
 combine u v =
     do modify $ \wl ->
-           case v `elem` wFreezeWorklist wl of
+           case v `elem` wFreezeWorklist (trace' ("combine " ++ show u ++ " " ++ show v) $ wl) of
              True -> wl { wFreezeWorklist = delete v $ wFreezeWorklist wl }
              False -> wl { wSpillWorklist = delete v $ wSpillWorklist wl }
        modify $ \wl -> wl { wCoalescedWebs = S.insert v $ wCoalescedWebs wl
@@ -979,9 +979,10 @@ combine u v =
                                                      (wIdealRegs wl M.! u)
                                                      ++ (wIdealRegs wl M.! v)) 
                                          (wIdealRegs wl) }
-       adjv <- S.toList `fmap` adjacentWebs v
+--       adjv <- S.toList `fmap` adjacentWebs v
+       adjv <- gets $ \wl -> S.toList $ igAdjLists (wInterfGraph wl) M.! v
        forM_ adjv $ \t -> do
-         addToAdjList t u
+         trace' ("addToAdjList " ++ show t ++ " " ++ show u)$ addToAdjList t u
          decrementDegree t
        wl <- get
        let d = wDegrees wl M.! u

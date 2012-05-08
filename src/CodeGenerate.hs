@@ -576,14 +576,15 @@ lowIRToAsm m opts
           , ".globl _main" 
           , "main:"
           , "_main:"
-          , "subq $8, %rsp"
-          , "call method_main"
-          , "movq $0, %rax"
-          , "addq $8, %rsp"
-          , "ret" ]
+          , ind "subq $8, %rsp"
+          , ind "call method_main"
+          , ind "movq $0, %rax"
+          , ind "addq $8, %rsp"
+          , ind "ret" ]
       ++ ["# methods"]
       ++ (concatMap (showMethod (macMode opts) (lowIRGraph m)) (lowIRMethods m))
-  where 
+  where
+    ind = ("   " ++)
     newline = [""]
     showField (LowIRField pos name size)
         = [ name ++ ": .space " ++ (show size) ++ ", 0\t\t# " ++ showPos pos ]
