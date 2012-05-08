@@ -2,6 +2,6 @@
 class Program {
   int x;
   void main() {
-    x = 0xdeadbeef;
+    x = 0x10000000000000000001;
   }
 }
