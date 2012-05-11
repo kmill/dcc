@@ -26,7 +26,8 @@ import Debug.Trace
 
 import qualified IR
 import qualified MidIR
-import qualified RegisterAllocator
+import qualified RegAlloc.Allocator as RegisterAllocator
+import qualified RegAlloc.SimpleRegAlloc as SimpleRegAlloc
 import qualified CodeGenerate
 import Assembly
 
@@ -135,9 +136,11 @@ doLowIRFile opts ifname input midir
     = case midir of                      
         Left err -> Left err
         Right m -> let assem = do a <- CodeGenerate.toAss m
-                                  a <- if debugMode opts then return a else  RegisterAllocator.regAlloc a
-                                  return a
+                                  (if debugMode opts then return else allocator) a
                    in Right (IR.runGM assem)
+      where allocator = case regAllocMode opts of
+                          True -> RegisterAllocator.regAlloc
+                          False -> SimpleRegAlloc.regAlloc
                  
 -- | This function formats an error so it has a nifty carat under
 -- where the error occured.

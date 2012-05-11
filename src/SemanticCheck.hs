@@ -144,6 +144,7 @@ data SemError = SemUnificationError (UnificationError DUType)
               | SemNoMainError SourcePos
               | SemNotScalarError DUTerm SourcePos
               | SemArraySizeError SourcePos
+              | SemRangeCheckError SourcePos
                 deriving Show
                          
 showDUTerm :: DUTerm -> String
