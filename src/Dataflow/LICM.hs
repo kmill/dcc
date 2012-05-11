@@ -3,6 +3,7 @@ module Dataflow.LICM where
 
 import Dataflow.OptSupport
 import Dataflow.DeadCode
+import LoopAnalysis
 import AST(SourcePos)
 import Compiler.Hoopl
 import IR
@@ -94,8 +95,8 @@ isIndStore :: (Ord v) => SInst v -> Bool
 isIndStore SIndStore{} = True
 isIndStore _ = False
 
-motionSetTransfer :: BwdTransfer MidIRInst MotionSet
-motionSetTransfer = mkBTransfer3 btCO btOO btOC
+motionSetTransfer :: S.Set Loop -> BwdTransfer MidIRInst MotionSet
+motionSetTransfer loops = mkBTransfer3 btCO btOO btOC
     where btCO :: MidIRInst C O -> MotionSet -> MotionSet
           btCO i@(Enter _ _ args) f = addDefinitions args f
           btCO _ f = f
@@ -126,17 +127,21 @@ motionSetTransfer = mkBTransfer3 btCO btOO btOC
           addDefinitions :: [VarName] -> S.Set MSInst -> MotionSet
           addDefinitions vars initial = foldr addDefinition initial vars
 
-motionTransfer :: BwdTransfer MidIRInst MotionFact
-motionTransfer = pairBwdTransfer motionSetTransfer liveness
+motionTransfer :: S.Set Loop -> BwdTransfer MidIRInst MotionFact
+motionTransfer loops = pairBwdTransfer (motionSetTransfer loops) liveness
 
-motionRewrite :: forall m . FuelMonad m => BwdRewrite m MidIRInst MotionFact
-motionRewrite = mkBRewrite3 idRewr idRewr r
+motionRewrite :: forall m . FuelMonad m => S.Set Loop -> BwdRewrite m MidIRInst MotionFact
+motionRewrite loops = trace (show loops) $ mkBRewrite3 idRewr idRewr r
     where idRewr :: MidIRInst e x -> Fact x MotionFact -> m (Maybe (Graph MidIRInst e x))
-          idRewr i _ = return $ Nothing
+          idRewr i _ = return Nothing
           r :: MidIRInst O C -> Fact C MotionFact -> m (Maybe (Graph MidIRInst O C))
-          r inst facts = case getInstrs facts of 
-                          [] -> return Nothing
-                          xs -> return $ Just ((mkMiddles $ xs) <*> (mkLast inst)) 
+          -- We drop things off only right before loop headers
+          r i@(Branch _ lbl) facts
+              | S.notMember lbl $ S.map loop_header loops = return Nothing 
+              | otherwise
+                  = case getInstrs facts of 
+                      [] -> return Nothing
+                      xs -> return $ Just $ (mkMiddles xs) <*> (mkLast i)
+          r i _ = return Nothing
           getInstrs :: FactBase MotionFact -> [MidIRInst O O]
           getInstrs = catMaybes . map unStoreInst . S.toList . S.unions . mapElems . mapMap fst
-          
