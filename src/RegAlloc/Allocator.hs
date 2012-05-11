@@ -131,23 +131,23 @@ rewriteSpillPass fb = FwdPass
                                           then return Nothing
                                           else return $ Just $ mkFirst $
                                                A.Enter pos l n x'
-                    where x' = toNearestSafeSP $ fromIntegral $ 8 * (countSpillID f)
+                    where x' = countSpillID f
                 d (A.Leave pos rets x) f = if x' == x
                                            then return Nothing
                                            else return $ Just $ mkLast $
                                                 A.Leave pos rets x'
-                    where x' = toNearestSafeSP $ fromIntegral $ 8 * (countSpillID f)
+                    where x' = countSpillID f
 
                 d _ f = return Nothing
                 
-                countSpillID f = length $ normalSpills f
+                countSpillID f = toNearestSafeSP $ fromIntegral $ 8 * (length $ normalSpills f)
                 normalSpills f = S.toList $ S.filter (\s -> case s of
                                                               SpillArg _ -> False
                                                               _ -> True) f
 
                 toMem :: SpillLoc -> S.Set SpillLoc -> MemAddr
                 toMem (SpillArg r) f = A.MemAddr (Just $ A.MReg A.RSP)
-                                       (A.Imm32 $ fromIntegral (8*r + 16 + 8 * countSpillID f))
+                                       (A.Imm32 $ 8*(fromIntegral r) + 8 + countSpillID f)
                                        Nothing A.SOne
                 toMem sl f = A.MemAddr (Just $ A.MReg A.RSP)
                              (A.Imm32 $ fromIntegral (8 * fromJust (findIndex (==sl) $ normalSpills f)))
