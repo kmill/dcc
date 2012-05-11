@@ -73,6 +73,7 @@ instance Show OperRM where
     show (RM_M mem) = show mem
 
 data SpillLoc = SpillID Int
+              | SpillSID String
               | SpillArg Int
                 deriving (Eq, Ord, Show)
 
@@ -119,7 +120,7 @@ instance Show Reg where
 instance Show Imm8 where
     show (Imm8 x) = "$" ++ show x
 instance Show Imm16 where
-    show (Imm16 x) = show x
+    show (Imm16 x) = "$" ++ show x
 instance Show Imm32 where
     show (Imm32 x) = show x
     show (Imm32BlockLabel l 0) = show l
@@ -261,7 +262,9 @@ data Asm e x where
   -- Takes 1) the number of arguments and 2) the amount of stack
   -- space.  Not actually "enter" instruction!
   Enter :: SourcePos -> Label -> Int -> Int32 -> Asm C O
-  Leave :: SourcePos -> Int32 -> Asm O O
+  -- Takes whether it returns something in RAX and how much stack
+  -- space should be freed.  Not actually "leave" instruction!
+  Leave :: SourcePos -> Bool -> Int32 -> Asm O C
 
   -- | Int is the number of arguments (to know which registers are
   -- used)
@@ -320,6 +323,7 @@ instance NonLocal Asm where
   successors (Jmp _ _) = []
   successors (JCond _ _ (Imm32BlockLabel tr 0) fa) = [tr, fa]
   successors (JCond _ _ _ fa) = [fa]
+  successors (Leave _ _ _) = []
   successors (Ret _ _) = []
   successors (RetPop _ _ _) = []
   successors (ExitFail _) = []
@@ -357,11 +361,13 @@ instance Show (Asm e x) where
       where adjSP = case st of
                       0 -> ""
                       _ -> printf "subq $%d, %s" st (show (MReg RSP))
-  show (Leave pos st) = printf "%s# leave  %s"
-                        adjSP (showPos pos)
-      where adjSP = case st of
-                      0 -> ""
-                      _ -> printf "addq $%d, %s  " st (show (MReg RSP))
+  show (Leave pos returns st) = printf "addq $%d, %%rsp\n   " st ++ showNullOp "ret" pos
+                                ++ (if not returns then " (void method)" else "")
+--    printf "%s# leave  %s"
+--                        adjSP (showPos pos)
+--      where adjSP = case st of
+--                      0 -> ""
+--                      _ -> printf "addq $%d, %s  " st (show (MReg RSP))
 
   show (Call pos nargs func) = showUnOp "call" pos func
   show (Callout pos nargs func) = showUnOp "call" pos func

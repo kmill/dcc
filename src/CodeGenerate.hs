@@ -166,19 +166,14 @@ instToAsm (I.CondBranch pos cexp tl fl)
     = do (g, flag) <- expToFlag cexp
          return $ g <*> (mkLast $ A.JCond pos flag (A.Imm32BlockLabel tl 0) fl)
 instToAsm (I.Return pos fname Nothing)
-    = return $ --genPopRegs pos A.calleeSaved
-               (mkMiddle $ A.Leave pos 0)
-               <*> (mkLast $ A.Ret pos False)
+    = return $ (mkLast $ A.Leave pos False 0)
 instToAsm (I.Return pos fname (Just exp))
     = do (g, irm) <- expToIRM exp
          return $ g <*> mkMiddle (A.MovIRMtoR pos irm (A.MReg A.RAX))
---                    <*> genPopRegs pos A.calleeSaved
-                    <*> (mkMiddle $ A.Leave pos 0)
-                    <*> mkLast (A.Ret pos True)
+                    <*> (mkLast $ A.Leave pos True 0)
 instToAsm (I.Fail pos)
     = return $ mkMiddles [ A.mov pos (A.Imm32 1) (A.MReg A.RDI)
                          , A.mov pos (A.Imm32 0) (A.MReg A.RAX)
---                         , A.Realign pos 0
                          , A.Callout pos 1 (A.Imm32Label "exit" 0) ]
                <*> mkLast (A.ExitFail pos)
 
@@ -313,17 +308,19 @@ expToR e = mcut $ msum rules
                                                (A.IRM_I $ A.Imm32 (1))
                                                dr)
                           , dr )
-              , do I.BinOp pos op expa expb <- withNode e
-                   guard $ op `elem` [I.OpAdd, I.OpSub]
-                   let op' = fromJust $ lookup op [ (I.OpAdd, A.Add)
-                                                  , (I.OpSub, A.Sub) ]
+              , do I.BinOp pos I.OpAdd expa expb <- withNode e
                    (ga, a) <- expToIRM expa
                    (gb, b) <- expToIRM expb
                    dr <- genTmpReg
-                   return ( ga
-                            <*> mkMiddle (A.MovIRMtoR pos a dr)
-                            <*> gb
-                            <*> mkMiddle (A.ALU_IRMtoR pos op' b dr)
+                   return ( gb <*> mkMiddle (A.MovIRMtoR pos b dr)
+                            <*> ga <*> mkMiddle (A.ALU_IRMtoR pos A.Add a dr)
+                          , dr )
+              , do I.BinOp pos I.OpSub expa expb <- withNode e
+                   (ga, a) <- expToIRM expa
+                   (gb, b) <- expToIRM expb
+                   dr <- genTmpReg
+                   return ( ga <*> mkMiddle (A.MovIRMtoR pos a dr)
+                            <*> gb <*> mkMiddle (A.ALU_IRMtoR pos A.Sub b dr)
                           , dr )
 --               , do I.BinOp pos op expa expb <- withNode e
 --                    guard $ op `elem` [ I.CmpLT, I.CmpGT, I.CmpLTE
@@ -460,6 +457,14 @@ expToFlag :: MidIRExpr -> CGM (Graph A.Asm O O, A.Flag)
 expToFlag e = mcut $ msum rules
     where
       rules = [ cmpBinOpToFlag e
+              , do I.UnOp pos I.OpNot ne <- withNode e
+                   (g, r) <- expToRM ne
+                   return ( g
+                            <*> mkMiddle (A.Test noPosition
+                                               (A.IR_I $ A.Imm32 $
+                                                 fromIntegral I.bTrue)
+                                               r)
+                          , A.FlagZ )
                 --- Use testq to see if it's bTrue (which should be non-zero).
               , do (g, r) <- expToRM e
                    return ( g
@@ -572,6 +577,7 @@ lowIRToAsm m opts
       ++ (concatMap showString (lowIRStrings m))
       ++ newline
       ++  [ ".text"
+          , ""
           , ".globl main" 
           , ".globl _main" 
           , "main:"
@@ -581,6 +587,7 @@ lowIRToAsm m opts
           , ind "movq $0, %rax"
           , ind "addq $8, %rsp"
           , ind "ret" ]
+      ++ newline
       ++ ["# methods"]
       ++ (concatMap (showMethod (macMode opts) (lowIRGraph m)) (lowIRMethods m))
   where

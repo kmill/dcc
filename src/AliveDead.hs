@@ -64,7 +64,7 @@ getAliveDead expr
         CMovRMtoR _ _ rm r -> getRSrc rm <+> getRSrc r <+> getRDst r
         Enter _ _ nargs _ -> ([], x) <+> ([], map MReg calleeSaved ++ [MReg RSP])
                 where x = map MReg (catMaybes $ take nargs argOrder)
-        Leave{} -> (map MReg calleeSaved ++ [MReg RSP], [MReg RSP])
+        Leave _ rets _ -> (map MReg calleeSaved ++ [MReg RSP], []) <+> (if rets then [MReg RAX] else [], [])
         Call p nargs fl -> (x, x ++ [MReg RAX])
                            <+> ([MReg RSP], map MReg callerSaved ++ [MReg RSP])
                 where x = map MReg (catMaybes $ take nargs argOrder)
