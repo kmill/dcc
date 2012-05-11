@@ -38,10 +38,13 @@ regAlloc lir
              mlabels = map I.methodEntry meths
          massgraph <- evalStupidFuelMonad (massageGraph mlabels graph) 22222222
          --graph' <- error $ I.graphToGraphViz show massgraph
-         let graph' = foldl (flip id) massgraph (map (doRegAlloc freeSpillLocs) mlabels)
+         let graph' = foldl1 (|*><*|) $ map (\mlabel -> doRegAlloc freeSpillLocs mlabel (subgraph massgraph mlabel)) mlabels
          graph'' <- evalStupidFuelMonad (collectSpill mlabels graph') 22222222
          return $ LowIRRepr fields strs meths graph''
-
+    where
+      subgraph :: Graph A.Asm C C -> Label -> Graph A.Asm C C
+      subgraph (GMany _ body _) label = let blocks = postorder_dfs_from body label
+                                        in foldl1 (|*><*|) (map blockGraph blocks)
 
 
 -- | Collects and rewrites the spills in the graph to moves.
@@ -426,8 +429,9 @@ doRegAlloc spillLocs mlabel graph
                     wl <- get
                     if trace ("endState:\n" ++ displayWL wl) $ not $ null spilledWebs
                        then let (spillLocs', graph') = insertSpills spillLocs pg wl
-                            in return $ doRegAlloc spillLocs' mlabel graph'
-                       else return $ trace' ("done: " ++ show wl) $ rewriteGraph pg wl
+                            in trace ("spilledCode:\n" ++ unlines (graphToAsm False graph' mlabel)) $ return $ doRegAlloc spillLocs' mlabel graph'
+                       else let graph' = rewriteGraph pg wl
+                            in trace ("endCode:\n" ++ unlines (graphToAsm False graph' mlabel)++"\n****\n****\n") $ return graph'
       in evalState main (trace ("initCode:\n" ++ unlines (graphToAsm False graph mlabel) ++ "\ninitState:\n" ++ displayWL initState) initState)
 
 insertSpills :: SpillLocSupply -> Graph (PNode Asm) C C -> RWorklists 
@@ -503,19 +507,19 @@ insertSpills spillLocs pg wl = trace' ("insertSpills: " ++ show toSpill ++ show 
           spilled' :: [WebID]
           spilled' = map (\i -> getPreAlias' i wl) (wSpilledWebs wl)
           
-          spilledWebs :: [(Web, SpillLoc)]
+          spilledWebs :: [(WebID, Web, SpillLoc)]
           spilledWebs = do (i, w) <- idToWeb
                            let i' = getPreAlias' i wl
                            guard $ i' `elem` spilled'
-                           return (w, slmap M.! i')
+                           return (i', w, slmap M.! i')
           
           toReload, toSpill :: M.Map (NodePtr, Reg) SpillLoc
-          toReload = M.fromList $ do (w, sl) <- spilledWebs
+          toReload = M.fromList $ do (i', w, sl) <- spilledWebs
                                      u <- S.toList $ webUses w
-                                     return $ ((u, webReg w), sl)
-          toSpill = M.fromList $ do (w, sl) <- spilledWebs
+                                     return $ ((u, newWebReg i'), sl)
+          toSpill = M.fromList $ do (i', w, sl) <- spilledWebs
                                     d <- S.toList $ webDefs w
-                                    return $ ((d, webReg w), sl)
+                                    return $ ((d, newWebReg i'), sl)
 
 rewriteGraph :: Graph (PNode Asm) C C -> RWorklists -> Graph Asm C C
 rewriteGraph pg wl = trace' ("rewriteGraph: " ++ show usesColorMap ++ show defsColorMap) graph'
