@@ -197,6 +197,64 @@ data RWorklists = RWorklists
     }
                   deriving Show
 
+displayWL :: RWorklists -> String
+displayWL wl = unlines
+               [ "Interference graph:"
+               , dispIG (wInterfGraph wl)
+               , "Simplify:"
+               , show $ map dispWebName $ wSimplifyWorklist wl
+               , "Freeze:"
+               , show $ map dispWebName $ wFreezeWorklist wl
+               , "Spill:"
+               , show $ map dispWebName $ wSpillWorklist wl
+               , "Coalesced:"
+               , intercalate ", " $ map (\(a,b) -> "(" ++ dispWebName a ++ ", " ++ dispWebName b ++ ")") $ M.toList $ wCoalescedAlias wl
+               , "Spilled:"
+               , show $ map dispWebName $ wSpilledWebs wl
+               , "Colored:"
+               , intercalate ", " $ map (\(a,b) -> "(" ++ dispWebName a ++ ", " ++ show b ++ ")") $ M.toList $ wColoredWebs wl
+               , "Degrees:"
+               , intercalate ", " $ map (\(a,b) -> "(" ++ dispWebName a ++ ", " ++ show b ++ ")") $ M.toList $ wDegrees wl
+               , "Worklist moves:"
+               , show $ S.toList $ wWorklistMoves wl
+               , "Coalesced moves:"
+               , show $ wCoalescedMoves wl
+               , "Constrained moves:"
+               , show $ wConstrainedMoves wl
+               , "Frozen moves:"
+               , show $ wFrozenMoves wl
+               , "Active moves:"
+               , show $ S.toList $ wActiveMoves wl
+               ]
+    where dispIG g = unlines $ map showAdj (igWebIDs g)
+              where dispWeb i = show i ++ "." ++ show (webReg web) ++ " " ++ pc
+                                ++ "\n    d:" ++ show (S.toList $ webDefs web) ++ "\n    u:" ++ show (S.toList $ webUses web)
+                                ++ "\n    m:" ++ show (S.toList $ webMoveNodes web)
+                        where web = igGetWeb i g
+                              pc = if webPrecolored web then "precolored" else ""
+                    showAdj i = dispWeb i ++ arrayLike (map dispWebName $ S.toList $ igAdjLists g M.! i) ++ "\n"
+                    arrayLike [] = ""
+                    arrayLike lst = if length lst < 10
+                                    then "\n   " ++ intercalate " " lst
+                                    else "\n   " ++ intercalate " " (take 10 lst) ++ arrayLike (drop 10 lst)
+          dispWebName i = show i ++ "." ++ show (webReg web)
+              where web = igGetWeb i (wInterfGraph wl)
+
+displayWL' wl = unlines
+                [ "Simplify:"
+                , show $ map dispWebName $ wSimplifyWorklist wl
+                , "Freeze:"
+                , show $ map dispWebName $ wFreezeWorklist wl
+                , "Spill:"
+                , show $ map dispWebName $ wSpillWorklist wl
+                , "Select stack:"
+                , show $ map dispWebName $ wSelectStack wl
+                , "Coalesced:"
+                , show $ map dispWebName $ S.toList $ wCoalescedWebs wl
+                ]
+    where dispWebName i = show i ++ "." ++ show (webReg web)
+              where web = igGetWeb i (wInterfGraph wl)
+                    
 -- | Updates webMoveNodes to the given value for the web id
 updateWebMoves' :: S.Set MovePtr -> WebID -> RWorklists -> RWorklists
 updateWebMoves' s i wl
@@ -256,8 +314,8 @@ adjacentWebs i =
      coalesced <- gets wCoalescedWebs
      return $ (igAdjLists g M.! i) S.\\ (select `S.union` coalesced)
 
--- | Takes a web id and gives the current list of "move-related" webs. "NodeMoves"
-webMoves :: Int -> AM (S.Set NodePtr)
+-- | Takes a web id and gives the current list of "move-related" nodes. "NodeMoves"
+webMoves :: WebID -> AM (S.Set MovePtr)
 webMoves i = 
     do wmoves <- gets $ getWebMoves' i
        actives <- gets wActiveMoves
@@ -359,17 +417,18 @@ doRegAlloc spillLocs mlabel graph
                                     ]
                         case mtodo of
                           Just action -> do action
-                                            mainLoop
+                                            wl <- get
+                                            trace ("***\n"++displayWL' wl++"***\n") mainLoop
                           Nothing -> return ()
-          main = do trace ("asm:\n" ++ I.graphToGraphViz show graph ++ "\n\n") mainLoop
+          main = do trace' ("asm:\n" ++ I.graphToGraphViz show graph ++ "\n\n") mainLoop
                     trace' "assignColors" assignColors
                     spilledWebs <- wSpilledWebs `fmap` get
                     wl <- get
-                    if not $ null spilledWebs
+                    if trace ("endState:\n" ++ displayWL wl) $ not $ null spilledWebs
                        then let (spillLocs', graph') = insertSpills spillLocs pg wl
                             in return $ doRegAlloc spillLocs' mlabel graph'
                        else return $ trace' ("done: " ++ show wl) $ rewriteGraph pg wl
-      in evalState main (trace' ("initState: " ++ show initState) initState)
+      in evalState main (trace ("initCode:\n" ++ unlines (graphToAsm False graph mlabel) ++ "\ninitState:\n" ++ displayWL initState) initState)
 
 insertSpills :: SpillLocSupply -> Graph (PNode Asm) C C -> RWorklists 
              -> (SpillLocSupply, Graph Asm C C)
@@ -418,19 +477,23 @@ insertSpills spillLocs pg wl = trace' ("insertSpills: " ++ show toSpill ++ show 
           ms l r = fromMaybe r $ M.lookup (l, r) usesMap
           md l r = fromMaybe r $ M.lookup (l, r) defsMap
           
+          idToWeb :: [(WebID, Web)]
           idToWeb = M.toList $ igIDToWeb (wInterfGraph wl)
+
+          newWebReg :: WebID -> Reg
+          newWebReg i = let i' = getPreAlias' i wl
+                            web = igIDToWeb (wInterfGraph wl) M.! i'
+                        in case webPrecolored web of
+                             True -> webReg web
+                             False -> SReg $ "web_" ++ show i'
           
           usesMap, defsMap :: M.Map (NodePtr, Reg) Reg
           usesMap = M.fromList $ do (i, w) <- idToWeb
-                                    let i' = getPreAlias' i wl
-                                        r' = webReg $ (igIDToWeb (wInterfGraph wl)) M.! i'
                                     u <- S.toList $ webUses w
-                                    return ((u, webReg w), r')
+                                    return ((u, webReg w), newWebReg i)
           defsMap = M.fromList $ do (i, w) <- idToWeb
-                                    let i' = getPreAlias' i wl
-                                        r' = webReg $ (igIDToWeb (wInterfGraph wl)) M.! i'
                                     u <- S.toList $ webDefs w
-                                    return ((u, webReg w), r')
+                                    return ((u, webReg w), newWebReg i)
           
           spillLocs' = drop (length $ spilled') spillLocs
           
@@ -503,7 +566,7 @@ simplify :: AM ()
 simplify = do u <- selectSimplify
               modify $ \wl -> wl { wSimplifyWorklist = delete u $ wSimplifyWorklist wl }
               web <- gets $ wGetWeb u
-              trace' ("pushSelect " ++ show u ++ " = " ++ show (webReg web)) $ pushSelect u
+              trace ("select " ++ show u) $ pushSelect u
               (S.toList `fmap` adjacentWebs u) >>= mapM_ decrementDegree
 
 -- | Chooses the web to simplify
@@ -530,8 +593,8 @@ decrementDegree i =
          modify $ \wl -> wl { wSpillWorklist = delete i (wSpillWorklist wl) }
          mr <- moveRelated i
          modify $ \wl -> if mr
-                         then wl { wFreezeWorklist = i:(wFreezeWorklist wl) }
-                         else wl { wSimplifyWorklist = i:(wSimplifyWorklist wl) }
+                         then wl { wFreezeWorklist = i:(delete i $ wFreezeWorklist wl) }
+                         else wl { wSimplifyWorklist = i:(delete i $ wSimplifyWorklist wl) }
 
 -- | "EnableMoves"
 enableMoves :: WebID -> AM ()
@@ -633,7 +696,7 @@ selectMove = do wl@(RWorklists { wWorklistMoves = choices }) <- get
 -- | "Combine"
 combine :: WebID -> WebID -> AM ()
 combine u v =
-    do modify $ \wl ->
+    do modify $ trace ("combine " ++ show u ++ " " ++ show v) $ \wl ->
            case v `elem` wFreezeWorklist wl of
              True -> wl { wFreezeWorklist = delete v $ wFreezeWorklist wl }
              False -> wl { wSpillWorklist = delete v $ wSpillWorklist wl }
@@ -656,7 +719,7 @@ combine u v =
                                          (wIdealRegs wl) }
        adjv' <- S.toList `fmap` adjacentWebs v
        forM_ adjv' $ \t -> do
-         addToAdjList t u
+         trace ("  addToAdjList " ++ show t ++ " " ++ show u) $ addToAdjList t u
          decrementDegree t
        wl <- get
        let d = wDegrees wl M.! u
@@ -684,28 +747,31 @@ freeze :: AM ()
 freeze = do u <- selectFreeze
             modify $ \wl -> wl { wFreezeWorklist = delete u $ wFreezeWorklist wl
                                , wSimplifyWorklist = u:(wSimplifyWorklist wl) }
-            freezeMoves(u)
+            freezeMoves (trace ("freeze " ++ show u) u)
     where selectFreeze = do (u:_) <- gets wFreezeWorklist
                             return u
 
 -- | "FreezeMoves"
 freezeMoves :: Int -> AM ()
-freezeMoves u = do wmoves <- trace ("freezing: " ++ show u) $ webMoves u
+freezeMoves u = do u <- getAlias u
+                   wmoves <- trace ("freezing: " ++ show u) $ webMoves u
                    wl <- get
-                   let wmoves' = map (\l -> (l, wMoves wl M.! l)) $ S.toList wmoves
+                   let wmoves' = map (\l -> (l, map (flip getAlias' wl) $ wMoves wl M.! l)) $ S.toList wmoves
+                   -- wmoves' is [(moveptr, [webids])]
                    forM_ (filter (elem u . snd) wmoves') $ \(m,uv) -> do
-                     let [v] = delete u uv
+                     let [v] = delete u $ fixList uv
                      modify $ \wl ->
                        case trace ("  freeze: " ++ show u ++ " " ++ show v) $ m `S.member` wActiveMoves wl of
                          True -> wl { wActiveMoves = S.delete m $ wActiveMoves wl }
                          False -> wl { wWorklistMoves = S.delete m $ wWorklistMoves wl }
-                     modify $ \wl -> wl { wFrozenMoves = m:(wFrozenMoves wl) }
+                     modify $ \wl -> wl { wFrozenMoves = m:(delete m $ wFrozenMoves wl) }
                      wmv <- webMoves v
                      degv <- gets $ \wl -> wDegrees wl M.! v
                      when (S.null wmv && degv < numUsableRegisters) $ do
                        modify $ \wl -> wl { wFreezeWorklist = delete v $ wFreezeWorklist wl
                                           , wSimplifyWorklist = v:(wSimplifyWorklist wl) }
-
+    where fixList [a] = [a, a]
+          fixList xs = xs
 
 -- | "SelectSpill"
 selectSpill :: AM ()

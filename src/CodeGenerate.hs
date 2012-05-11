@@ -535,21 +535,6 @@ labelToAsmOut macmode graph (lbl, mnlabel)
                   then case x of
                          A.Callout pos args (A.Imm32Label s 0)
                              -> ind $ show $ A.Callout pos args (A.Imm32Label ("_" ++ s) 0)
---                          A.Realign pos nstackargs
---                              -> let code=[ A.mov pos (A.MReg A.RSP) (A.MReg A.R12)
---                                          , A.ALU_IRMtoR pos A.Sub 
---                                                         (A.IRM_I $ A.Imm32 16)
---                                                         (A.MReg A.RSP)
---                                          , A.ALU_IRMtoR pos A.And
---                                                         (A.IRM_I $ A.Imm32 (-10))
---                                                         (A.MReg A.RSP)
---                                          , A.ALU_IRMtoR pos A.Sub
---                                                         (A.IRM_I $ A.Imm32 $ fromIntegral corr)
---                                                         (A.MReg A.RSP) ]
---                                     corr=(nstackargs `mod` 2) * 8
---                                 in intercalate "\n" $ map (ind . show) code
---                          A.Unrealign pos
---                              -> show $ A.mov pos (A.MReg A.R12) (A.MReg A.RSP)
                          _ -> ind $ show x
                   else ind $ show x
         fallthrough = case mnlabel of
@@ -598,8 +583,11 @@ lowIRToAsm m opts
     showString (name, pos, str) = [ name ++ ":\t\t# " ++ showPos pos
                                 , "   .asciz " ++ (show str) ]
     showMethod macmode graph (I.Method pos name entry postenter)
-        = ["", name ++ ":"]
-          ++ concatMap (labelToAsmOut macmode graph) (zip visited nvisited)
+        = ["", name ++ ":"] ++ graphToAsm macmode graph entry
+
+graphToAsm :: Bool -> Graph A.Asm C C -> Label -> [String]
+graphToAsm macmode graph entry
+    = concatMap (labelToAsmOut macmode graph) (zip visited nvisited)
       where visited = dfsSearch graph entry [entry]
             nvisited = case visited of
                          [] -> []

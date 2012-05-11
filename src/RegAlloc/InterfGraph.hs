@@ -118,7 +118,7 @@ igGetWeb i g = igIDToWeb g M.! i
 ---
 
 -- | (dus, tomatch, extents)
-type DUBuildFact = (S.Set DU, S.Set (Reg, Bool, NodePtr), S.Set (Reg, NodePtr))
+type DUBuildFact = (S.Set DU, S.Set (Reg, Bool, NodePtr, S.Set MovePtr), S.Set (Reg, NodePtr))
 
 duLattice :: DataflowLattice DUBuildFact
 duLattice = DataflowLattice
@@ -166,30 +166,30 @@ duTransfer = mkBTransfer3 fe fm fx
                  -> DUBuildFact
           handle l sr mr (uses, defs) pinned (fixedUses, fixedDefs) (dus, tomatch, extents)
               = let withdef d = S.map makeDU rps
-                        where rps = S.filter (\(reg, fixed, ptr) -> reg == d) tomatch
-                              makeDU (reg, fixed, ptr)
-                                  = DU reg sr mr (fixed || reg `elem` fixedDefs) l (ptrs reg) ptr
+                        where rps = S.filter (\(reg, fixed, ptr, moves) -> reg == d) tomatch
+                              makeDU (reg, fixed, ptr, moves)
+                                  = DU reg sr (mr `S.union` moves) (fixed || reg `elem` fixedDefs) l (ptrs reg) ptr
                     -- takes the NodePtrs from the current extents for a given register
                     ptrs r = S.map snd $ S.filter (\(reg, ptr) -> reg == r) extents
                     -- we can remove things which have been defined
-                    tomatch' = S.filter (\(reg, fixed, ptr) -> reg `notElem` defs) tomatch
+                    tomatch' = S.filter (\(reg, fixed, ptr, moves) -> reg `notElem` defs) tomatch
                     -- we want to add the used things to the tomatch list
-                    dtomatch = S.fromList $ map (\r -> (r, r `elem` fixedUses, l)) uses
+                    dtomatch = S.fromList $ map (\r -> (r, r `elem` fixedUses, l, mr)) uses
                     -- we add entries for things which are defined but
                     -- not used so caller-saved registers work
                     ddvirtused = S.fromList [DUv reg sr (reg `elem` fixedDefs) l
                                             | reg <- defs, reg `S.notMember` matchregs]
-                    matchregs = S.map (\(reg, fixed, ptr) -> reg) tomatch
+                    matchregs = S.map (\(reg, fixed, ptr, moves) -> reg) tomatch
                     -- these are the matched definitions to put in the
                     -- dus set
                     ddu = S.unions $ map withdef defs
                     -- some variables are "pinned" across use/def boundaries
-                    dduPinned = S.fromList $ map (\reg -> DU reg False S.empty False l S.empty l) pinned
+                    dduPinned = S.fromList $ map (\reg -> DU reg False mr False l S.empty l) pinned
                     alive = S.map fst extents
                     -- we clear the extents list of things which have been defined
                     extents' = S.filter (\(reg, ptr) -> reg `notElem` defs) extents
                     -- and extend the list for those which are still there
-                    dextents = S.map (\(reg, fixed, ptr) -> (reg, l)) tomatch'
+                    dextents = S.map (\(reg, fixed, ptr, moves) -> (reg, l)) tomatch'
                                `S.union` (S.fromList $ map (\reg -> (reg, l)) pinned)
                 in ( S.unions [dus, ddu, dduPinned, ddvirtused]
                    , S.unions [tomatch', dtomatch]
