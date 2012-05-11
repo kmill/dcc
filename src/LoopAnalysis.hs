@@ -112,7 +112,48 @@ findLoopVariables graph headerDomin headerBlock loopbackBlock
       
 
 analyzeParallelizationPass :: MidIRRepr -> S.Set Loop 
-analyzeParallelizationPass = error "Not yet implemented :-{"
+analyzeParallelizationPass midir = parallelLoops
+    where loops = findLoops domins graph mlabels
+          parallelLoops = maybeParallelLoops
+          -- First pass, removes obviously non-parallel loops (such as loops that contain returns or callouts)
+          maybeParallelLoops = S.filter (\l -> noCalls l && noRets l && noBreaks l) loops 
+          graph = midIRGraph midir
+          mlabels = (map methodEntry $ midIRMethods midir)
+          domins = findDominators graph mlabels
+
+          noCalls :: Loop -> Bool 
+          noCalls (Loop header body _) = all noCall $ S.toList body 
+              where noCall :: Label -> Bool 
+                    noCall l = let BodyBlock block = lookupBlock graph l 
+                                   (_, inner, _) = blockToNodeList block
+                                   in all notACall inner
+
+          notACall :: MidIRInst O O -> Bool 
+          notACall (Call _ _ _ _) = False
+          notACall (Callout _ _ _ _) = False 
+          notACall _ = True
+
+          noRets :: Loop -> Bool 
+          noRets (Loop _ body _) = all noRet $ S.toList body 
+              where noRet :: Label -> Bool 
+                    noRet l = let BodyBlock block = lookupBlock graph l 
+                                  (_, _, mx) = blockToNodeList block 
+                                  in notARet mx 
+
+          notARet :: MaybeC C (MidIRInst O C) -> Bool 
+          notARet (JustC (Return _ _ _)) = False 
+          notARet _ = True 
+          
+          noBreaks :: Loop -> Bool 
+          noBreaks (Loop header body _) = all noBreak $ S.toList body  
+              where noBreak :: Label -> Bool 
+                    noBreak l 
+                        | l == header = True 
+                        | otherwise = let BodyBlock block = lookupBlock graph l 
+                                      in all (\s -> S.member s body) $ successors block
+          
+
+          
 
 
 findDominators :: forall n. NonLocal n => Graph n C C -> [Label] -> FactBase DominFact 
