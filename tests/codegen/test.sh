@@ -1,4 +1,4 @@
-#!/bin/sh
+#!/bin/bash
 
 domidirc=0
 opts="cse copyprop constprop nzp deadcode blockelim flat tailcall"

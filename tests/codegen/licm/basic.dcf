@@ -1,0 +1,21 @@
+//> 3
+//> 3
+//> 3
+
+class Program
+{
+
+	int get_int() {
+	    return 3;
+	}
+
+	void main() {
+		int x, y;
+		x = get_int();
+
+		for (i = 0; 3) {
+			y = x + 1;
+			callout("printf", "%u", y);
+		}
+	}
+}

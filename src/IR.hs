@@ -213,6 +213,7 @@ data Inst v e x where
     Fail       :: SourcePos                                    -> Inst v O C
 
 data DivOp = DivQuo | DivRem
+             deriving (Eq, Ord)
 
 instance NonLocal (Inst v) where
     entryLabel (Label _ lbl) = lbl

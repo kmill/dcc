@@ -8,6 +8,7 @@ import Dataflow.BlockElim
 import Dataflow.Flatten
 import Dataflow.CopyProp
 import Dataflow.Tailcall
+import Dataflow.LICM
 import Dataflow.Dominator
 import Dataflow.OptSupport
 --import Dataflow.NZP
@@ -53,12 +54,13 @@ dataflows
       , DFA optDeadCode performDeadCodePass
       , DFA optBlockElim performBlockElimPass
       , DFA (\opts -> optCommonSubElim opts || optFlat opts) performFlattenPass
+      , DFA optLICM performLICMPass
       , DFA optCommonSubElim performCSEPass
       , DFA optCopyProp performCopyPropPass
       -- doing constprop after flatten/cse does great good! see tests/codegen/fig18.6.dcf
       , DFA optConstProp performConstPropPass
       , DFA optDeadCode performDeadCodePass
-      , DFA (\opts -> optCommonSubElim opts || optFlat opts || optUnflat opts ) performUnflattenPass 
+      --, DFA (\opts -> optCommonSubElim opts || optFlat opts || optUnflat opts ) performUnflattenPass 
       , DFA optCopyProp performCopyPropPass
       , DFA optConstProp performConstPropPass
       , DFA optDeadCode performDeadCodePass
@@ -82,9 +84,11 @@ performBlockElimPass midir = performBwdPass blockElimPass midir Nothing
 performFlattenPass midir = performFwdPass flattenPass midir ()
 --performNZPPass midir = performFwdPass nzpPass midir emptyNZPFact
 
-performFwdPass :: (FwdPass (StupidFuelMonadT GM) MidIRInst a) -> MidIRRepr -> a -> RM MidIRRepr
-performFwdPass pass midir eFact
-  = do (graph', factBase, _) <- analyzeAndRewriteFwd
+-- Type of analyzeAndRewrite*
+type AnalyzeFun p a = (p (StupidFuelMonadT GM) MidIRInst a) -> MaybeC C [Label] -> Graph MidIRInst C C -> Fact C a -> (StupidFuelMonadT GM) (Graph MidIRInst C C, FactBase a, MaybeO C a)
+performPass :: AnalyzeFun p a -> (p (StupidFuelMonadT GM) MidIRInst a) -> MidIRRepr -> a -> RM MidIRRepr
+performPass analyzeAndRewrite pass midir eFact
+  = do (graph', factBase, _) <- analyzeAndRewrite
                                 pass
                                 (JustC mlabels)
                                 graph
@@ -93,29 +97,23 @@ performFwdPass pass midir eFact
     where graph = midIRGraph midir
           mlabels = (map methodEntry $ midIRMethods midir)
 
+performFwdPass :: (FwdPass (StupidFuelMonadT GM) MidIRInst a) -> MidIRRepr -> a -> RM MidIRRepr
+performFwdPass = performPass analyzeAndRewriteFwd
+
 performBwdPass :: (BwdPass (StupidFuelMonadT GM) MidIRInst a) -> MidIRRepr -> a -> RM MidIRRepr 
-performBwdPass pass midir eFact
-    = do (graph', factBase, _) <- analyzeAndRewriteBwd 
-                                  pass
-                                  (JustC mlabels)
-                                  graph
-                                  (mapFromList (map (\l -> (l, eFact) ) mlabels))
-         return $ midir { midIRGraph = graph' }
-    where graph = midIRGraph midir 
-          mlabels = (map methodEntry $ midIRMethods midir)
+performBwdPass = performPass analyzeAndRewriteBwd
 
 performCSEPass :: MidIRRepr -> RM MidIRRepr 
 performCSEPass midir 
     = do nonTemps <- getVariables midir
          let nonTemps' = S.unions $ mapElems nonTemps
-         (graph', factBase, _) <- analyzeAndRewriteFwd
-                                  (csePass nonTemps')
-                                  (JustC mlabels)
-                                  graph
-                                  (mapFromList (map (\l -> (l, emptyExprFact) ) mlabels))
-         return $ midir { midIRGraph = graph'}
-    where graph = midIRGraph midir 
-          mlabels = (map methodEntry $ midIRMethods midir)
+         performFwdPass (csePass nonTemps') midir emptyExprFact
+
+performLICMPass midir = performBwdPass (licmPass loops) midir emptyMotionFact
+    where loops = findLoops domins graph mlabels
+          graph = midIRGraph midir
+          mlabels = map methodEntry $ midIRMethods midir
+          domins = findDominators graph mlabels
 
 performUnflattenPass :: MidIRRepr -> RM MidIRRepr 
 performUnflattenPass midir
@@ -193,6 +191,13 @@ csePass nonTemps = FwdPass
                    { fp_lattice = exprLattice
                    , fp_transfer = exprAvailable nonTemps
                    , fp_rewrite = cseRewrite nonTemps }
+
+licmPass :: (CheckpointMonad m, FuelMonad m, UniqueNameMonad m)
+            => S.Set Loop -> BwdPass m MidIRInst MotionFact
+licmPass loops = trace (show loops) $ BwdPass
+           { bp_lattice = motionLattice
+           , bp_transfer = motionTransfer loops
+           , bp_rewrite = motionRewrite loops }
 
 dominatorPass :: (CheckpointMonad m, FuelMonad m, UniqueNameMonad m)
                  => FwdPass m MidIRInst DominFact
