@@ -1,4 +1,4 @@
-{-# LANGUAGE RankNTypes, GADTs, ScopedTypeVariables, FlexibleInstances #-}
+{-# LANGUAGE RankNTypes, GADTs, ScopedTypeVariables #-}
 
 module RegAlloc.InterfGraph where
 
@@ -9,7 +9,7 @@ import Data.Maybe
 import Data.Function
 import Control.Monad
 import DataflowTypes
-import AST(noPosition)
+import AST(noPosition, SourcePos)
 import qualified IR as I
 import Assembly
 import AliveDead
@@ -125,11 +125,13 @@ duLattice = DataflowLattice
             { fact_name = "du lattice"
             , fact_bot = (S.empty, S.empty, S.empty)
             , fact_join = add }
-    where add _ (OldFact (oldDUs, oldUndefs, oldExtents)) (NewFact (newDUs, newUndefs, newExtents))
+    where add :: JoinFun DUBuildFact
+          add _ (OldFact (oldDUs, oldUndefs, oldExtents)) (NewFact (newDUs, newUndefs, newExtents))
               = (ch, (dus', undefs', extents'))
               where dus' = S.union oldDUs newDUs
                     undefs' = S.union oldUndefs newUndefs
                     extents' = S.union oldExtents newExtents
+                    bigger :: forall a. S.Set a -> S.Set a -> Bool
                     bigger = (>) `on` S.size
                     ch = changeIf (undefs' `bigger` oldUndefs
                                    || dus' `bigger` oldDUs
@@ -346,21 +348,27 @@ massageGraph mlabels graph
             handle :: ([Reg], [Reg]) -> S.Set Reg -> S.Set Reg
             handle (alive, dead) f = (f S.\\ (S.fromList dead)) `S.union` (S.fromList alive)
       
+      mkMove :: SourcePos -> Reg -> Asm O O 
       mkMove pos r = MovIRMtoR pos (IRM_R r) r
+      mkMoves :: SourcePos -> [Reg] -> Graph Asm O O 
       mkMoves pos regs = mkMiddles [mkMove pos r | r <- nub regs, r /= MReg RSP]
+      ifNotNull :: forall a b m. (Monad m) => [a] -> b -> m (Maybe b)
       ifNotNull l x = return $ if null l then Nothing else Just x
       
       aliveDefined defined f = S.toList $ S.fromList defined `S.intersection` f
       
+      mCO :: Monad m => Asm C O -> S.Set Reg ->  m (Maybe (Graph Asm C O))
       mCO n f = ifNotNull defined' $ mkFirst n <*> mkMoves pos defined'
           where (used, defined) = getFixed n
                 defined' = aliveDefined defined f
                 pos = noPosition
+      mOO :: Monad m => Asm O O -> S.Set Reg -> m (Maybe (Graph Asm O O))
       mOO n f = ifNotNull (used ++ defined') $
                 mkMoves pos used <*> mkMiddle n <*> mkMoves pos defined'
           where (used, defined) = getFixed n
                 defined' = aliveDefined defined f
                 pos = noPosition
+      mOC :: Monad m => Asm O C -> FactBase (S.Set Reg) -> m (Maybe (Graph Asm O C))
       mOC n f = ifNotNull used $ mkMoves pos used <*> mkLast n
           where (used, defined) = getFixed n
                 pos = noPosition
@@ -460,4 +468,5 @@ getFixed expr
         Shr _ _ rm -> noFixed
         Sar _ _ rm -> noFixed
         Nop _ -> noFixed
-      where noFixed = ([], [])
+      where noFixed :: ([Reg], [Reg])
+            noFixed = ([], [])

@@ -476,7 +476,8 @@ insertSpills spillLocs pg wl = trace' ("insertSpills: " ++ show toSpill ++ show 
                     (used, defined) = getAliveDead n'
                     used' = filter (\u -> (l, u) `M.member` toReload) used
                     genReload reg = Reload noPosition (toReload M.! (l, reg)) reg
-                    
+          
+          rewriteCoal :: forall e x. NodePtr -> Asm e x -> Asm e x
           rewriteCoal l n = mapAsm (ms l) (md l) n
           ms l r = fromMaybe r $ M.lookup (l, r) usesMap
           md l r = fromMaybe r $ M.lookup (l, r) defsMap
