@@ -112,14 +112,55 @@ findLoopVariables graph headerDomin headerBlock loopbackBlock
       
 
 analyzeParallelizationPass :: MidIRRepr -> S.Set Loop 
-analyzeParallelizationPass = error "Not yet implemented :-{"
+analyzeParallelizationPass midir = parallelLoops
+    where loops = findLoops domins graph mlabels
+          parallelLoops = maybeParallelLoops
+          -- First pass, removes obviously non-parallel loops (such as loops that contain returns or callouts)
+          maybeParallelLoops = S.filter (\l -> noCalls l && noRets l && noBreaks l) loops 
+          graph = midIRGraph midir
+          mlabels = (map methodEntry $ midIRMethods midir)
+          domins = findDominators graph mlabels
+
+          noCalls :: Loop -> Bool 
+          noCalls (Loop header body _) = all noCall $ S.toList body 
+              where noCall :: Label -> Bool 
+                    noCall l = let BodyBlock block = lookupBlock graph l 
+                                   (_, inner, _) = blockToNodeList block
+                                   in all notACall inner
+
+          notACall :: MidIRInst O O -> Bool 
+          notACall (Call _ _ _ _) = False
+          notACall (Callout _ _ _ _) = False 
+          notACall _ = True
+
+          noRets :: Loop -> Bool 
+          noRets (Loop _ body _) = all noRet $ S.toList body 
+              where noRet :: Label -> Bool 
+                    noRet l = let BodyBlock block = lookupBlock graph l 
+                                  (_, _, mx) = blockToNodeList block 
+                                  in notARet mx 
+
+          notARet :: MaybeC C (MidIRInst O C) -> Bool 
+          notARet (JustC (Return _ _ _)) = False 
+          notARet _ = True 
+          
+          noBreaks :: Loop -> Bool 
+          noBreaks (Loop header body _) = all noBreak $ S.toList body  
+              where noBreak :: Label -> Bool 
+                    noBreak l 
+                        | l == header = True 
+                        | otherwise = let BodyBlock block = lookupBlock graph l 
+                                      in all (\s -> S.member s body) $ successors block
+          
+
+          
 
 
-findDominators :: forall v. Graph (Inst v) C C -> [Label] -> FactBase DominFact 
+findDominators :: forall n. NonLocal n => Graph n C C -> [Label] -> FactBase DominFact 
 findDominators graph mlabels = domins 
      where (_, domins, _) = runGM domins'
-          --domins' :: GM (Graph (Inst v) C C, FactBase DominFact, MaybeO C DominFact)
-           dominAnalysis :: RM (Graph (Inst v) C C, FactBase DominFact, MaybeO C DominFact)
+          --domins' :: GM (Graph n C C, FactBase DominFact, MaybeO C DominFact)
+           dominAnalysis :: RM (Graph n C C, FactBase DominFact, MaybeO C DominFact)
            dominAnalysis = (analyzeAndRewriteFwd 
                             generalDominPass 
                             (JustC mlabels)
@@ -127,8 +168,8 @@ findDominators graph mlabels = domins
                             (mapFromList (map (\l -> (l, fact_bot dominatorLattice)) mlabels)))
            domins' = runWithFuel 2222222 dominAnalysis
 
-generalDominPass :: (CheckpointMonad m, FuelMonad m, UniqueNameMonad m)
-                 => FwdPass m (Inst v) DominFact 
+generalDominPass :: (CheckpointMonad m, FuelMonad m, UniqueNameMonad m, NonLocal n)
+                 => FwdPass m n DominFact 
 generalDominPass = FwdPass 
                    { fp_lattice = dominatorLattice
                    , fp_transfer = generalDominAnalysis
@@ -136,7 +177,7 @@ generalDominPass = FwdPass
 
 type LoopBody = S.Set Label
 
-loopNestInformation :: forall v. Graph (Inst v) C C -> [Label] -> Map.Map Label Int 
+loopNestInformation :: forall n. NonLocal n => Graph n C C -> [Label] -> Map.Map Label Int 
 loopNestInformation graph mlabels = finalNestMap
     where domins = findDominators graph mlabels
           GMany _ body _ = graph 
@@ -154,7 +195,7 @@ loopNestInformation graph mlabels = finalNestMap
                                     Just i -> Map.insert l (i+1) nestMap
                                     Nothing -> Map.insert l 1 nestMap
 
-          findLoopBodies :: forall v. Graph (Inst v) C C -> BackEdge -> LoopBody
+          findLoopBodies :: Graph n C C -> BackEdge -> LoopBody
           findLoopBodies graph (loopBack, loopHeader) = S.insert loopHeader loopBody 
               where loopBody = findReaching loopBack loopHeader graph mlabels
 
@@ -163,11 +204,11 @@ loopNestInformation graph mlabels = finalNestMap
 
 
 
-findReaching :: forall v. Label -> Label -> Graph (Inst v) C C -> [Label] -> S.Set Label 
+findReaching :: forall n. NonLocal n => Label -> Label -> Graph n C C -> [Label] -> S.Set Label 
 findReaching loopBack loopHeader graph mlabels 
     = failReaching
       where (_, reaching, _) = runGM reaching' 
-            reachingRun :: RM (Graph (Inst v) C C, FactBase ReachingFact, MaybeO C ReachingFact)
+            reachingRun :: RM (Graph n C C, FactBase ReachingFact, MaybeO C ReachingFact)
             reachingRun = (analyzeAndRewriteBwd
                            reachingPass
                            (JustC mlabels)

@@ -65,7 +65,7 @@ for file in $PWD/input/*.dcf; do
   output="${workingdir}/${progname}.pgm"
   timing_opt="${workingdir}/${progname}_opt.timing"
   timing_unopt="${workingdir}/${progname}_unopt.timing"
-
+  echo $input_filename
   cp $orig_input $input;
   msg=""
   if runcompiler_opt $file $asm; then

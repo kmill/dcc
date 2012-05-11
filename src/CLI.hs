@@ -27,6 +27,7 @@ data CompilerOpts
                    , optMode :: OptFlags
                    -- ^ Which optimizations to use.
                    , macMode :: Bool
+                   , regAllocMode :: Bool
                    }
       deriving (Show)
 
@@ -40,6 +41,7 @@ defaultOptions
                    , helpMode = False
                    , optMode = optNone
                    , macMode = False
+                   , regAllocMode = False
                    }
 
 -- | This type represents the possible actions to do with the input
@@ -84,6 +86,7 @@ options =
     , Option ['m']     ["mac"]   (NoArg mac')              "Enables Mac OS X mode"
     , Option ['c']     ["compat"]  (NoArg compat')             "Enables compatibility mode with 6.035 output spec"
     , Option ['h']  ["help"]    (NoArg help')               "Prints this usage information"
+    , Option ['r']  ["regalloc"] (NoArg regalloc')          "Enables the register allocator"
     , Option ['O']     ["opt"]     (ReqArg optimize' "OPTIMIZATION") ("Enables optimizations:\n" ++
                                                                       "\t      all : Enables ALL optimizations\n" ++
                                                                       "\t     none : Disables ALL optimizations\n" ++
@@ -104,6 +107,7 @@ options =
           help' opts = opts { helpMode = True }
           optimize' t opts = opts { optMode = optOpt opts t }
           mac' opts = opts { macMode = True }
+          regalloc' opts = opts { regAllocMode = True }
 
 targetOpt :: String -> TargetFlag
 targetOpt s
