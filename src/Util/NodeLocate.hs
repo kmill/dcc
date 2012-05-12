@@ -6,6 +6,7 @@
 module Util.NodeLocate where
 
 import Compiler.Hoopl
+import qualified IR as I
 import Assembly
 
 data NodePtr = NodePtr Label Int
@@ -34,6 +35,8 @@ instance NonLocal n => NonLocal (PNode n) where
     successors (PNode _ n) = successors n
 
 instance Show (PNode Asm e x) where
+    show (PNode ptr node) = show ptr ++ ": " ++ show node
+instance Show (PNode I.MidIRInst e x) where
     show (PNode ptr node) = show ptr ++ ": " ++ show node
 
 toPGraph :: NonLocal n => Graph n C C -> Graph (PNode n) C C

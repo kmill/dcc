@@ -30,6 +30,8 @@ import Debug.Trace
 import Data.Maybe
 import CLI
 
+import Dataflow.IRWebs
+
 import DataflowTypes
 
 
@@ -54,13 +56,13 @@ dataflows
       , DFA optDeadCode performDeadCodePass
       , DFA optBlockElim performBlockElimPass
       , DFA (\opts -> optCommonSubElim opts || optFlat opts) performFlattenPass
-      , DFA optLICM performLICMPass
+      --, DFA optLICM performLICMPass
       , DFA optCommonSubElim performCSEPass
       , DFA optCopyProp performCopyPropPass
       -- doing constprop after flatten/cse does great good! see tests/codegen/fig18.6.dcf
       , DFA optConstProp performConstPropPass
       , DFA optDeadCode performDeadCodePass
-      --, DFA (\opts -> optCommonSubElim opts || optFlat opts || optUnflat opts ) performUnflattenPass 
+      , DFA (\opts -> optCommonSubElim opts || optFlat opts || optUnflat opts ) performUnflattenPass 
       , DFA optCopyProp performCopyPropPass
       , DFA optConstProp performConstPropPass
       , DFA optDeadCode performDeadCodePass

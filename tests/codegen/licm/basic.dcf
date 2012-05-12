@@ -1,6 +1,6 @@
-//> 3
-//> 3
-//> 3
+//> 4
+//> 4
+//> 4
 
 class Program
 {
@@ -15,7 +15,7 @@ class Program
 
 		for (i = 0; 3) {
 			y = x + 1;
-			callout("printf", "%u", y);
+			callout("printf", "%u\n", y);
 		}
 	}
 }

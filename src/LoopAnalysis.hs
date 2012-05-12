@@ -38,6 +38,20 @@ midirLoops midir = findLoops domins graph mlabels
           mlabels = map methodEntry $ midIRMethods midir
           domins = findDominators graph mlabels
 
+data LoopNest = LoopNest Loop LoopNest 
+              | LeafLoop Loop 
+                deriving (Eq, Ord, Show)
+
+listToLoopNest :: [Loop] -> LoopNest 
+listToLoopNest [] = error "attempted to create loop nest from empty list :-{"
+listToLoopNest (x:[]) = LeafLoop x
+listToLoopNest (x:xs) = LoopNest x $ listToLoopNest xs
+
+loopNestToList :: LoopNest -> [Loop] 
+loopNestToList (LeafLoop l) = [l]
+loopNestToList (LoopNest l n) = l:(loopNestToList n)
+
+
 findLoops :: FactBase DominFact -> Graph MidIRInst C C -> [Label] -> S.Set Loop 
 findLoops dominators graph mlabels = S.fromList loops
     where GMany _ body _ = graph
@@ -159,6 +173,9 @@ analyzeParallelizationPass midir = parallelLoops
                                       in all (\s -> S.member s body) $ successors block
           
 
+
+createLoopNests :: S.Set Loop -> [LoopNest] 
+createLoopNests loops = error "Not yet implemented :-{"
           
 
 
