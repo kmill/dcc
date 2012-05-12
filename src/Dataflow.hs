@@ -85,6 +85,7 @@ performDeadCodePass midir = performBwdPass deadCodePass midir S.empty
 performBlockElimPass midir = performBwdPass blockElimPass midir Nothing
 performFlattenPass midir = performFwdPass flattenPass midir ()
 --performNZPPass midir = performFwdPass nzpPass midir emptyNZPFact
+performTailcallPass midir = performBwdPass (tailcallPass midir) midir (fact_bot lastReturnLattice)
 
 -- Type of analyzeAndRewrite*
 type AnalyzeFun p a = (p (StupidFuelMonadT GM) MidIRInst a) -> MaybeC C [Label] -> Graph MidIRInst C C -> Fact C a -> (StupidFuelMonadT GM) (Graph MidIRInst C C, FactBase a, MaybeO C a)
@@ -211,28 +212,28 @@ dominatorPass = FwdPass
 
 
 
-performTailcallPass :: MidIRRepr -> RM MidIRRepr
-performTailcallPass midir
-    = do graph' <- foldl (>>=) (return $ midIRGraph midir) (map forMethod (midIRMethods midir))
-         return $ midir { midIRGraph = graph' }
-    where forMethod :: Method -> Graph MidIRInst C C -> RM (Graph MidIRInst C C)
-          forMethod (Method pos name entry postentry) graph
-              = do (graph', _, _) <- analyzeAndRewriteBwd
-                                     (tailcallPass name postentry argvars)
-                                     (JustC mlabels)
-                                     graph
-                                     mapEmpty
-                   return graph'
-              where argvars = getVars (blockToNodeList (lookupLabel graph entry))
-                    getVars :: (MaybeC C (MidIRInst C O), a, b) -> [VarName]
-                    getVars (JustC (Enter _ _ args), _, _) = args
-                    getVars _ = error "getVars: method label is not Enter! :-("
-          mlabels = map methodEntry $ midIRMethods midir
+-- performTailcallPass :: MidIRRepr -> RM MidIRRepr
+-- performTailcallPass midir
+--     = do graph' <- foldl (>>=) (return $ midIRGraph midir) (map forMethod (midIRMethods midir))
+--          return $ midir { midIRGraph = graph' }
+--     where forMethod :: Method -> Graph MidIRInst C C -> RM (Graph MidIRInst C C)
+--           forMethod (Method pos name entry postentry) graph
+--               = do (graph', _, _) <- analyzeAndRewriteBwd
+--                                      (tailcallPass name postentry argvars)
+--                                      (JustC mlabels)
+--                                      graph
+--                                      mapEmpty
+--                    return graph'
+--               where argvars = getVars (blockToNodeList (lookupLabel graph entry))
+--                     getVars :: (MaybeC C (MidIRInst C O), a, b) -> [VarName]
+--                     getVars (JustC (Enter _ _ args), _, _) = args
+--                     getVars _ = error "getVars: method label is not Enter! :-("
+--           mlabels = map methodEntry $ midIRMethods midir
           
-          lookupLabel :: Graph MidIRInst C C -> Label -> Block MidIRInst C C
-          lookupLabel (GMany _ g_blocks _) lbl = case mapLookup lbl g_blocks of
-                                                   Just x -> x
-                                                   Nothing -> error "ERROR"
+--           lookupLabel :: Graph MidIRInst C C -> Label -> Block MidIRInst C C
+--           lookupLabel (GMany _ g_blocks _) lbl = case mapLookup lbl g_blocks of
+--                                                    Just x -> x
+--                                                    Nothing -> error "ERROR"
 
 
 ---
