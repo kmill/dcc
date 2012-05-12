@@ -15,31 +15,32 @@ data CondSet a = CondSet (Maybe (S.Set a)) (Maybe (S.Set a))
 data Assignable = AssignVar (Var SourcePos VarName)
                 | AssignCon (Lit SourcePos Int64)
 
-type AssignSet = CondSet (VarName, Assignable)
+data Assigned = InVar VarName
+              | InRet
+
+type AssignSet = CondSet (Assigned, Assignable)
 
 condAssignLattice :: DataflowLattice AssignSet
 condAssignLattice = DataflowLattice { fact_name = "Branch Assignments"
-                                   , fact_bot = CondSet (Just S.empty) (Just S.empty)
+                                   , fact_bot = AssignSet (Just S.empty) (Just S.empty)
                                    , fact_join = add
                                    }
-  where add _ (OldFact o) (NewFact n) = (c, n)
-          where c = changeIf (o /= n)
+  where add _ (OldFact o@(AssignSet ol or)) (NewFact n@(AssignSet nl nr)) = (c, n')
+          where c = n /= n'
+                n'
+                    | S.null or && S.null nr = CondSet ol nl
+                    | otherwise = AssignSet Nothing Nothing
+                          
+condAssignness :: BwdTransfer MidIRInst AssignSet
+condAssignness = mkBTransfer f
+  where f :: MidIRInst e x -> Fact x AssignSet -> AssignSet
+        f (Store v (Lit _ v')) k@(AssignSet (Just kr) kl) = CondSet (combineSets (singleton ((InVar v),(AssignCon v'))) kr)
+        f (Store v (Var _ v')) k@(AssignSet (Just kr) kl) = CondSet (combineSets (singleton ((InVar v),(AssignVar v'))) kr)    
+        f (Return _ (Just (Lit _ v')) k@(Assign (Just kr) kl) = CondSet (combineSets (singleton ((InRet, (AssignCon v')))) kr)
+        f (Return _ (Just (Var _ v')) k@(Assign (Just kr) kl) = CondSet (combineSets (singleton ((InRet, (AssignVar v')))) kr)
+        f _ k = AssignSet Nothing Nothing
 
-lastLabelness :: BwdTransfer MidIRInst LastLabel
-lastLabelness = mkBTransfer f
-  where f :: MidIRInst e x -> Fact x LastLabel -> LastLabel
-        f (Branch _ l) k = 
-          case lookupFact l k of
-            Just l' -> l' `mplus` Just l
-            Nothing -> Just l
-        f (Label _ l) (Just l')
-            | l == l'  = Nothing
-            | otherwise = Just l'
-        f (PostEnter _ l) k = Nothing
-        f (Label _ l) Nothing = Nothing
-        f (Enter _ l _) k = Nothing
-        
-        f _ k = Nothing
+combineSets :: 
 
 --Special case of fromJust for Branch, since it could be removed in the previous transfer.
 lastLabelElim :: forall m . FuelMonad m => BwdRewrite m MidIRInst LastLabel
