@@ -54,6 +54,11 @@ wInterf (Web v1 dus1 defs1 ext1 uses1) (Web v2 dus2 defs2 ext2 uses2)
       || (S.union ext1 uses1 `ints` S.union ext2 uses2)
     where ints s1 s2 = not $ S.null $ S.intersection s1 s2
 
+-- | Checks whether a web is in a list of blocks
+webInBlocks :: Web -> S.Set Label -> Bool
+webInBlocks web labels = all (\n -> S.member (nodeLabel n) labels) $
+                         S.toList (webDefs web `S.union` webUses web)
+
 type WebID = Int
 
 data InterfGraph = InterfGraph
