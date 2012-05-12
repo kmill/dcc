@@ -280,6 +280,7 @@ getVariablesPass = BwdPass
             used IndStore{} f = f
             used (Call _ x _ _) f = S.insert x f
             used (Callout _ x _ _) f = S.insert x f
+            used (Parallel _ ll x _ el) f = S.insert x $ S.union (fact f el) (fact f ll)
             used (Branch _ l) f = fact f l
             used (CondBranch _ _ tl fl) f = fact f tl `S.union` fact f fl
             used Return{} f = fact_bot getVarsLattice

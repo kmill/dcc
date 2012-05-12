@@ -207,8 +207,10 @@ data Inst v e x where
     IndStore      :: SourcePos -> Expr v -> Expr v                -> Inst v O O
     Call          :: SourcePos -> v -> String -> [Expr v]         -> Inst v O O
     Callout       :: SourcePos -> v -> String -> [Expr v]         -> Inst v O O
-    -- run first label second arg times in parallel, then do third label
+    -- run first label third arg times in parallel, then do second label
     Parallel      :: SourcePos -> Label -> v -> Int64 -> Label    -> Inst v O C
+    -- next two should have identical semantics essentially
+    ThreadReturn  :: SourcePos -> Label                           -> Inst v O C
     Branch        :: SourcePos -> Label                           -> Inst v O C
     CondBranch    :: SourcePos -> Expr v -> Label -> Label        -> Inst v O C
     -- if string is "thread" is a return from thread
@@ -223,6 +225,7 @@ instance NonLocal (Inst v) where
     entryLabel (PostEnter _ lbl) = lbl
     entryLabel (Enter _ lbl _) = lbl
     successors (Parallel _ plbl _  _ elbl) = [plbl, elbl]
+    successors (ThreadReturn _ lbl) = [lbl]
     successors (Branch _ lbl) = [lbl]
     successors (CondBranch _ exp tlbl flbl) = [tlbl, flbl]
     successors (Return _ _ _) = []
@@ -242,6 +245,7 @@ mapI f (Call pos d name args) = Call pos (f d) name (map (mapE f) args)
 mapI f (Callout pos d name args) = Callout pos (f d) name (map (mapE f) args)
 mapI f (Parallel pos plbl ivar count elbl)
     = Parallel pos plbl (f ivar) count elbl
+mapI f (ThreadReturn pos l) = ThreadReturn pos l
 mapI f (Branch pos l) = Branch pos l
 mapI f (CondBranch pos cexp lt lf) = CondBranch pos (mapE f cexp) lt lf
 mapI f (Return pos for mexp) = Return pos for (mexp >>= Just . (mapE f))
@@ -315,6 +319,9 @@ instance Show v => Show (Inst v e x) where
     show (Parallel pos plbl ivar count elbl)
         = printf "parallel (%s <- [0,..%u]) { goto %s; } goto %s; {%s};"
           (show ivar) count (show plbl) (show elbl) (showPos pos)
+    show (ThreadReturn pos lbl)
+        = printf "end thread to %s  {%s};"
+          (show lbl) (showPos pos)
     show (Branch pos lbl)
         = printf "goto %s  {%s};"
           (show lbl) (showPos pos)

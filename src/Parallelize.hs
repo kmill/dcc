@@ -25,7 +25,7 @@ compare' loop1 loop2 =
 
 performParallelizePass :: MidIRRepr -> RM MidIRRepr
 performParallelizePass midir = foldl (>>=) (return midir) $ map forLoop $ t $ L.sortBy compare' $ S.toList goodLoops
-    where goodLoops = midirLoops midir -- analyzeParallelizationPass mid_body loop1) (S.size $ loop_body loop2)r
+    where goodLoops = midirLoops midir -- analyzeParallelizationPass midir
 
 -- Need to do some things here:
 -- 1. Change loop header to instance of Parallel
@@ -59,12 +59,20 @@ loopPred loop blockMap lbl
 fixIncPred :: Loop -> MidIRMap -> MidIRMap
 fixIncPred loop blockMap
     = mapInsert lastLabel lastBlock' $ mapDelete lastLabel $ mapDelete incLabel blockMap
-    where incLabel = loopPred loop blockMap (loop_header loop)
+    where incLabel = loopPred loop blockMap headerLabel
           lastLabel = loopPred loop blockMap incLabel
           lastBlock = fromMaybe (error "couldn't find last") $ mapLookup lastLabel blockMap
           lastBlock' = mapBlock processLast lastBlock
           processLast :: forall e x. MidIRInst e x -> MidIRInst e x
           processLast inst@(Branch pos lbl)
-              | lbl == incLabel = Return pos "" Nothing
+              | lbl == incLabel = ThreadReturn pos elbl
               | otherwise = error "Error in loop processing :-("
           processLast inst = inst
+          headerLabel = loop_header loop
+          headerBlock = fromMaybe (error "couldn't find loop header") $ mapLookup headerLabel blockMap
+          CondBranch _ _ elbl _ = lastInst headerBlock
+
+lastInst :: Block MidIRInst C C -> MidIRInst O C
+lastInst block = case end of
+                     JustC inst -> inst
+    where (_, _, end) = blockToNodeList block
