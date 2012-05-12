@@ -29,6 +29,7 @@ combine (RJust from v) (RJust from' v') = if v == v' && from == from' then RJust
 combine (RJust from v) (RAnything _) = RJust from v -- :-O basically should be an error
 combine (RJust from v) RMulti = RMulti
 combine (RAnything from) RUnknown = RAnything from
+combine (RAnything from) (RAnything from') = if from == from' then RAnything from else RMulti
 combine (RAnything _) (RJust from v) = RJust from v -- :-O basically should be an error
 combine (RAnything _) RMulti = RMulti
 combine _ _ = RMulti
