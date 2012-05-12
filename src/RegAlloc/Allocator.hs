@@ -185,6 +185,7 @@ data RWorklists = RWorklists
       
     , wDegrees :: M.Map WebID Int -- ^ web to degree mapping.  fixed
                                   -- registers have maxBound degree
+    , wSpillCosts :: M.Map WebID Int -- ^ web to spill cost mapping.
       
       -- Every move is in exactly one of the following
     , wWorklistMoves :: S.Set MovePtr -- ^ moves enabled for possible coalescing
@@ -268,11 +269,12 @@ updateWebMoves' s i wl
           
 combineWebs :: WebID -> WebID -> RWorklists -> RWorklists
 combineWebs i1 i2 wl
-  = wl { wInterfGraph = g { igIDToWeb = M.insert i1 web' $ igIDToWeb g }}
+  = wl' { wSpillCosts = M.insert i1 (spillCost wl' i1) $ wSpillCosts wl' }
     where g = wInterfGraph wl
           web1 = igIDToWeb g M.! i1
           web2 = igIDToWeb g M.! i2
           web' = wUnion web1 web2
+          wl' = wl { wInterfGraph = g { igIDToWeb = M.insert i1 web' $ igIDToWeb g } }
 
 -- | Gets a web by id from the worklist.  Wrapper for 'igGetWeb'
 wGetWeb :: WebID -> RWorklists -> Web
@@ -330,8 +332,11 @@ moveRelated :: WebID -> AM Bool
 moveRelated i = (not . S.null) `fmap` webMoves i
 
 makeWorklists :: InterfGraph -> M.Map Label Int -> RWorklists
-makeWorklists g loops = iter (igWebIDs g) (initWorklists g initMoves moves idealRegs loops)
-    where iter [] wlists = wlists
+makeWorklists g loops = wl'
+    where wl = iter (igWebIDs g) (initWorklists g initMoves moves idealRegs loops)
+          wl' = wl { wSpillCosts = M.fromList $ map (\i -> (i, spillCost wl i)) $ igWebIDs g }
+          
+          iter [] wlists = wlists
           iter (i:is) wlists
               | webPrecolored web
                   = iter is (wlists
@@ -384,6 +389,7 @@ makeWorklists g loops = iter (igWebIDs g) (initWorklists g initMoves moves ideal
                 , wPreSpillAlias = M.empty
                 , wPreSpillCoalescedMoves = S.empty
                 , wDegrees = M.fromList $ map (\i -> (i, webDegree i g)) (igWebIDs g)
+                , wSpillCosts = M.empty
                 , wWorklistMoves = wm
                 , wCoalescedMoves = []
                 , wConstrainedMoves = []
@@ -777,10 +783,19 @@ freezeMoves u = do u <- getAlias u
     where fixList [a] = [a, a]
           fixList xs = xs
 
+spillCost :: RWorklists -> WebID -> Int
+spillCost wl i = let web = igGetWeb i $ wInterfGraph wl
+                     deg = wDegrees wl M.! i
+                     loopDepth l = M.findWithDefault 0 (nodeLabel l) (wLoops wl)
+                     loadCost = sum $ map (\l -> 10 ^ (loopDepth l)) (S.toList (webUses web) ++ S.toList (webDefs web))
+                     size = S.size (webExtent web) --sum (map len dus)
+                     score = 1000 * loadCost `div` (max 1 deg) --S.size (webExtent web))
+                 in if isShortWeb web then maxBound else score
+
 -- | "SelectSpill"
 selectSpill :: AM ()
 selectSpill = do wl <- get
-                 m <- chooseSpill $ makeCosts wl
+                 m <- chooseSpill $ wSpillCosts wl
                  modify $ \wl -> wl { wSpillWorklist = delete m $ wSpillWorklist wl
                                     , wSimplifyWorklist = m:(wSimplifyWorklist wl)
                                     , wHaveSpilled = True }
@@ -792,18 +807,6 @@ selectSpill = do wl <- get
                      costs' = map (\i -> (i, costs M.! i)) spillList
                      costs'' = map (\i -> (i, webReg $ igGetWeb i (wInterfGraph wl), costs M.! i)) spillList
                  return $ trace' ("costs: " ++ show costs'') $ fst $ minimumBy (compare `on` snd) costs'
-          makeCosts :: RWorklists -> M.Map WebID Int
-          makeCosts wl = M.fromList $ map (\i -> (i, cost wl i)) $ wSpillWorklist wl
-          cost :: RWorklists -> WebID -> Int
-          cost wl i = let web = igGetWeb i $ wInterfGraph wl
-                          deg = wDegrees wl M.! i
-                          loopDepth l = M.findWithDefault 0 (nodeLabel l) (wLoops wl)
-                          loadCost = sum $ map (\l -> 10 ^ (loopDepth l)) (S.toList (webUses web) ++ S.toList (webDefs web))
-                          uses = max 1 (S.size $ webUses web)
-                          size = S.size (webExtent web) --sum (map len dus)
---                          score = (deg * size) `div` (uses)
-                          score = 1000 * loadCost `div` (max 1 deg) --S.size (webExtent web))
-                      in if isShortWeb web then maxBound else score
 
 -- | "AssignColors"
 assignColors :: AM ()
