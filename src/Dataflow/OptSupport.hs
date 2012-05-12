@@ -148,7 +148,7 @@ getMidAliveDead :: MidIRInst e x -> MidAliveDead
 getMidAliveDead inst 
     = case inst of 
         Label _ _ -> emptyMAD 
-        Enter _ _ args -> (args, [])
+        Enter _ _ args -> ([], args)
         PostEnter _ _ -> emptyMAD 
         n@(Store _ x _) -> (S.toList $ getUses S.empty n, [x])
         n@(DivStore _ x _ _ _) -> (S.toList $ getUses S.empty n, [x])

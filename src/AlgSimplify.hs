@@ -209,6 +209,10 @@ simpBinOp pos op sex1 sex2 = traceM ("bin", op, sex1, sex2) $ msum rules
           , do guard $ op == OpSub
                Lit _ 0 <- withExpr sex2
                return sex1
+          -- If we are subtracting something from itself, we can just do 0.
+          , do guard $ op == OpSub
+               guard $ sex1 == sex2
+               return $ Lit pos 0
           -- If we are multiplying by one, we can safely not do the
           -- multiply
           , do guard $ op == OpMul
