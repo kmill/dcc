@@ -135,7 +135,8 @@ testDominatorPass midir
                              graph
                              (mapFromList (map (\l -> (l, fact_bot dominatorLattice) ) mlabels))
          let loops = findLoops factBase graph mlabels
-         return $ trace (show loops) midir 
+             parallelLoops = analyzeParallelizationPass midir 
+         return $ trace (show parallelLoops) midir 
     where graph = midIRGraph midir
           mlabels = (map methodEntry $ midIRMethods midir)
 

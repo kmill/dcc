@@ -59,6 +59,15 @@ webInBlocks :: Web -> S.Set Label -> Bool
 webInBlocks web labels = all (\n -> S.member (nodeLabel n) labels) $
                          S.toList (webDefs web `S.union` webUses web)
 
+websIntersectingBlocks :: Webs -> S.Set Label -> S.Set Web 
+websIntersectingBlocks webs labels = S.fromList [x | x <- M.elems webs, webIntersectingBlocks x labels]
+
+-- | Checks whether a web intersets a list of blocks (as in whether there are any defs or uses of the web in the blocks)
+webIntersectingBlocks :: Web -> S.Set Label -> Bool  
+webIntersectingBlocks web labels = not $ S.null $ S.intersection labels defUseLabels 
+    where defUseLabels = S.union (S.map nodeLabel $ webDefs web) (S.map nodeLabel $ webDefs web)
+
+
 type WebID = Int
 
 data InterfGraph = InterfGraph
@@ -228,6 +237,25 @@ getWebs mlabels graph = let dus = collectDU mlabels graph
                             webs l = collectWebs (dus M.! l)
                             allWebs = concatMap webs mlabels
                         in M.fromList $ zip [0..] allWebs
+
+
+-- First one is a map from defs to webs. Second one is a map from uses to webs
+type WebTables = (M.Map (VarName, NodePtr) WebID, M.Map (VarName, NodePtr) WebID)
+
+makeTables :: Webs -> WebTables
+makeTables webs = (defs, uses) 
+    where defs = M.fromList $ do (k, v) <- M.toList webs
+                                 d <- S.toList $ webDefs v
+                                 return ( (webVar v, d), k)
+          uses = M.fromList $ do (k, v) <- M.toList webs 
+                                 u <- S.toList $ webUses v 
+                                 return ( (webVar v, u), k)
+
+lookupVarUse :: VarName -> NodePtr -> WebTables -> WebID 
+lookupVarUse v n (_, table) = table M.! (v, n)
+
+lookupVarDef :: VarName -> NodePtr -> WebTables -> WebID 
+lookupVarDef v n (table, _) = table M.! (v, n) 
 
 -- -- | Builds the interference graph for all the webs by running wInterf
 -- -- on all pairs of webs.
