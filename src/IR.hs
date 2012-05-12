@@ -95,6 +95,20 @@ data Method = Method
     , methodName :: String
     , methodEntry :: Label
     , methodPostEntry :: Label }
+    
+methodByName :: String -> MidIRRepr -> Maybe Method
+methodByName name midir = find (\m -> methodName m == name) $ midIRMethods midir
+
+methodArgVars :: Method -> MidIRRepr -> [VarName]
+methodArgVars method midir
+    = let BodyBlock entryblock = lookupBlock (midIRGraph midir) (methodEntry method)
+          entryblock :: Block MidIRInst C C
+          (menter, _, _) = blockToNodeList entryblock
+          enter :: MidIRInst C O
+          enter = case menter of
+                    JustC enter' -> enter'
+      in case enter of
+           Enter pos label argvars -> argvars
 
 ---
 --- Expr
