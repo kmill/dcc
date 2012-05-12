@@ -130,9 +130,21 @@ findLoopVariables graph headerDomin headerBlock loopbackBlock
 analyzeParallelizationPass :: MidIRRepr -> S.Set Loop 
 analyzeParallelizationPass midir = parallelLoops
     where loops = findLoops domins graph mlabels
-          parallelLoops = maybeParallelLoops
+          parallelLoops = noVariantWritesLoops
           -- First pass, removes obviously non-parallel loops (such as loops that contain returns or callouts)
-          maybeParallelLoops = S.filter (\l -> noCalls l && noRets l && noBreaks l) loops 
+          noBreaksRetsCallsLoops = S.filter (\l -> noCalls l && noRets l && noBreaks l) loops 
+          -- Second pass, removes loops that write to values that aren't loop invariant (i.e. for loops calculating a sum)
+          noVariantWritesLoops = S.filter (\l -> noVariantWrites (loopVarInfos Map.! l) l) noBreaksRetsCallsLoops
+          -- Third pass, removes all loops with cross-loop dependencies. 
+
+          loopVarInfos = Map.fromList [(loop, findLoopVarInfo webs loop) | loop <- S.toList noBreaksRetsCallsLoops]
+
+          -- Useful for debugging 
+          loopVarNames :: LoopVarInfo -> (S.Set VarName, S.Set VarName) 
+          loopVarNames (variant, invariant) = (S.map webIDToVarName variant, S.map webIDToVarName invariant) 
+              where webIDToVarName id = webVar $ getWeb id webs 
+
+
           graph = midIRGraph midir
           pGraph = toPGraph graph
           webs = getWebs mlabels pGraph
@@ -145,6 +157,7 @@ analyzeParallelizationPass midir = parallelLoops
                     noCall l = let BodyBlock block = lookupBlock graph l 
                                    (_, inner, mx) = blockToNodeList block
                                    in (all notACall inner) || isAFail mx  
+
 
           notACall :: MidIRInst O O -> Bool 
           notACall (Call _ _ _ _) = False
@@ -173,17 +186,39 @@ analyzeParallelizationPass midir = parallelLoops
                         | l == header = True 
                         | otherwise = let BodyBlock block = lookupBlock graph l 
                                       in all (\s -> S.member s body) $ successors block
+
+
+          noVariantWrites :: LoopVarInfo -> Loop -> Bool 
+          noVariantWrites (variant, invariant) loop = all noWritesInLoop $ S.toList variant
+              where noWritesInLoop :: WebID -> Bool 
+                    noWritesInLoop webID = S.null $ S.intersection allDefs (loop_body loop) 
+                        where allDefs = S.map nodeLabel $ webDefs $ getWeb webID webs
           
 
--- LoopVarInfo represents a set of the variables that are invariant in a loop and a set of the variables that are variant in the loop
+-- LoopVarInfo represents a set of the variables that are variant in a loop and a set of the variables that are invariant in the loop
 -- An easy way to throw out loops as non-parallel is if they contain any writes to variant loop values 
 type LoopVarInfo = (S.Set WebID, S.Set WebID) 
 
-findLoopVarInfo :: Webs -> Graph (PNode MidIRInst) C C -> Loop -> LoopVarInfo 
-findLoopVarInfo webs pGraph loop = error "Not yet implemented :-{"
+findLoopVarInfo :: Webs -> Loop -> LoopVarInfo 
+findLoopVarInfo webs loop = S.fold addVarWebs (S.empty, S.empty) loopWebs
     where body = loop_body loop 
           loopVars = loop_variables loop 
           loopWebs = websIntersectingBlocks webs body 
+          -- Now that we have each web contained in the loop, time to determine if the webs are loop invariant or not
+          addVarWebs :: WebID -> LoopVarInfo -> LoopVarInfo 
+          addVarWebs webID (variant, invariant) 
+              | isInvariant webID = (variant, S.insert webID invariant) 
+              | otherwise = (S.insert webID variant, invariant)
+
+          isInvariant :: WebID -> Bool 
+          isInvariant webID = (webInBlocks web body) || (webIsCorrectLoopVariable web) 
+              where web = getWeb webID webs 
+
+          webIsCorrectLoopVariable :: Web -> Bool 
+          webIsCorrectLoopVariable web
+              | not ( (webVar web) `elem` [x | (x, _, _, _) <- loopVars] ) = False
+              | S.size (webDefs web) /= 2 = False 
+              | otherwise = True
                     
           
           
