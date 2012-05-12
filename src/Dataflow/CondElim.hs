@@ -2,7 +2,7 @@
 
 module Dataflow.CondElim where 
 
-import qualified Data.Set as S
+import qualified Data.Map as M
 
 import Compiler.Hoopl
 import IR
@@ -11,36 +11,38 @@ import Data.Maybe
 import Debug.Trace
 
 
-data CondSet a = CondSet (Maybe (S.Set a)) (Maybe (S.Set a))
+data CondMap a b = CondSet (Maybe (M.Map a b)) (Maybe (M.Map a b))
 data Assignable = AssignVar (Var SourcePos VarName)
                 | AssignCon (Lit SourcePos Int64)
-
 data Assigned = InVar VarName
               | InRet
 
-type AssignSet = CondSet (Assigned, Assignable)
+type AssignMap = CondMap Assigned Assignable
 
-condAssignLattice :: DataflowLattice AssignSet
+condAssignLattice :: DataflowLattice AssignMap
 condAssignLattice = DataflowLattice { fact_name = "Branch Assignments"
-                                   , fact_bot = AssignSet (Just S.empty) (Just S.empty)
+                                   , fact_bot = AssignMap (Just M.empty) (Just M.empty)
                                    , fact_join = add
                                    }
-  where add _ (OldFact o@(AssignSet ol or)) (NewFact n@(AssignSet nl nr)) = (c, n')
+  where add _ (OldFact o@(AssignMap ol or)) (NewFact n@(AssignMap nl nr)) = (c, n')
           where c = n /= n'
                 n'
-                    | S.null or && S.null nr = CondSet ol nl
-                    | otherwise = AssignSet Nothing Nothing
+                    | M.null or && M.null nr = AssignMap ol nl
+                    | otherwise = AssignMap Nothing Nothing
                           
-condAssignness :: BwdTransfer MidIRInst AssignSet
+condAssignness :: BwdTransfer MidIRInst AssignMap
 condAssignness = mkBTransfer f
-  where f :: MidIRInst e x -> Fact x AssignSet -> AssignSet
-        f (Store v (Lit _ v')) k@(AssignSet (Just kr) kl) = CondSet (combineSets (singleton ((InVar v),(AssignCon v'))) kr)
-        f (Store v (Var _ v')) k@(AssignSet (Just kr) kl) = CondSet (combineSets (singleton ((InVar v),(AssignVar v'))) kr)    
-        f (Return _ (Just (Lit _ v')) k@(Assign (Just kr) kl) = CondSet (combineSets (singleton ((InRet, (AssignCon v')))) kr)
-        f (Return _ (Just (Var _ v')) k@(Assign (Just kr) kl) = CondSet (combineSets (singleton ((InRet, (AssignVar v')))) kr)
-        f _ k = AssignSet Nothing Nothing
+  where f :: MidIRInst e x -> Fact x AssignMap -> AssignMap
+        f (Store v (Lit _ v')) k@(AssignMap (Just kr) kl) = AssignMap (combineMaps (singleton ((InVar v),(AssignCon v'))) kr) kl
+        f (Store v (Var _ v')) k@(AssignMap (Just kr) kl) = AssignMap (combineMaps (singleton ((InVar v),(AssignVar v'))) kr) kl 
+        f (Return _ (Just (Lit _ v')) k@(AssignMap (Just kr) kl) = AssignMap (combineMaps (singleton ((InRet, (AssignCon v')))) kr) kl
+        f (Return _ (Just (Var _ v')) k@(AssignMap (Just kr) kl) = AssignMap (combineMaps (singleton ((InRet, (AssignVar v')))) kr) kl
+        f _ k = AssignMap Nothing Nothing
 
-combineSets :: 
+combineMaps :: (M.Map Assigned Assignable) -> (M.Map Assigned Assignable) -> Maybe (M.Map Assigned Assignable)
+combineMaps a b 
+  | M.size (M.intersection a b) > 0 = Nothing
+  | otherwise = Just (M.union a b)
 
 --Special case of fromJust for Branch, since it could be removed in the previous transfer.
 lastLabelElim :: forall m . FuelMonad m => BwdRewrite m MidIRInst LastLabel
