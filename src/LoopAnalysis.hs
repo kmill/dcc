@@ -143,13 +143,17 @@ analyzeParallelizationPass midir = parallelLoops
           noCalls (Loop header body _) = all noCall $ S.toList body 
               where noCall :: Label -> Bool 
                     noCall l = let BodyBlock block = lookupBlock graph l 
-                                   (_, inner, _) = blockToNodeList block
-                                   in all notACall inner
+                                   (_, inner, mx) = blockToNodeList block
+                                   in (all notACall inner) || isAFail mx  
 
           notACall :: MidIRInst O O -> Bool 
           notACall (Call _ _ _ _) = False
           notACall (Callout _ _ _ _) = False 
           notACall _ = True
+
+          isAFail :: MaybeC C (MidIRInst O C) -> Bool 
+          isAFail (JustC (Fail _)) = True 
+          isAFail _ = False
 
           noRets :: Loop -> Bool 
           noRets (Loop _ body _) = all noRet $ S.toList body 
