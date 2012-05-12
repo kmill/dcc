@@ -297,14 +297,6 @@ makeInterfGraph mlabels graph webs = InterfGraph idToWebMap adjs moves fixedRegs
     where idToWeb = zip [0..] webs
           idToWebMap = M.fromList idToWeb
           moves = S.unions $ map webMoveNodes webs
-          mkAdj i w = S.fromList $ do
-                        (j, w') <- idToWeb
-                        guard $ i /= j
-                        guard $ wInterf w w'
-                        return j
-          mkAdjs = M.fromList $ do
-                     (i, w) <- idToWeb
-                     return (i, mkAdj i w)
           fixedRegs = M.mapKeysWith S.union webReg $
                       M.fromList $ do (i, w) <- idToWeb
                                       return (w, S.singleton i)
@@ -314,9 +306,11 @@ makeInterfGraph mlabels graph webs = InterfGraph idToWebMap adjs moves fixedRegs
           addUse w u usedef = M.insertWith combineUsedef u (S.singleton w, S.empty) usedef
           addDef w d usedef = M.insertWith combineUsedef d (S.empty, S.singleton w) usedef
           
+          -- | A map from nodes to (alive, dead) sets of WebIDs
           usedef = foldl (flip id) M.empty ([addDef w d | (w, web) <- idToWeb, d <- S.toList $ webDefs web]
                                             ++ [addUse w u | (w, web) <- idToWeb, u <- S.toList $ webUses web])
           
+          -- | The adjacency lists!
           adjs = let adjm = buildAdjLists mlabels graph usedef
                  in M.unions [adjm M.! l | l <- mlabels]
 
