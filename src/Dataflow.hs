@@ -54,7 +54,7 @@ dataflows
       , DFA optDeadCode performDeadCodePass
       , DFA optBlockElim performBlockElimPass
       , DFA (\opts -> optCommonSubElim opts || optFlat opts) performFlattenPass
-      , DFA optLICM performLICMPass
+      -- , DFA optLICM performLICMPass
       , DFA optCommonSubElim performCSEPass
       , DFA optCopyProp performCopyPropPass
       -- doing constprop after flatten/cse does great good! see tests/codegen/fig18.6.dcf
