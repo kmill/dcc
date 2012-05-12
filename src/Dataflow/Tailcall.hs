@@ -10,13 +10,12 @@ import Data.Maybe
 import Debug.Trace
 
 tailcallPass :: (CheckpointMonad m, FuelMonad m, UniqueMonad m, UniqueNameMonad m) =>
-                String -> Label -> [VarName]
-                -> BwdPass m MidIRInst LastReturn
-tailcallPass fname postentry argvars
+                MidIRRepr -> BwdPass m MidIRInst LastReturn
+tailcallPass midir
     = BwdPass
       { bp_lattice = lastReturnLattice
       , bp_transfer = lastReturnTransfer
-      , bp_rewrite = tailcallElim fname postentry argvars }
+      , bp_rewrite = tailcallElim midir }
 
 data LastReturn = RUnknown
                 | RJust String VarName
@@ -30,6 +29,7 @@ combine (RJust from v) (RJust from' v') = if v == v' && from == from' then RJust
 combine (RJust from v) (RAnything _) = RJust from v -- :-O basically should be an error
 combine (RJust from v) RMulti = RMulti
 combine (RAnything from) RUnknown = RAnything from
+combine (RAnything from) (RAnything from') = if from == from' then RAnything from else RMulti
 combine (RAnything _) (RJust from v) = RJust from v -- :-O basically should be an error
 combine (RAnything _) RMulti = RMulti
 combine _ _ = RMulti
@@ -72,9 +72,8 @@ lastReturnTransfer = mkBTransfer f
           f (Fail _) k = RMulti
 
 tailcallElim :: forall m. (UniqueNameMonad m, UniqueMonad m, FuelMonad m) =>
-                String -> Label -> [VarName]
-             -> BwdRewrite m MidIRInst LastReturn
-tailcallElim fname postentry argvars = mkBRewrite tc
+                MidIRRepr -> BwdRewrite m MidIRInst LastReturn
+tailcallElim midir = mkBRewrite tc
     where
       tc :: MidIRInst e x -> Fact x LastReturn -> m (Maybe (Graph MidIRInst e x))
       tc Branch{} _ = return Nothing
@@ -82,23 +81,25 @@ tailcallElim fname postentry argvars = mkBRewrite tc
       tc (Call pos v name args) f
           = case f of
 	     RJust funcname v'
-                | name == fname && name == funcname && v == v' -> makeTailCall pos args
+                | name == funcname && v == v' -> makeTailCall pos name args
                 | otherwise -> return Nothing
 	     RAnything funcname
-                | name == fname && name == funcname  -> makeTailCall pos args
+                | name == funcname  -> makeTailCall pos name args
                 | otherwise -> return Nothing
              _ -> return Nothing
       tc _ _ = return Nothing
-      makeTailCall :: SourcePos -> [MidIRExpr] -> m (Maybe (Graph MidIRInst O O))
-      makeTailCall pos args
-          = do dl <- freshLabel
-               tvars' <- replicateM (length argvars) (genUniqueName "tc")
-               let tvars = map MV tvars'
-               let tvarse = map (Var pos) tvars
-               return $ Just $ catGraphs (map (mkstore pos) (zip tvars args))
-                          <*> catGraphs (map (mkstore pos) (zip argvars tvarse))
-                          <*> mkLast (Branch pos postentry)
-                 
-                   |*><*| mkFirst (Label pos dl)
+      makeTailCall :: SourcePos -> String -> [MidIRExpr] -> m (Maybe (Graph MidIRInst O O))
+      makeTailCall pos name args
+          = let method = fromJust $ methodByName name midir
+                argvars = methodArgVars method midir
+                postentry = methodPostEntry method
+            in do dl <- freshLabel
+                  tvars' <- replicateM (length argvars) (genUniqueName "tc")
+                  let tvars = map MV tvars'
+                      tvarse = map (Var pos) tvars
+                  return $ Just $ catGraphs (map (mkstore pos) (zip tvars args))
+                             <*> catGraphs (map (mkstore pos) (zip argvars tvarse))
+                             <*> mkLast (Branch pos postentry)
+                      |*><*| mkFirst (Label pos dl)
       mkstore :: SourcePos -> (VarName, MidIRExpr) -> Graph MidIRInst O O
       mkstore pos (dv, sv) = mkMiddle $ Store pos dv sv
