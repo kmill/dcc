@@ -32,6 +32,12 @@ data Loop = Loop { loop_header :: Label
 type BackEdge = (Label, Label)
 type LoopVariable = (VarName, MidIRExpr, MidIRExpr, Int64)
 
+midirLoops :: MidIRRepr -> S.Set Loop
+midirLoops midir = findLoops domins graph mlabels
+    where graph = midIRGraph midir
+          mlabels = map methodEntry $ midIRMethods midir
+          domins = findDominators graph mlabels
+
 findLoops :: FactBase DominFact -> Graph MidIRInst C C -> [Label] -> S.Set Loop 
 findLoops dominators graph mlabels = S.fromList loops
     where GMany _ body _ = graph

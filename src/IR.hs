@@ -199,18 +199,21 @@ mapE f (Cond pos expc exp1 exp2) = Cond pos (mapE f expc) (mapE f exp1) (mapE f 
 
 -- | 'v' is type of variables. Confused?  Look at Show (Inst v e x).
 data Inst v e x where
-    Label      :: SourcePos -> Label                           -> Inst v C O
-    Enter      :: SourcePos -> Label -> [v]                    -> Inst v C O
-    PostEnter  :: SourcePos -> Label                           -> Inst v C O
-    Store      :: SourcePos -> v -> Expr v                     -> Inst v O O
-    DivStore   :: SourcePos -> v -> DivOp -> Expr v -> Expr v  -> Inst v O O
-    IndStore   :: SourcePos -> Expr v -> Expr v                -> Inst v O O
-    Call       :: SourcePos -> v -> String -> [Expr v]         -> Inst v O O
-    Callout    :: SourcePos -> v -> String -> [Expr v]         -> Inst v O O
-    Branch     :: SourcePos -> Label                           -> Inst v O C
-    CondBranch :: SourcePos -> Expr v -> Label -> Label        -> Inst v O C
-    Return     :: SourcePos -> String -> Maybe (Expr v)        -> Inst v O C
-    Fail       :: SourcePos                                    -> Inst v O C
+    Label         :: SourcePos -> Label                           -> Inst v C O
+    Enter         :: SourcePos -> Label -> [v]                    -> Inst v C O
+    PostEnter     :: SourcePos -> Label                           -> Inst v C O
+    Store         :: SourcePos -> v -> Expr v                     -> Inst v O O
+    DivStore      :: SourcePos -> v -> DivOp -> Expr v -> Expr v  -> Inst v O O
+    IndStore      :: SourcePos -> Expr v -> Expr v                -> Inst v O O
+    Call          :: SourcePos -> v -> String -> [Expr v]         -> Inst v O O
+    Callout       :: SourcePos -> v -> String -> [Expr v]         -> Inst v O O
+    -- run first label second arg times in parallel, then do third label
+    Parallel      :: SourcePos -> Label -> v -> Int64 -> Label    -> Inst v O C
+    Branch        :: SourcePos -> Label                           -> Inst v O C
+    CondBranch    :: SourcePos -> Expr v -> Label -> Label        -> Inst v O C
+    -- if string is "thread" is a return from thread
+    Return        :: SourcePos -> String -> Maybe (Expr v)        -> Inst v O C
+    Fail          :: SourcePos                                    -> Inst v O C
 
 data DivOp = DivQuo | DivRem
              deriving (Eq, Ord)
@@ -219,6 +222,7 @@ instance NonLocal (Inst v) where
     entryLabel (Label _ lbl) = lbl
     entryLabel (PostEnter _ lbl) = lbl
     entryLabel (Enter _ lbl _) = lbl
+    successors (Parallel _ plbl _  _ elbl) = [plbl, elbl]
     successors (Branch _ lbl) = [lbl]
     successors (CondBranch _ exp tlbl flbl) = [tlbl, flbl]
     successors (Return _ _ _) = []
@@ -236,6 +240,8 @@ mapI f (DivStore pos d op exp1 exp2) = DivStore pos (f d) op
 mapI f (IndStore pos d s) = IndStore pos (mapE f d) (mapE f s)
 mapI f (Call pos d name args) = Call pos (f d) name (map (mapE f) args)
 mapI f (Callout pos d name args) = Callout pos (f d) name (map (mapE f) args)
+mapI f (Parallel pos plbl ivar count elbl)
+    = Parallel pos plbl (f ivar) count elbl
 mapI f (Branch pos l) = Branch pos l
 mapI f (CondBranch pos cexp lt lf) = CondBranch pos (mapE f cexp) lt lf
 mapI f (Return pos for mexp) = Return pos for (mexp >>= Just . (mapE f))
@@ -306,6 +312,9 @@ instance Show v => Show (Inst v e x) where
     show (Callout pos dest name args)
         = printf "%s := callout %s (%s)  {%s};"
           (show dest) (show name) (intercalate ", " $ map show args) (showPos pos)
+    show (Parallel pos plbl ivar count elbl)
+        = printf "parallel (%s <- [0,..%u]) { goto %s; } goto %s; {%s};"
+          (show ivar) count (show plbl) (show elbl) (showPos pos)
     show (Branch pos lbl)
         = printf "goto %s  {%s};"
           (show lbl) (showPos pos)

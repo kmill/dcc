@@ -13,7 +13,7 @@ import Dataflow.Dominator
 import Dataflow.OptSupport
 --import Dataflow.NZP
 
-import LoopAnalysis
+import Parallelize
 
 import Control.Monad
 import Control.Monad.Trans
@@ -65,6 +65,7 @@ dataflows
       , DFA optConstProp performConstPropPass
       , DFA optDeadCode performDeadCodePass
       , DFA optTailcall performTailcallPass 
+      , DFA optParallelize performParallelizePass
       --, DFA optNZP performNZPPass
       , DFA optDeadCode performDeadCodePass 
       , DFA optBlockElim performBlockElimPass 
@@ -85,8 +86,8 @@ performFlattenPass midir = performFwdPass flattenPass midir ()
 --performNZPPass midir = performFwdPass nzpPass midir emptyNZPFact
 
 -- Type of analyzeAndRewrite*
-type AnalyzeFun p a = (p (StupidFuelMonadT GM) MidIRInst a) -> MaybeC C [Label] -> Graph MidIRInst C C -> Fact C a -> (StupidFuelMonadT GM) (Graph MidIRInst C C, FactBase a, MaybeO C a)
-performPass :: AnalyzeFun p a -> (p (StupidFuelMonadT GM) MidIRInst a) -> MidIRRepr -> a -> RM MidIRRepr
+type AnalyzeFun p a = (p RM MidIRInst a) -> MaybeC C [Label] -> Graph MidIRInst C C -> Fact C a -> RM (Graph MidIRInst C C, FactBase a, MaybeO C a)
+performPass :: AnalyzeFun p a -> (p RM MidIRInst a) -> MidIRRepr -> a -> RM MidIRRepr
 performPass analyzeAndRewrite pass midir eFact
   = do (graph', factBase, _) <- analyzeAndRewrite
                                 pass
@@ -97,10 +98,10 @@ performPass analyzeAndRewrite pass midir eFact
     where graph = midIRGraph midir
           mlabels = (map methodEntry $ midIRMethods midir)
 
-performFwdPass :: (FwdPass (StupidFuelMonadT GM) MidIRInst a) -> MidIRRepr -> a -> RM MidIRRepr
+performFwdPass :: (FwdPass RM MidIRInst a) -> MidIRRepr -> a -> RM MidIRRepr
 performFwdPass = performPass analyzeAndRewriteFwd
 
-performBwdPass :: (BwdPass (StupidFuelMonadT GM) MidIRInst a) -> MidIRRepr -> a -> RM MidIRRepr 
+performBwdPass :: (BwdPass RM MidIRInst a) -> MidIRRepr -> a -> RM MidIRRepr 
 performBwdPass = performPass analyzeAndRewriteBwd
 
 performCSEPass :: MidIRRepr -> RM MidIRRepr 
@@ -110,10 +111,7 @@ performCSEPass midir
          performFwdPass (csePass nonTemps') midir emptyExprFact
 
 performLICMPass midir = performBwdPass (licmPass loops) midir emptyMotionFact
-    where loops = findLoops domins graph mlabels
-          graph = midIRGraph midir
-          mlabels = map methodEntry $ midIRMethods midir
-          domins = findDominators graph mlabels
+    where loops = midirLoops midir
 
 performUnflattenPass :: MidIRRepr -> RM MidIRRepr 
 performUnflattenPass midir
@@ -347,6 +345,3 @@ unFlattenBlock factbase block = if changed then do graphs' <- mapM (unFlattenBlo
               | S.member v liveLater || (Map.lookup v usesMap) /= (Just 1) = Nothing 
           replaceVar v 
               =  Map.lookup v exprMap 
-
-
-          
