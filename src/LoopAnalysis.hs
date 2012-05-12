@@ -3,6 +3,7 @@ module LoopAnalysis where
 
 import Dataflow.Dominator 
 import Dataflow.OptSupport
+import Dataflow.IRWebs
 import DataflowTypes
 
 import Compiler.Hoopl
@@ -13,7 +14,7 @@ import IR
 import Control.Monad
 
 
-
+import Util.NodeLocate
 
 import Data.Int
 import Data.Maybe
@@ -133,6 +134,8 @@ analyzeParallelizationPass midir = parallelLoops
           -- First pass, removes obviously non-parallel loops (such as loops that contain returns or callouts)
           maybeParallelLoops = S.filter (\l -> noCalls l && noRets l && noBreaks l) loops 
           graph = midIRGraph midir
+          pGraph = toPGraph graph
+          webs = getWebs mlabels pGraph
           mlabels = (map methodEntry $ midIRMethods midir)
           domins = findDominators graph mlabels
 
@@ -168,10 +171,26 @@ analyzeParallelizationPass midir = parallelLoops
                                       in all (\s -> S.member s body) $ successors block
           
 
+-- LoopVarInfo represents a set of the variables that are invariant in a loop and a set of the variables that are variant in the loop
+-- An easy way to throw out loops as non-parallel is if they contain any writes to variant loop values 
+type LoopVarInfo = (S.Set WebID, S.Set WebID) 
+
+findLoopVarInfo :: Webs -> Graph (PNode MidIRInst) C C -> Loop -> LoopVarInfo 
+findLoopVarInfo webs pGraph loop = error "Not yet implemented :-{"
+    where body = loop_body loop 
+          loopVars = loop_variables loop 
+          loopWebs = websIntersectingBlocks webs body 
+                    
+          
+          
+
+
 
 createLoopNests :: S.Set Loop -> [LoopNest] 
 createLoopNests loops = error "Not yet implemented :-{"
           
+
+
 
 
 findDominators :: forall n. NonLocal n => Graph n C C -> [Label] -> FactBase DominFact 
