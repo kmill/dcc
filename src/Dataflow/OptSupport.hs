@@ -8,7 +8,7 @@ import Control.Monad
 import Control.Monad.Trans
 import Data.Maybe
 
-
+import qualified Data.Set as S
 
 
 -- Useful functions 
@@ -123,3 +123,44 @@ fold_EN f z (CondBranch _ expr _ _) = f z expr
 fold_EN _ z (Return _ from Nothing) = z
 fold_EN f z (Return _ from (Just expr)) = f z expr
 fold_EN _ z (Fail _) = z
+
+
+
+
+-- Alive Dead Information 
+
+
+type MidAliveDead = ([VarName], [VarName])
+
+--infixl 5 <+>
+
+--(<+>) :: MidAliveDead -> MidAliveDead -> MidAliveDead 
+--(a1,d1) <+> (a2,d2) = (a1++a2, d1++d2)
+
+emptyMAD :: MidAliveDead
+emptyMAD = ([], [])
+
+-- | Gets the variables which are used and fefined (also known as 
+-- "alive" and "dead", respectively, because of backwards liveness 
+-- analysis). 
+
+getMidAliveDead :: MidIRInst e x -> MidAliveDead 
+getMidAliveDead inst 
+    = case inst of 
+        Label _ _ -> emptyMAD 
+        Enter _ _ args -> (args, [])
+        PostEnter _ _ -> emptyMAD 
+        n@(Store _ x _) -> (S.toList $ getUses S.empty n, [x])
+        n@(DivStore _ x _ _ _) -> (S.toList $ getUses S.empty n, [x])
+        n@(IndStore _ _ _) -> (S.toList $ getUses S.empty n, [])
+        n@(Call _ x _ _) -> (S.toList $ getUses S.empty n, [x])
+        n@(Callout _ x _ _) -> (S.toList $ getUses S.empty n, [x])
+        Branch _ _ -> emptyMAD
+        n@(CondBranch _ _ _ _) -> (S.toList $ getUses S.empty n, [])
+        n@(Return _ _ _) -> (S.toList $ getUses S.empty n, [])
+        Fail _ -> emptyMAD
+
+      where getUses :: S.Set VarName -> MidIRInst e x -> S.Set VarName
+            getUses = fold_EN (fold_EE addVar) 
+            addVar s (Var _ v) = S.insert v s 
+            addVar s _ = s 
