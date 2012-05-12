@@ -22,7 +22,8 @@ liveLattice = DataflowLattice { fact_name = "Live variables"
               where  j = new `S.union` old
                      ch = changeIf (S.size j > S.size old) 
 
-liveness :: BwdTransfer MidIRInst Live 
+-- Old Liveness function 
+{-liveness :: BwdTransfer MidIRInst Live 
 liveness = mkBTransfer live 
     where live :: MidIRInst e x -> Fact x Live -> Live
           live (Label _ _) f = f 
@@ -44,7 +45,33 @@ liveness = mkBTransfer live
           addUses :: Live -> MidIRInst e x -> Live 
           addUses = fold_EN (fold_EE addVar) 
           addVar s (Var _ v) = S.insert v s 
-          addVar s _ = s
+          addVar s _ = s-}
+
+liveness :: BwdTransfer MidIRInst Live 
+liveness = mkBTransfer3 liveCO liveOO liveOC  
+    where liveCO :: MidIRInst C O -> Live -> Live
+          liveCO inst f = S.union (f S.\\ (S.fromList dead)) $ S.fromList alive
+              where (alive, dead) = getMidAliveDead inst 
+
+          liveOO :: MidIRInst O O -> Live -> Live 
+          liveOO inst f = S.union (f S.\\ (S.fromList dead)) $ S.fromList alive 
+              where (alive, dead) = getMidAliveDead inst 
+
+          liveOC :: MidIRInst O C -> FactBase Live -> Live 
+          liveOC inst@(Branch _ l) fb = S.union (f S.\\ (S.fromList dead)) $ S.fromList alive 
+              where f = fact fb l 
+                    (alive, dead) = getMidAliveDead inst 
+          liveOC inst@(CondBranch _ _ tl fl) fb = S.union (f S.\\ (S.fromList dead)) $ S.fromList alive 
+              where f = fact fb tl `S.union` fact fb fl
+                    (alive, dead) = getMidAliveDead inst
+          liveOC inst@(Return _ _ _) _ = S.fromList alive 
+              where (alive, _) = getMidAliveDead inst 
+          liveOC inst@(Fail _) _ = S.fromList alive 
+              where (alive, _) = getMidAliveDead inst 
+
+          fact :: FactBase Live -> Label -> Live 
+          fact f l = fromMaybe S.empty $ lookupFact l f 
+
 
 deadAsstElim :: forall m . FuelMonad m => BwdRewrite m MidIRInst Live 
 deadAsstElim = mkBRewrite d 
