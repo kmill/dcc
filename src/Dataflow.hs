@@ -13,6 +13,7 @@ import Dataflow.Dominator
 import Dataflow.OptSupport
 --import Dataflow.NZP
 
+import LoopAnalysis
 import Parallelize
 
 import Control.Monad
