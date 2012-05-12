@@ -212,6 +212,18 @@ collectWebs dus = iteration (M.keys webmap) webmap M.empty M.empty M.empty
                                       
                           in iteration ws webs defs' uses' aliases''
 
+type Webs = M.Map WebID Web
+
+getWeb :: WebID -> Webs -> Web
+getWeb i webs = webs M.! i
+
+-- | Gets the webs in the graph
+getWebs :: [Label] -> Graph (PNode MidIRInst) C C -> Webs
+getWebs mlabels graph = let dus = collectDU mlabels graph
+                            webs l = collectWebs (dus M.! l)
+                            allWebs = concatMap webs mlabels
+                        in M.fromList $ zip [0..] allWebs
+
 -- -- | Builds the interference graph for all the webs by running wInterf
 -- -- on all pairs of webs.
 -- makeInterfGraph :: [Label] -> Graph (PNode MidIRInst) C C -> [Web] -> InterfGraph
