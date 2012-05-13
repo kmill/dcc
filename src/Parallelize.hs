@@ -70,7 +70,10 @@ fixIncPred loop blockMap
           processLast inst = inst
           headerLabel = loop_header loop
           headerBlock = fromMaybe (error "couldn't find loop header") $ mapLookup headerLabel blockMap
-          CondBranch _ _ elbl _ = lastInst headerBlock
+          headerBlock :: Block MidIRInst C C
+          elbl :: Label
+          elbl = case lastInst headerBlock of
+                   CondBranch _ _ elbl' _ -> elbl
 
 lastInst :: Block MidIRInst C C -> MidIRInst O C
 lastInst block = case end of
