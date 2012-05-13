@@ -1,0 +1,12 @@
+class Program
+{
+	int a[1001];
+	void main() {
+		for(i = 1; 1000) {
+			a[i] = a[i-1];
+		}
+		for(i = 0; 1000) {
+			callout("printf", "%u", a[i]);
+		}
+	}
+}

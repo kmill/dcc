@@ -33,6 +33,11 @@ data Loop = Loop { loop_header :: Label
 type BackEdge = (Label, Label)
 type LoopVariable = (VarName, MidIRExpr, MidIRExpr, Int64)
 
+midirLoops :: MidIRRepr -> S.Set Loop
+midirLoops midir = findLoops domins graph mlabels
+    where graph = midIRGraph midir
+          mlabels = map methodEntry $ midIRMethods midir
+          domins = findDominators graph mlabels
 
 data LoopNest = LoopNest Loop LoopNest 
               | LeafLoop Loop 
@@ -130,12 +135,14 @@ findLoopVariables graph headerDomin headerBlock loopbackBlock
 analyzeParallelizationPass :: MidIRRepr -> S.Set Loop 
 analyzeParallelizationPass midir = parallelLoops
     where loops = findLoops domins graph mlabels
-          parallelLoops = noVariantWritesLoops
           -- First pass, removes obviously non-parallel loops (such as loops that contain returns or callouts)
           noBreaksRetsCallsLoops = S.filter (\l -> noCalls l && noRets l && noBreaks l) loops 
           -- Second pass, removes loops that write to values that aren't loop invariant (i.e. for loops calculating a sum)
           noVariantWritesLoops = S.filter (\l -> noVariantWrites (loopVarInfos Map.! l) l) noBreaksRetsCallsLoops
-          -- Third pass, removes all loops with cross-loop dependencies. 
+          -- Third pass, removes all loops with cross-loop dependencies. This is the big one that involves solving some 
+          -- equations. This should effectively return all of the parallelizable loops.
+          parallelLoops = S.filter noCrossDependencies noVariantWritesLoops
+          
 
           loopVarInfos = Map.fromList [(loop, findLoopVarInfo webs loop) | loop <- S.toList noBreaksRetsCallsLoops]
 
@@ -143,6 +150,8 @@ analyzeParallelizationPass midir = parallelLoops
           loopVarNames :: LoopVarInfo -> (S.Set VarName, S.Set VarName) 
           loopVarNames (variant, invariant) = (S.map webIDToVarName variant, S.map webIDToVarName invariant) 
               where webIDToVarName id = webVar $ getWeb id webs 
+
+
 
 
           graph = midIRGraph midir
@@ -193,7 +202,146 @@ analyzeParallelizationPass midir = parallelLoops
               where noWritesInLoop :: WebID -> Bool 
                     noWritesInLoop webID = S.null $ S.intersection allDefs (loop_body loop) 
                         where allDefs = S.map nodeLabel $ webDefs $ getWeb webID webs
+
+          -- Simple Loop Nesting information 
+          loopParents :: Map.Map Loop [Loop]
+          loopParents = Map.fromList [(l, findLoopParents l) | l <- S.toList loops]
           
+          findLoopParents :: Loop -> [Loop] 
+          findLoopParents loop = [l | l <- S.toList loops, isLoopParent l]
+              where header = loop_header loop
+                    isLoopParent p = S.size (loop_body p) > S.size (loop_body loop) && S.member header (loop_body p)
+
+
+          loopChildren :: Map.Map Loop [Loop] 
+          loopChildren = Map.fromList [(l, findLoopChildren l) | l <- S.toList loops]
+
+          findLoopChildren :: Loop -> [Loop]
+          findLoopChildren loop = [l | l <- S.toList loops, isLoopChild l] 
+              where isLoopChild c = S.size (loop_body c) < S.size (loop_body loop) && S.member (loop_header c) (loop_body loop)
+                          
+          noCrossDependencies :: Loop -> Bool 
+          noCrossDependencies loop = all (noCrossDependency loop) $ potentialDependencies
+              where (loads, stores) = findLoopLoadsAndStores loop graph 
+                    potentialDependencies = S.toList $ S.union readWriteDeps writeWriteDeps 
+                    readWriteDeps = S.fromList [(read, write) | read <- S.toList loads, write <- S.toList stores]
+                    writeWriteDeps = S.fromList [(write1, write2) | write1 <- S.toList stores, write2 <- S.toList stores]
+                    
+          noCrossDependency :: Loop -> (MidIRExpr, MidIRExpr) -> Bool 
+          noCrossDependency loop (expr1, expr2) 
+              = case (findLabel expr1, findLabel expr2) of 
+                  (Nothing, _) -> False 
+                  (_, Nothing) -> False 
+                  (Just l1, Just l2) 
+                      | l1 /= l2 -> True 
+                      | otherwise -> case (linConstExpr loop expr1, linConstExpr loop expr2) of 
+                                       (Nothing, _) -> False 
+                                       (_, Nothing) -> False 
+                                       (Just linExpr1, Just linExpr2) -> solveLinExprs linExpr1 linExpr2 
+              where v@(variant, invariant) = loopVarInfos Map.! loop 
+                    (variantNames, invariantNames) = loopVarNames v 
+                    
+                    solveLinExprs :: MidIRExpr -> MidIRExpr -> Bool 
+                    solveLinExprs expr1 expr2 = trace ("Dep: " ++ (show expr1) ++ ", " ++ (show expr2)) True
+
+          -- Try to place the expression into linear constant form 
+          -- where the expression represents a linear function of a number 
+          -- of available loop induction variables. Returns Nothing if the 
+          -- expression can't be placed in linear constant form
+          linConstExpr :: Loop -> MidIRExpr -> Maybe MidIRExpr 
+          linConstExpr loop expr = do newExpr <- return $ eliminateLabels expr 
+                                      newExpr <- rejectObviousProblems newExpr
+                                      case hasNonLoopVariables newExpr of 
+                                        True -> do newExpr <- tryRemoveNonLoops newExpr
+                                                   linConstExpr loop newExpr
+                                        False -> rejectNonLinear newExpr
+                                                 
+              where v@(variants, invariants) = loopVarInfos Map.! loop 
+                    (variantNames, invariantNames) = loopVarNames v 
+                    varNameToWebID :: Map.Map VarName WebID 
+                    varNameToWebID = Map.fromList [(webVar $ getWeb id webs, id) | id <- S.toList $ S.union variants invariants]
+                    availableLoopVars :: S.Set VarName 
+                    availableLoopVars = S.union myVariables $ S.union parentVars childVars 
+                    parentVars = S.fromList [var | p <- loopParents Map.! loop, (var, _, _, _) <- loop_variables p] 
+                    childVars = S.fromList [var | c <- loopChildren Map.! loop, (var, _, _, _) <- loop_variables c]
+                    myVariables = S.fromList $ [var | (var, _, _, _) <- loop_variables loop]
+
+                    rejectObviousProblems :: MidIRExpr -> Maybe MidIRExpr 
+                    rejectObviousProblems expr
+                        | fold_EE isObviousProblem False expr = Nothing 
+                        | otherwise = Just expr
+
+                    isObviousProblem :: Bool -> MidIRExpr -> Bool 
+                    isObviousProblem b (LitLabel _ _) = True 
+                    isObviousProblem b (Load _ _) = True 
+                    isObviousProblem b (Cond _ _ _ _) = True
+                    isObviousProblem b (Var _ v)
+                        | S.member v variantNames = True
+                    isObviousProblem b _ = b 
+
+                    rejectNonLinear :: MidIRExpr -> Maybe MidIRExpr 
+                    rejectNonLinear expr 
+                        | fold_EE isNonLinear False expr = Nothing 
+                        | otherwise = Just expr 
+
+                    isNonLinear :: Bool -> MidIRExpr -> Bool 
+                    isNonLinear b (BinOp _ OpMul (Var _ _) (Var _ _)) = True
+                    isNonLinear b _ = b 
+
+                    hasNonLoopVariables :: MidIRExpr -> Bool 
+                    hasNonLoopVariables expr = fold_EE isNonLoopVar False expr 
+                    isNonLoopVar :: Bool -> MidIRExpr -> Bool 
+                    isNonLoopVar b (Var _ v) 
+                        | S.notMember v availableLoopVars = True 
+                    isNonLoopVar b _ = b 
+
+                    tryRemoveNonLoops :: MidIRExpr -> Maybe MidIRExpr 
+                    tryRemoveNonLoops expr = foldM removeNonLoop expr $ S.toList nonLoopVars
+                        where nonLoopVars = fold_EE addNonLoopVars S.empty expr 
+                              addNonLoopVars s (Var _ v) 
+                                  | S.notMember v availableLoopVars = S.insert v s 
+                              addNonLoopVars s _ = s
+                              removeNonLoop :: MidIRExpr -> VarName -> Maybe MidIRExpr 
+                              removeNonLoop expr v
+                                  = let webID = varNameToWebID Map.! v 
+                                        web = getWeb webID webs
+                                        defs = webDefs web
+                                        singleDef = head $ S.toList defs
+                                        replaceInst = getNodeInstOO singleDef pGraph
+                                    in if S.size defs /= 1 
+                                       then Nothing 
+                                       else case replaceInst of 
+                                              Just (Store _ _ new) 
+                                                  -> Just $ fromMaybe expr $ mapEE (replaceVar v new) expr   
+                                              _ -> Nothing 
+
+                              replaceVar :: VarName -> MidIRExpr -> MidIRExpr -> Maybe MidIRExpr 
+                              replaceVar v expr (Var _ x) 
+                                  | v == x = Just $ expr 
+                              replaceVar _ _ _ = Nothing
+
+          eliminateLabels :: MidIRExpr -> MidIRExpr 
+          eliminateLabels expr = fromMaybe expr $ (mapEE maybeEliminateLabel) expr 
+          maybeEliminateLabel (BinOp _ _ (LitLabel _ _) expr) = Just expr 
+          maybeEliminateLabel (BinOp _ _ expr (LitLabel _ _)) = Just expr 
+          maybeEliminateLabel _ = Nothing
+
+
+          findLabel :: MidIRExpr -> Maybe String 
+          findLabel (LitLabel _ s) = Just s 
+          findLabel (Lit _ _) = Nothing 
+          findLabel (Var _ _) = Nothing 
+          findLabel (Load _ _) = Nothing 
+          findLabel (UnOp _ _ expr) = findLabel expr 
+          findLabel (BinOp _ _ expr1 expr2) = case findLabel expr1 of 
+                                                Nothing -> findLabel expr2
+                                                js -> js 
+          findLabel (Cond _ expr1 expr2 expr3) 
+              = case findLabel expr1 of 
+                  Nothing -> case findLabel expr2 of 
+                               Nothing -> findLabel expr3
+                               js -> js 
+                  js -> js 
 
 -- LoopVarInfo represents a set of the variables that are variant in a loop and a set of the variables that are invariant in the loop
 -- An easy way to throw out loops as non-parallel is if they contain any writes to variant loop values 
@@ -221,9 +369,42 @@ findLoopVarInfo webs loop = S.fold addVarWebs (S.empty, S.empty) loopWebs
               | otherwise = True
                     
           
-          
+type LoadsAndStores = (S.Set MidIRExpr, S.Set MidIRExpr)
+
+findLoopLoadsAndStores :: Loop -> Graph MidIRInst C C -> LoadsAndStores
+findLoopLoadsAndStores loop graph = S.fold addLoadsAndStores (S.empty, S.empty) $ loop_body loop 
+    where addLoadsAndStores :: Label -> LoadsAndStores -> LoadsAndStores 
+          addLoadsAndStores label (loads, stores) = (addBlockLoads block loads, addBlockStores block stores) 
+              where BodyBlock block = lookupBlock graph label 
+
+          addBlockLoads :: Block MidIRInst C C -> S.Set MidIRExpr -> S.Set MidIRExpr 
+          addBlockLoads block loads = loads'''
+              where loads' = addLoads loads me 
+                    loads'' = foldl addLoads loads' inner 
+                    loads''' = addLoads loads'' mx 
+                    (me', inner, mx') = blockToNodeList block 
+                    me :: MidIRInst C O 
+                    me = case me' of 
+                           JustC x -> x 
+                    mx :: MidIRInst O C
+                    mx = case mx' of 
+                           JustC x -> x
+
+          addLoads :: S.Set MidIRExpr -> MidIRInst e x -> S.Set MidIRExpr
+          addLoads set inst = fold_EN addLoadExpr set inst 
+
+          addLoadExpr :: S.Set MidIRExpr -> MidIRExpr -> S.Set MidIRExpr 
+          addLoadExpr set (Load _ expr) = S.insert expr set
+          addLoadExpr set _ = set
 
 
+          addBlockStores :: Block MidIRInst C C -> S.Set MidIRExpr -> S.Set MidIRExpr 
+          addBlockStores block stores = foldl addStores stores inner 
+              where (_, inner, _) = blockToNodeList block 
+
+          addStores :: S.Set MidIRExpr -> MidIRInst O O -> S.Set MidIRExpr 
+          addStores set (IndStore _ dest _) = S.insert dest set 
+          addStores set _ = set
 
 createLoopNests :: S.Set Loop -> [LoopNest] 
 createLoopNests loops = error "Not yet implemented :-{"

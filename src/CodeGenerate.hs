@@ -162,9 +162,13 @@ instToAsm (I.Callout pos d name args)
                     <*> mkMiddle (A.mov pos (A.MReg A.RAX) (A.SReg $ show d))
 instToAsm (I.Branch pos l)
     = return $ mkLast $ A.Jmp pos (A.Imm32BlockLabel l 0)
+instToAsm (I.ThreadReturn pos l)
+    = error "ThreadReturn codegen not yet implemented :-{"
 instToAsm (I.CondBranch pos cexp tl fl)
     = do (g, flag) <- expToFlag cexp
          return $ g <*> (mkLast $ A.JCond pos flag (A.Imm32BlockLabel tl 0) fl)
+instToAsm (I.Parallel pos ll var count el)
+    = error "Parallel codegen not yet implemented :-{"
 instToAsm (I.Return pos fname Nothing)
     = return $ (mkLast $ A.Leave pos False 0)
 instToAsm (I.Return pos fname (Just exp))
@@ -676,6 +680,9 @@ instance (ShowC v) => ShowC (I.Inst v e x) where
     showC (I.Callout pos dest name args)
         = printf "{ int64_t (*magic_f)() = %s; %s = magic_f(%s); } // {%s}"
           name (showC dest) (intercalate ", " $ map showC args) (showPos pos)
+    showC (I.ThreadReturn pos lbl)
+        = printf "goto %s; // {%s}"
+          (showC lbl) (showPos pos)
     showC (I.Branch pos lbl)
         = printf "goto %s; // {%s}"
           (showC lbl) (showPos pos)
@@ -688,6 +695,9 @@ instance (ShowC v) => ShowC (I.Inst v e x) where
     showC (I.Fail pos)
         = printf "exit(1); // {%s}"
           (showPos pos)
+    showC (I.Parallel pos llbl var count elbl)
+        = printf "for (%s = 0; %s < %s; %s++) {\n    // FIXME: NOT IMPLEMNTED\n  } // {%s}"
+          (showC var) (showC var) (show count) (showC var) (show pos)
 
 variablesUsed :: Block I.MidIRInst C C -> S.Set I.VarName
 variablesUsed block = S.fromList $ map fromJust $ filter isJust $ map getVar instrs

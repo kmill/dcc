@@ -103,7 +103,9 @@ mapEN f (Callout pos var str es) =
     if all isNothing es' then Nothing 
     else Just $ Callout pos var str (map (uncurry fromMaybe) (zip es es'))
         where es' = map f es
-mapEN _ (Branch _ _) = Nothing 
+mapEN _ Parallel{} = Nothing
+mapEN _ Branch{} = Nothing 
+mapEN _ ThreadReturn{} = Nothing 
 mapEN f (CondBranch pos expr tl fl) =
     case f expr of 
       Nothing -> Nothing 
@@ -113,22 +115,24 @@ mapEN f (Return pos from maybeexpr) =
       Nothing -> Nothing 
       Just Nothing -> Nothing 
       Just expr' -> Just $ Return pos from expr'
-mapEN _ (Fail _)  = Nothing
+mapEN _ Fail{}  = Nothing
     
 
 insnToG :: MidIRInst e x -> Graph MidIRInst e x  
-insnToG n@(Label _ _) = mkFirst n
-insnToG n@(PostEnter _ _) = mkFirst n
-insnToG n@(Enter _ _ _) = mkFirst n
-insnToG n@(Store _ _ _) = mkMiddle n 
+insnToG n@Label{} = mkFirst n
+insnToG n@PostEnter{} = mkFirst n
+insnToG n@Enter{} = mkFirst n
+insnToG n@Store{} = mkMiddle n 
 insnToG n@DivStore{} = mkMiddle n
-insnToG n@(IndStore _ _ _) = mkMiddle n 
-insnToG n@(Call _ _ _ _) = mkMiddle n 
-insnToG n@(Callout _ _ _ _) = mkMiddle n 
-insnToG n@(Branch _ _) = mkLast n 
-insnToG n@(CondBranch _ _ _ _) = mkLast n 
-insnToG n@(Return _ _ _) = mkLast n 
-insnToG n@(Fail _) = mkLast n 
+insnToG n@IndStore{} = mkMiddle n 
+insnToG n@Call{} = mkMiddle n 
+insnToG n@Callout{} = mkMiddle n 
+insnToG n@Parallel{} = mkLast n
+insnToG n@ThreadReturn{} = mkLast n
+insnToG n@Branch{} = mkLast n 
+insnToG n@CondBranch{} = mkLast n 
+insnToG n@Return{} = mkLast n 
+insnToG n@Fail{} = mkLast n 
 
 
 fold_EE :: (a -> MidIRExpr -> a) -> a -> MidIRExpr -> a 
@@ -150,7 +154,9 @@ fold_EN f z (DivStore _ _ _ expr1 expr2) = f (f z expr2) expr1
 fold_EN f z (IndStore _ expr1 expr2) = f (f z expr2) expr1
 fold_EN f z (Call _ _ _ es) = foldl f z es 
 fold_EN f z (Callout _ _ _ es) = foldl f z es 
+fold_EN _ z (Parallel _ _ _ _ _) = z
 fold_EN _ z (Branch _ _) = z
+fold_EN _ z (ThreadReturn _ _) = z
 fold_EN f z (CondBranch _ expr _ _) = f z expr 
 fold_EN _ z (Return _ from Nothing) = z
 fold_EN f z (Return _ from (Just expr)) = f z expr
@@ -187,6 +193,8 @@ getMidAliveDead inst
         n@(IndStore _ _ _) -> (S.toList $ getUses S.empty n, [])
         n@(Call _ x _ _) -> (S.toList $ getUses S.empty n, [x])
         n@(Callout _ x _ _) -> (S.toList $ getUses S.empty n, [x])
+        Parallel _ _ _ _ _ -> emptyMAD
+        ThreadReturn _ _ -> emptyMAD
         Branch _ _ -> emptyMAD
         n@(CondBranch _ _ _ _) -> (S.toList $ getUses S.empty n, [])
         n@(Return _ _ _) -> (S.toList $ getUses S.empty n, [])
