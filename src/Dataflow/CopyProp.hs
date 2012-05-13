@@ -18,8 +18,9 @@ copyLattice :: DataflowLattice CopyFact
 copyLattice = DataflowLattice { fact_name = "Copy Propagation Lattice"
                                , fact_bot = Map.empty
                                , fact_join = joinMaps (extendJoinDomain copyFactAdd) }
-    where copyFactAdd _ (OldFact old) (NewFact new) = if new == old then (NoChange, PElem new)
-                                                      else (SomeChange, Top)
+    where copyFactAdd _ (OldFact (pos1, old)) (NewFact (_, new))
+              = if new == old then (NoChange, PElem (pos1, old))
+                else (SomeChange, Top)
 
 emptyCopyFact :: CopyFact 
 emptyCopyFact = fact_bot copyLattice 
@@ -32,7 +33,9 @@ varIsCopy = mkFTransfer ft
       ft (Label _ _) f = f 
       ft (PostEnter _ _) f = f 
       ft (Enter _ _ args) f = Map.fromList (map (\a -> (a, Top)) args)
-      ft (Store _ x (Var pos v)) f = removeBindingsTo x $ Map.insert x (PElem (pos, v)) f 
+      ft (Store _ x (Var pos v)) f
+        | x == v    = f
+        | otherwise = removeBindingsTo x $ Map.insert x (PElem (pos, v)) f 
       ft (Store _ x _) f = removeBindingsTo x $ Map.insert x Top f 
       ft (DivStore _ x _ _ _) f = removeBindingsTo x $ Map.insert x Top f
       ft (IndStore _ _ _) f = f 

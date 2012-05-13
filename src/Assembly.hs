@@ -9,6 +9,9 @@ import Data.List
 import AST(SourcePos, showPos)
 import Data.Int
 import Text.Printf
+import Control.Monad
+import Data.Maybe
+import Debug.Trace
 
 -- | The assembly form is our low IR.
 data LowIRRepr = LowIRRepr
@@ -432,6 +435,11 @@ instance Mnemonic Reg MemAddr where
 instance Mnemonic Imm32 MemAddr where
     mov p s d = MovIRtoM p (IR_I s) d
 
+instance Mnemonic Int64 Reg where
+    mov p i d = if checkIf32Bit i
+                then MovIRMtoR p (IRM_I $ Imm32 $ fromIntegral i) d
+                else Mov64toR p (Imm64 i) d
+
 ---
 --- Registers
 ---
@@ -519,102 +527,144 @@ instance Show X86Reg where
 class AsmRename x where
     -- | Takes a function on registers and something, and replaces the
     -- registers in the something.
-    mapArg :: (Reg -> Reg) -> x -> x
+    mapArg :: (Reg -> Maybe Reg) -> x -> Maybe x
 
 instance AsmRename Reg where
     mapArg f r = f r
 instance AsmRename MemAddr where
-    mapArg f m = MemAddr
-                 { baseReg = f `fmap` baseReg m
-                 , displace = displace m
-                 , indexReg = f `fmap` indexReg m
-                 , scalar = scalar m }
+    mapArg f m = let br = baseReg m
+                     ir = indexReg m
+                     (brm, irm) = (f `fmap` br, f `fmap` ir)
+                     changed (Just (Just _)) = True
+                     changed _ = False
+                     new _ (Just (Just v)) = Just v
+                     new v _ = v
+                     (br', ir') = (new br brm, new ir irm)
+                 in if changed brm || changed irm
+                    then return $ MemAddr
+                             { baseReg = br'
+                             , displace = displace m
+                             , indexReg = ir'
+                             , scalar = scalar m }
+                    else Nothing 
 
 instance AsmRename OperIRM where
-    mapArg f (IRM_I i) = IRM_I i
-    mapArg f (IRM_R r) = IRM_R $ f r
-    mapArg f (IRM_M m) = IRM_M $ mapArg f m
+    mapArg f (IRM_I i) = Nothing
+    mapArg f (IRM_R r) = IRM_R `fmap` f r
+    mapArg f (IRM_M m) = IRM_M `fmap` mapArg f m
 instance AsmRename OperIR where
-    mapArg f (IR_I i) = IR_I i
-    mapArg f (IR_R r) = IR_R $ f r
+    mapArg f (IR_I i) = Nothing
+    mapArg f (IR_R r) = IR_R `fmap` f r
 instance AsmRename OperRM where
-    mapArg f (RM_R r) = RM_R $ f r
-    mapArg f (RM_M m) = RM_M $ mapArg f m
+    mapArg f (RM_R r) = RM_R `fmap` f r
+    mapArg f (RM_M m) = RM_M `fmap` mapArg f m
 
-mapAsm :: forall e x . (Reg -> Reg) -> (Reg -> Reg) -> Asm e x -> Asm e x
+mmaybe :: [(a, Maybe a)] -> Maybe [a]
+mmaybe mvals = do msum $ map snd mvals
+                  return $ map (uncurry fromMaybe) mvals
+
+mmaybe2 :: ((a, Maybe a), (b, Maybe b)) -> Maybe (a, b)
+mmaybe2 ((_, Nothing), (_, Nothing)) = Nothing
+mmaybe2 ((a, ma), (b, mb)) = Just (fromMaybe a ma, fromMaybe b mb)
+
+mmaybe3 :: ((a, Maybe a), (b, Maybe b), (c, Maybe c)) -> Maybe (a, b, c)
+mmaybe3 ((_, Nothing), (_, Nothing), (_, Nothing)) = Nothing
+mmaybe3 ((a, ma), (b, mb), (c, mc)) = Just (fromMaybe a ma, fromMaybe b mb, fromMaybe c mc)
+
+mapAsm :: forall e x . (Reg -> Maybe Reg) -> (Reg -> Maybe Reg) -> Asm e x -> Maybe (Asm e x)
 mapAsm fs fd n
     = case n of
-        Label{} -> n
+        Label{} -> Nothing
         
-        Spill pos r spillloc -> Spill pos (fs' r) spillloc
-        Reload pos spillloc r -> Reload pos spillloc (fd' r)
+        Spill pos r spillloc -> do r' <- fs' r
+                                   return $ Spill pos r' spillloc
+        Reload pos spillloc r -> do r' <- fd' r
+                                    return $ Reload pos spillloc r'
         
-        MovIRMtoR pos s d -> MovIRMtoR pos (fs' s) (fd' d)
-        MovIRtoM pos s d -> MovIRtoM pos (fs' s) (fs' d)
-        Mov64toR pos i d -> Mov64toR pos i (fd' d)
+        MovIRMtoR pos s d -> do (s', d') <- mmaybe2 ((s, fs' s), (d, fd' d))
+                                return $ MovIRMtoR pos s' d'
+        MovIRtoM pos s m -> do (s', m') <- mmaybe2 ((s, fs' s), (m, fs' m))
+                               return $ MovIRtoM pos s' m'
+        Mov64toR pos i d -> do d' <- fd' d
+                               return $ Mov64toR pos i d'
 
-        CMovRMtoR pos fl s d -> CMovRMtoR pos fl (fs' s) (fd' d)
+        CMovRMtoR pos fl s d -> do (s', dSource', dDest') <- mmaybe3 ((s, fs' s)
+                                                                     ,(d, fs' d)
+                                                                     ,(d, fd' d))
+                                   when (dSource' /= dDest') $
+                                        error $ printf "source and dest not equal in %s!" (show n)
+                                   return $ CMovRMtoR pos fl s' dDest'
         
-        Enter{} -> n
-        Leave{} -> n
+        Enter{} -> Nothing
+        Leave{} -> Nothing
         
-        Call{} -> n
-        Callout{} -> n
-        Ret{} -> n
-        RetPop{} -> n
-        ExitFail{} -> n
+        Call{} -> Nothing
+        Callout{} -> Nothing
+        Ret{} -> Nothing
+        RetPop{} -> Nothing
+        ExitFail{} -> Nothing
         
-        Lea pos s d -> Lea pos (fs' s) (fd' d)
+        Lea pos s d -> do (s', d') <- mmaybe2 ((s, fs' s), (d, fd' d))
+                          return $ Lea pos s' d'
         
-        Push pos s -> Push pos (fs' s)
-        Pop pos (RM_R rd) -> Pop pos (RM_R $ fd' rd)
-        Pop pos (RM_M ms) -> Pop pos (RM_M $ fs' ms)
+        Push pos s -> do s' <- fs' s
+                         return $ Push pos s'
+        Pop pos (RM_R rd) -> do d' <- fd' rd
+                                return $ Pop pos (RM_R d')
+        Pop pos (RM_M ms) -> do ms' <- fs' ms
+                                return $ Pop pos (RM_M ms')
         
-        Jmp{} -> n
-        JCond{} -> n
+        Jmp{} -> Nothing
+        JCond{} -> Nothing
         
-        ALU_IRMtoR pos op s d -> let dSource = fs' d
-                                     dDest = fd' d
-                                 in case dSource == dDest of
-                                      True -> ALU_IRMtoR pos op (fs' s) dDest
-                                      False -> error $ printf "source and dest not equal in %s!"
-                                                          (show n)
-        ALU_IRtoM pos op s d -> ALU_IRtoM pos op (fs' s) (fs' d)
-        Cmp pos s1 s2 -> Cmp pos (fs' s1) (fs' s2)
-        Test pos s1 s2 -> Test pos (fs' s1) (fs' s2)
+        ALU_IRMtoR pos op s d -> do (s', dSource', dDest') <- mmaybe3 ((s, fs' s)
+                                                                      ,(d, fs' d)
+                                                                      ,(d, fd' d))
+                                    when (dSource' /= dDest') $
+                                         error $ printf "source and dest not equal in %s!" (show n)
+                                    return $ ALU_IRMtoR pos op s' dDest'
+        ALU_IRtoM pos op s m -> do (s', m') <- mmaybe2 ((s, fs' s), (m, fs' m))
+                                   return $ ALU_IRtoM pos op s' m'
+        Cmp pos s1 s2 -> do (s1', s2') <- mmaybe2 ((s1, fs' s1), (s2, fs' s2))
+                            return $ Cmp pos s1' s2'
+        Test pos s1 s2 -> do (s1', s2') <- mmaybe2 ((s1, fs' s1), (s2, fs' s2))
+                             return $ Test pos s1' s2'
         
         Inc pos sd -> doUnaryRM (Inc pos) sd
         Dec pos sd -> doUnaryRM (Dec pos) sd
         Neg pos sd -> doUnaryRM (Neg pos) sd
         
-        IMulRAX pos s -> IMulRAX pos (fs' s)
-        IMulRM pos s d -> let dSource = fs' d
-                              dDest = fd' d
-                          in case dSource == dDest of
-                               True -> IMulRM pos (fs' s) dDest
-                               False -> error $ printf "source and dest not equal in %s!"
-                                                   (show n)
-        IMulImm pos i s d -> IMulImm pos i (fs' s) (fd' d)
+        IMulRAX pos s -> do s' <- fs' s
+                            return $ IMulRAX pos s'
+        IMulRM pos s d -> do (s', dSource', dDest') <- mmaybe3 ((s, fs' s)
+                                                               ,(d, fs' d)
+                                                               ,(d, fd' d))
+                             when (dSource' /= dDest') $
+                                  error $ printf "source and dest not equal in %s!" (show n)
+                             return $ IMulRM pos s' dDest'
+        IMulImm pos i s d -> do (s', d') <- mmaybe2 ((s, fs' s), (d, fd' d))
+                                return $ IMulImm pos i s' d'
         
-        IDiv pos s -> IDiv pos (fs' s)
-        Cqo{} -> n
+        IDiv pos s -> do s' <- fs' s
+                         return $ IDiv pos s'
+        Cqo{} -> Nothing
         
         Shl pos i rm -> doUnaryRM (Shl pos i) rm
         Shr pos i rm -> doUnaryRM (Shr pos i) rm
         Sar pos i rm -> doUnaryRM (Sar pos i) rm
         
-        Nop{} -> n
+        Nop{} -> Nothing
         
-    where fs', fd' :: AsmRename x => x -> x
+    where fs', fd' :: AsmRename x => x -> Maybe x
           fs' = mapArg fs
           fd' = mapArg fd
           
-          doUnaryRM :: (OperRM -> Asm O O) -> OperRM -> Asm O O
+          doUnaryRM :: (OperRM -> Asm O O) -> OperRM -> Maybe (Asm O O)
           doUnaryRM cons (RM_R rd)
-              = let rdSource = fs' rd
-                    rdDest = fd' rd
-                in case rdSource == rdDest of
-                     True -> cons (RM_R rdDest)
-                     False -> error $ printf "source and dest not equal in %s!"
-                                           (show n)
-          doUnaryRM cons (RM_M m) = cons (RM_M $ fs' m)
+              = do (rdSource', rdDest') <- mmaybe2 ((rd, fs' rd)
+                                                   ,(rd, fd' rd))
+                   when (rdSource' /= rdDest') $
+                        error $ printf "source and dest not equal in %s!" (show n)
+                   return $ cons (RM_R rdDest')
+          doUnaryRM cons (RM_M m) = do m' <- fs' m
+                                       return $ cons (RM_M m')
