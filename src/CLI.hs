@@ -66,13 +66,14 @@ data OptFlags = OptFlags { touched :: Bool
                          , optUnflat :: Bool
                          , optTailcall :: Bool
                          , optLICM :: Bool
+                         , optParallelize :: Bool
                          , optNZP :: Bool
                          , optRA :: Bool }
               deriving (Show)
 
-optAllD = OptFlags True True True True True True True True True True True True
-optAll = OptFlags False True True True True True True True True True True True
-optNone = OptFlags False False False False False False False False False False False False
+optAllD = OptFlags True True True True True True True True True True True True True
+optAll = OptFlags False True True True True True True True True True True True True
+optNone = OptFlags False False False False False False False False False False False False False
 
 options :: [OptDescr (CompilerOpts -> CompilerOpts)]
 options =
@@ -89,18 +90,19 @@ options =
     , Option ['h']  ["help"]    (NoArg help')               "Prints this usage information"
     , Option ['r']  ["regalloc"] (NoArg regalloc')          "Enables the register allocator"
     , Option ['O']     ["opt"]     (ReqArg optimize' "OPTIMIZATION") ("Enables optimizations:\n" ++
-                                                                      "\t      all : Enables ALL optimizations\n" ++
-                                                                      "\t     none : Disables ALL optimizations\n" ++
-                                                                      "\t      cse : Constant Subexpression Elimination\n" ++
-                                                                      "\t copyprop : Copy Propagation\n" ++
-                                                                      "\tconstprop : Constant Propagation\n" ++
-                                                                      "\t      nzp : -/0/+ Analysis\n" ++
-                                                                      "\t deadcode : Dead Code Elimination\n" ++
-                                                                      "\tblockelim : Block Elimination\n" ++
-                                                                      "\t     flat : Flatten Optimization\n" ++
-                                                                      "\t   unflat : Unflatten Optimization\n" ++
-                                                                      "\t tailcall : Tailcall Elimination\n" ++ 
-                                                                      "\t     licm : Loop Invariant Code Motin\n")
+                                                                      "\t         all : Enables ALL optimizations\n" ++
+                                                                      "\t        none : Disables ALL optimizations\n" ++
+                                                                      "\t         cse : Constant Subexpression Elimination\n" ++
+                                                                      "\t    copyprop : Copy Propagation\n" ++
+                                                                      "\t   constprop : Constant Propagation\n" ++
+                                                                      "\t         nzp : -/0/+ Analysis\n" ++
+                                                                      "\t    deadcode : Dead Code Elimination\n" ++
+                                                                      "\t   blockelim : Block Elimination\n" ++
+                                                                      "\t        flat : Flatten Optimization\n" ++
+                                                                      "\t      unflat : Unflatten Optimization\n" ++
+                                                                      "\t    tailcall : Tailcall Elimination\n" ++ 
+                                                                      "\t        licm : Loop Invariant Code Motin\n" ++
+                                                                      "\t parallelize : Automatic Loop Parallelization")
     ]
     where outfile' s opts = opts { outputFile = Just s }
           target' t opts = opts { target = targetOpt t }
@@ -139,6 +141,7 @@ optOpt opts s
     "unflat" -> oFlags { optUnflat = True }
     "licm" -> oFlags { optLICM = True }
     "tailcall" -> oFlags { optTailcall = True }
+    "parallelize" -> oFlags { optParallelize = True }
     "ra" -> oFlags { optRA = True }
     "none" -> optNone
     _ -> oFlags

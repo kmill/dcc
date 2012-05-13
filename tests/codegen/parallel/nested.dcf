@@ -1,0 +1,16 @@
+class Program
+{
+	int a[1000];
+	int b[1000];
+	void main() {
+		for(i = 0; 1000) {
+			for(j = 0; 1000) {
+				a[i] = 22 * b[j] + 22;
+			}
+		}
+		for(i = 0; 1000) {
+			callout("printf", "%u ", a[i]);
+			callout("printf", "%u ", b[i]);
+		}
+	}
+}
