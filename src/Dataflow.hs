@@ -74,6 +74,7 @@ dataflows
       -- It's good to end with this for good measure (and removes dead blocks)
       , DFA optDeadCode performDeadCodePass
       --, DFA optDeadCode testDominatorPass
+      , DFA (hasOptFlag "winnowstr") removeUnusedStrings
       ]
       
     where
@@ -315,6 +316,14 @@ getLitLabelsPass = BwdPass
             getLabs = fold_EE f S.empty
                 where f a (LitLabel _ s) = S.insert s a
                       f a _ = a
+
+removeUnusedStrings :: MidIRRepr -> RM MidIRRepr
+removeUnusedStrings midir@(MidIRRepr fields strs meths graph)
+    = do labelBase <- getLitLabels midir
+         let mlabels = map methodEntry meths
+             labels = S.unions $ map (\l -> fromJust $ lookupFact l labelBase) mlabels
+             strs' = filter (\(s, _, _) -> s `S.member` labels) strs
+         return $ midir { midIRStrings = strs' }
 
 unFlatten :: FactBase Live -> MidIRRepr -> RM MidIRRepr 
 unFlatten factbase (MidIRRepr fields strs meths graph)

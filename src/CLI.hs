@@ -78,6 +78,7 @@ optimizations =
     , ("tailcall", "Tailcall Elimination")
     , ("licm", "Loop Invariant Code Motion")
     , ("parallelize", "Automatic Loop Parallelization")
+    , ("winnowstr", "Removes unused strings")
     , ("deadcodeasm", "Dead code elimination on assembly")
     , ("colorspills", "Recolor spills in assembly")
     , ("betterifyasm", "Constant/copy propagation on assembly")
