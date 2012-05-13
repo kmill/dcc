@@ -29,13 +29,17 @@ condAssignLattice = DataflowLattice { fact_name = "Branch Assignments"
                     | M.null or && M.null nr = AssignMap ol nl
                     | otherwise = AssignMap Nothing Nothing
                           
+emptyCEFact :: AssignMap
+emptyCEFact = fact_bot condAssignLattice
+
 condAssignness :: BwdTransfer MidIRInst AssignMap
 condAssignness = mkBTransfer f
   where f :: MidIRInst e x -> Fact x AssignMap -> AssignMap
-        f (Store v (Lit _ v')) k@(AssignMap (Just kr) kl) = AssignMap (combineMaps (singleton ((InVar v),(AssignCon v'))) kr) kl
-        f (Store v (Var _ v')) k@(AssignMap (Just kr) kl) = AssignMap (combineMaps (singleton ((InVar v),(AssignVar v'))) kr) kl 
-        f (Return _ (Just (Lit _ v')) k@(AssignMap (Just kr) kl) = AssignMap (combineMaps (singleton ((InRet, (AssignCon v')))) kr) kl
-        f (Return _ (Just (Var _ v')) k@(AssignMap (Just kr) kl) = AssignMap (combineMaps (singleton ((InRet, (AssignVar v')))) kr) kl
+        f (Store v (Lit _ v')) k@(AssignMap (Just kr) kl) = AssignMap (combineMaps (M.singleton (InVar v) AssignCon v') kr) kl
+        f (Store v (Var _ v')) k@(AssignMap (Just kr) kl) = AssignMap (combineMaps (M.singleton (InVar v) AssignVar v') kr) kl 
+        f (Return _ rx (Just (Lit _ v'))) k@(AssignMap (Just kr) kl) = AssignMap (combineMaps (M.singleton (InRet rx) AssignCon v') kr) kl
+        f (Return _ rx (Just (Var _ v'))) k@(AssignMap (Just kr) kl) = AssignMap (combineMaps (M.singleton (InRet rx) AssignVar v') kr) kl
+        f (Branch _ lbl) kl = AssignMap (Just M.empty) (Just M.empty)
         f _ k = AssignMap Nothing Nothing
 
 combineMaps :: (M.Map Assigned Assignable) -> (M.Map Assigned Assignable) -> Maybe (M.Map Assigned Assignable)
@@ -53,11 +57,4 @@ condElim = deepBwdRw ll
             InRet r -> return $ mkLast $ Return p r (Just (Cond p ce (first $ M.elems a) (first $ M.elems b)))
             InVar v -> return $ mkLast $ Store p v (Cond p ce (first $ M.elems a) (first $ M.elems b))
         | otherwise = return Nothing
-        where
-          fun :: Label -> Maybe Label
-          --fun l = fromJust (lookupFact l f) `mplus` (Just l)
-          fun l = fromMaybe (Just l) (lookupFact l f) `mplus` (Just l)
---    ll (Enter p l args) (Just l')
---        = return $ Just (mkFirst (Enter p l args)
---                         <*> mkLast (Branch p l'))
     ll _ f = return Nothing
