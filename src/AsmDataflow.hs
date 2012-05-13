@@ -3,9 +3,6 @@
 -- | Dataflow analyses on the lowir (Assembly.hs).
 module AsmDataflow(performAsmDataflowAnalysis) where
 
-import Dataflow.DeadCodeAsm
-import Dataflow.ColorSpills
-
 import Control.Monad
 import Data.Int
 import qualified Data.Set as S
@@ -19,6 +16,10 @@ import CLI
 import DataflowTypes
 --import Dataflow.GenWebs
 
+import Dataflow.DeadCodeAsm
+import Dataflow.ColorSpills
+import Dataflow.BetterifyAsm
+
 ---
 ---
 ---
@@ -31,6 +32,8 @@ dataflows :: [ADFA]
 dataflows
     = [ ADFA (hasOptFlag "deadcodeasm") performDeadAsmPass
       , ADFA (hasOptFlag "colorspills") performColorSpills
+      , ADFA (hasOptFlag "betterifyasm") performBetterifyPass
+      , ADFA (hasOptFlag "betterifyasm") performDeadAsmPass
       ]
 
 performAsmDataflowAnalysis :: OptFlags -> LowIRRepr -> RM LowIRRepr

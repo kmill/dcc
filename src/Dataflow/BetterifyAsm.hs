@@ -1,27 +1,42 @@
 {-# LANGUAGE RankNTypes, GADTs, ScopedTypeVariables, FlexibleInstances #-}
 
-module Dataflow.BetterifyAsm where
+-- | This is essentially constant/copy propagation
+module Dataflow.BetterifyAsm(performBetterifyPass) where
 
-simplifySpillsAndBetterify :: [Label] -> Graph A.Asm C C -> RM (Graph A.Asm C C)
-simplifySpillsAndBetterify mlabels graph
-    = do let pg = toPGraph graph
-             spillWebs = GenWebs.getWebs spillAliveDead mlabels pg
-             spillTable = GenWebs.makeTables spillWebs
-         (_, smvs, _) <- analyzeAndRewriteBwd
-                         (collectSpillMovePass spillTable)
-                         (JustC mlabels)
-                         pg
-                         mapEmpty
-         let spillMoves = M.unions $ map (\l -> fst $ fromJust $ lookupFact l smvs) mlabels
-             spillInterf = GenWebs.makeInterfGraph mlabels pg spillWebs spillMoves
-             colors = combineSpills spillInterf spillMoves
-             graph' = mapGraph (renameSpills colors spillInterf) pg
-         (graph'', _, _) <- analyzeAndRewriteFwd
-                            betterifySpills
-                            (JustC mlabels)
-                            (trace (unlines $ concatMap (graphToAsm False graph') mlabels) graph')
-                            (mapFromList (map (\l -> (l, fact_bot betterifyLattice)) mlabels))
-         return graph''
+import qualified Data.Set as S
+import qualified Data.Map as M
+import Data.Int
+import Data.Maybe
+import Data.List
+import Data.Either
+import DataflowTypes
+import Dataflow.OptSupport
+import qualified IR as I
+import Assembly
+import Util.NodeLocate
+import Compiler.Hoopl
+import Dataflow.GenWebs
+import AliveDead
+import Debug.Trace
+import RegAlloc.InterfGraph(getPinned)
+
+performBetterifyPass :: (CheckpointMonad m, FuelMonad m)
+                     => LowIRRepr -> m LowIRRepr
+performBetterifyPass asm
+    = do graph' <- performBetterifyPass' mlabels graph
+         return $ asm { lowIRGraph = graph' }
+    where graph = lowIRGraph asm
+          mlabels = (map I.methodEntry $ lowIRMethods asm)
+
+performBetterifyPass' :: (CheckpointMonad m, FuelMonad m)
+                         => [Label] -> Graph Asm C C -> m (Graph Asm C C)
+performBetterifyPass' mlabels graph
+    = do (graph', _, _) <- analyzeAndRewriteFwd
+                           betterifySpills
+                           (JustC mlabels)
+                           graph
+                           (mapFromList (map (\l -> (l, fact_bot betterifyLattice)) mlabels))
+         return graph'
 
 data BetterifyLoc = BInt64 Int64
                   | BSpill SpillLoc
@@ -53,10 +68,10 @@ betterifySpills = FwdPass
           ftCO (Enter _ _ numargs _) (spills, regs)
               = (spills'', regs')
                 where spills' = M.fromList $ map (\a -> (a, Top)) $ 
-                                lefts $ drop 6 $ take numargs A.argLocation
+                                lefts $ drop 6 $ take numargs argLocation
                       spills'' = if numargs > 6 then spills' else M.empty
                       regs' = M.fromList $ map (\a -> (a, Top)) $
-                              rights $ take (min 6 numargs) A.argLocation
+                              rights $ take (min 6 numargs) argLocation
           ftCO _ f = f
           
           removeBindingsTo :: Ord k => BetterifyLoc -> M.Map k (WithTop BetterifyLoc)

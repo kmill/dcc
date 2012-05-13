@@ -80,6 +80,7 @@ optimizations =
     , ("parallelize", "Automatic Loop Parallelization")
     , ("deadcodeasm", "Dead code elimination on assembly")
     , ("colorspills", "Recolor spills in assembly")
+    , ("betterifyasm", "Constant/copy propagation on assembly")
     ]
 
 showOptimizations :: String
