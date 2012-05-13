@@ -22,10 +22,7 @@ import AliveDead
 
 regAlloc :: LowIRRepr -> I.GM LowIRRepr
 regAlloc (LowIRRepr fields strs meths graph)
-    = do graph'' <- evalStupidFuelMonad (Allocator.collectSpill mlabels graph') maxBound
-         let lir' = LowIRRepr fields strs meths graph''
-         return lir'
---         evalStupidFuelMonad (performDeadAsmPass lir') maxBound
+    = return $ LowIRRepr fields strs meths graph'
       where GMany _ body _ = graph
             graph' = foldl (|*><*|) emptyClosedGraph bodies
             bodies = map f (mapElems body)

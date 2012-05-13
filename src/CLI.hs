@@ -6,6 +6,7 @@ module CLI ( compilerOpts, CompilerOpts(..), TargetFlag(..), hasOptFlag, OptFlag
 import System.Console.GetOpt
 import System.Exit
 import qualified Data.Set as S
+import Data.List.Utils(split)
 
 -- | This type contains the result of parsing command line arguments
 -- | for the decaf compiler.
@@ -78,6 +79,7 @@ optimizations =
     , ("licm", "Loop Invariant Code Motion")
     , ("parallelize", "Automatic Loop Parallelization")
     , ("deadcodeasm", "Dead code elimination on assembly")
+    , ("colorspills", "Recolor spills in assembly")
     ]
 
 showOptimizations :: String
@@ -85,9 +87,6 @@ showOptimizations = unlines $ map showOpt optimizations
     where maxnamelength = maximum $ map (length . fst) optimizations
           showOpt (name, desc) = replicate (maxnamelength - length name) ' '
                                  ++ name ++ " : " ++ desc
-          optimizations' = [("all", "Enables ALL optimizations")
-                           ,("none", "Disables ALL optimizations")]
-                           ++ optimizations
 
 options :: [OptDescr (CompilerOpts -> CompilerOpts)]
 options =
@@ -104,16 +103,21 @@ options =
     , Option ['h']  ["help"]    (NoArg help')               "Prints this usage information"
     , Option ['r']  ["regalloc"] (NoArg regalloc')          "Enables the register allocator"
     , Option ['O']     ["opt"]     (ReqArg optimize' "OPTIMIZATION") ("Enables optimizations:\n"
-                                                                      ++ showOptimizations)
+                                                                      ++ showOptimizations
+                                                                      ++ "\nPrefixing an optimization with '-' disables it"
+                                                                      ++ "\nall/none enables/disables ALL optimizations")
     ]
     where outfile' s opts = opts { outputFile = Just s }
           target' t opts = opts { target = targetOpt t }
           debug' opts = opts { debugMode = True }
           compat' opts = opts { compatMode = True }
           help' opts = opts { helpMode = True }
-          optimize' t opts = opts { optMode = optOpt opts t }
+          optimize' t opts
+            = opts { optMode = foldl (flip id) (optMode opts)
+                               [optOpt p | p <- split "," t] }
           mac' opts = opts { macMode = True }
           regalloc' opts = opts { regAllocMode = True }
+
 
 targetOpt :: String -> TargetFlag
 targetOpt s
@@ -129,14 +133,15 @@ targetOpt s
         "assembly" -> TargetCodeGen
         _ -> TargetDefault
 
-optOpt :: CompilerOpts -> String -> OptFlags
-optOpt opts s 
+optOpt :: String -> OptFlags -> OptFlags
+optOpt s opts
   = case s of
       "all" -> S.fromList $ map fst optimizations
       "none" -> S.empty
+      '-':name -> S.delete name opts
       name | any (\opt -> fst opt == name) optimizations
-               -> S.insert name (optMode opts)
-           | otherwise -> (optMode opts)
+               -> S.insert name opts
+           | otherwise -> opts
 
 -- | Takes an argument list and gives a 'CompilerOpts'.  If there's a
 -- parse error or help request, this function uses 'System.Exit' to
