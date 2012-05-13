@@ -252,20 +252,10 @@ getVariables midir
 getVariablesPass :: (CheckpointMonad m, FuelMonad m)
                     => BwdPass m MidIRInst (S.Set VarName)
 getVariablesPass = BwdPass
-                   { bp_lattice = getVarsLattice
+                   { bp_lattice = setLattice
                    , bp_transfer = getVarsTransfer
                    , bp_rewrite = noBwdRewrite }
     where
-      getVarsLattice :: DataflowLattice (S.Set VarName)
-      getVarsLattice = DataflowLattice
-                       { fact_name = "used variables"
-                       , fact_bot = S.empty
-                       , fact_join = add
-                       }
-          where add _ (OldFact old) (NewFact new) = (ch, j)
-                    where j = new `S.union` old
-                          ch = changeIf $ S.size j > S.size old
-
       getVarsTransfer :: BwdTransfer MidIRInst (S.Set VarName)
       getVarsTransfer = mkBTransfer used
           where
@@ -282,12 +272,58 @@ getVariablesPass = BwdPass
             used (Branch _ l) f = fact f l
             used (ThreadReturn _ l) f = fact f l
             used (CondBranch _ _ tl fl) f = fact f tl `S.union` fact f fl
-            used Return{} f = fact_bot getVarsLattice
-            used Fail{} f = fact_bot getVarsLattice
+            used Return{} f = fact_bot setLattice
+            used Fail{} f = fact_bot setLattice
 
             fact :: FactBase (S.Set VarName) -> Label -> S.Set VarName
             fact f l = fromMaybe S.empty $ lookupFact l f 
 
+
+getLitLabels :: MidIRRepr -> RM (FactBase (S.Set String))
+getLitLabels midir 
+    = do (_, factBase, _) <- analyzeAndRewriteBwd 
+                             getLitLabelsPass
+                             (JustC mlabels)
+                             graph
+                             mapEmpty
+         return $ factBase
+    where graph = midIRGraph midir 
+          mlabels = (map methodEntry $ midIRMethods midir)
+
+
+getLitLabelsPass :: (CheckpointMonad m, FuelMonad m)
+                    => BwdPass m MidIRInst (S.Set String)
+getLitLabelsPass = BwdPass
+                   { bp_lattice = setLattice
+                   , bp_transfer = getLabsTransfer
+                   , bp_rewrite = noBwdRewrite }
+    where
+      getLabsTransfer :: BwdTransfer MidIRInst (S.Set String)
+      getLabsTransfer = mkBTransfer used
+          where
+            used :: MidIRInst e x -> Fact x (S.Set String) -> S.Set String
+            used Label{} f = f
+            used PostEnter{} f = f
+            used (Enter _ _ _) f = f
+            used (Store _ _ expr) f = S.union (getLabs expr) f
+            used (DivStore _ _ _ e1 e2) f = S.unions [getLabs e1, getLabs e2, f]
+            used (IndStore _ e1 e2) f = S.unions [getLabs e1, getLabs e2, f]
+            used (Call _ _ _ es) f = f `S.union` S.unions [getLabs e | e <- es]
+            used (Callout _ _ _ es) f = f `S.union` S.unions [getLabs e | e <- es]
+            used (Parallel _ ll x _ el) fs = fact fs ll `S.union` fact fs el
+            used (Branch _ l) f = fact f l
+            used (ThreadReturn _ l) f = fact f l
+            used (CondBranch _ e tl fl) f = getLabs e `S.union` fact f tl `S.union` fact f fl
+            used Return{} f = fact_bot setLattice
+            used Fail{} f = fact_bot setLattice
+
+            fact :: FactBase (S.Set String) -> Label -> S.Set String
+            fact f l = fromMaybe S.empty $ lookupFact l f 
+            
+            getLabs :: MidIRExpr -> S.Set String
+            getLabs = fold_EE f S.empty
+                where f a (LitLabel _ s) = S.insert s a
+                      f a _ = a
 
 unFlatten :: FactBase Live -> MidIRRepr -> RM MidIRRepr 
 unFlatten factbase (MidIRRepr fields strs meths graph)

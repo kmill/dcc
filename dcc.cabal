@@ -57,7 +57,8 @@ Executable dcc
     containers >= 0.3,
     filepath,
     array >= 0.3,
-    regex-compat
+    regex-compat,
+    MissingH >= 1
 --    hoopl >= 3.8.7
   extensions:
     CPP

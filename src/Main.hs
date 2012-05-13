@@ -17,7 +17,6 @@ import SemanticCheck
 import SymbolTable
 import Text.Printf
 import Control.Unify
-import Dataflow
 import Compiler.Hoopl.Fuel
 import Data.List
 import AST
@@ -26,9 +25,12 @@ import Debug.Trace
 
 import qualified IR
 import qualified MidIR
+import Dataflow
+import AsmDataflow
+import qualified CodeGenerate
 import qualified RegAlloc.Allocator as RegisterAllocator
 import qualified RegAlloc.SimpleRegAlloc as SimpleRegAlloc
-import qualified CodeGenerate
+import RegAlloc.BakeSpills
 import Assembly
 
 -- | The main entry point to @dcc@.  See 'CLI' for command line
@@ -36,6 +38,8 @@ import Assembly
 main :: IO ()
 main = do args <- getArgs
           opts <- compilerOpts args
+          when (debugMode opts) $ do
+            putStrLn $ "Compiler options:\n" ++ show opts
           let ifname = fromMaybe "<stdin>" $ inputFile opts
           input <- case inputFile opts of
                      Just fname -> readFile fname
@@ -48,7 +52,9 @@ main = do args <- getArgs
           lowir <- return $ doLowIRFile opts ifname input midir
           outFile <- return $ case outputFile opts of
             Just fn -> fn
-            Nothing -> replaceExtension ifname ".s"
+            Nothing -> case inputFile opts of
+                         Just ifname -> replaceExtension ifname ".s"
+                         Nothing -> "a.out.s"
           let tgt = case target opts of
                       TargetDefault -> TargetCodeGen
                       x -> x
@@ -127,7 +133,7 @@ doMidIRFile opts ifname input ast
   = case ast of
     Left err -> Left err
     Right hast -> let mmidir = do mir <- MidIR.generateMidIR hast
-                                  mir <- runWithFuel 2222222 $ (performDataflowAnalysis (optMode opts) mir)
+                                  mir <- runWithFuel maxBound $ (performDataflowAnalysis (optMode opts) mir)
                                   return mir
                   in Right (IR.runGM mmidir)
                     
@@ -135,8 +141,13 @@ doLowIRFile :: CompilerOpts -> String -> String -> Either String IR.MidIRRepr ->
 doLowIRFile opts ifname input midir
     = case midir of                      
         Left err -> Left err
-        Right m -> let assem = do a <- CodeGenerate.toAss m
-                                  (if debugMode opts then return else allocator) a
+        Right m -> let assem = do lowir <- CodeGenerate.toAss m
+                                  lowir <- (if debugMode opts then return else allocator) lowir
+                                  lowir <- runWithFuel maxBound $ do
+                                             lowir <- performAsmDataflowAnalysis (optMode opts) lowir
+                                             lowir <- performBakeSpills lowir
+                                             return lowir
+                                  return lowir
                    in Right (IR.runGM assem)
       where allocator = case regAllocMode opts of
                           True -> RegisterAllocator.regAlloc
