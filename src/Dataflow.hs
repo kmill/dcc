@@ -11,6 +11,7 @@ import Dataflow.Tailcall
 import Dataflow.LICM
 import Dataflow.Dominator
 import Dataflow.OptSupport
+--import Dataflow.CondElim
 --import Dataflow.NZP
 
 import LoopAnalysis
@@ -59,6 +60,7 @@ dataflows
       --, DFA optLICM performLICMPass
       , DFA optCommonSubElim performCSEPass
       , DFA optCopyProp performCopyPropPass
+      -- , DFA optCondElim performCondElimPass
       -- doing constprop after flatten/cse does great good! see tests/codegen/fig18.6.dcf
       , DFA optConstProp performConstPropPass
       , DFA optDeadCode performDeadCodePass
@@ -81,6 +83,7 @@ dataflows
       optCommonSubElim = hasOptFlag "cse"
       optCopyProp = hasOptFlag "copyprop"
       optConstProp = hasOptFlag "constprop"
+      optCondElim = hasOptFlag "condelim"
       optNZP = hasOptFlag "nzp"
       optDeadCode = hasOptFlag "deadcode"
       optBlockElim = hasOptFlag "blockelim"
@@ -98,6 +101,7 @@ performDataflowAnalysis opts midir
 performConstPropPass midir = performFwdPass constPropPass midir emptyFact
 performCopyPropPass midir = performFwdPass copyPropPass midir emptyCopyFact
 performDeadCodePass midir = performBwdPass deadCodePass midir S.empty
+-- performCondElimPass midir = performBwdPass condElimPass midir emptyCEFact
 performBlockElimPass midir = performBwdPass blockElimPass midir Nothing
 performFlattenPass midir = performFwdPass flattenPass midir ()
 --performNZPPass midir = performFwdPass nzpPass midir emptyNZPFact
@@ -175,6 +179,12 @@ copyPropPass = FwdPass
                { fp_lattice = copyLattice
                , fp_transfer = varIsCopy
                , fp_rewrite = copyProp }
+
+--condElimPass :: (CheckpointMonad m, FuelMonad m) => BwdPass m MidIRInst AssignMap 
+--condElimPass = BwdPass 
+--               { bp_lattice = condAssignLattice
+--               , bp_transfer = condAssignness
+--               , bp_rewrite = condElim }
 
 deadCodePass :: (CheckpointMonad m, FuelMonad m) => BwdPass m MidIRInst Live
 deadCodePass = BwdPass 

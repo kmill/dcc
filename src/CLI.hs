@@ -70,6 +70,7 @@ hasOptFlag name opts = name `S.member` opts
 optimizations =
     [ ("cse", "Constant Subexpression Elimination")
     , ("copyprop", "Copy Propagation")
+    , ("condelim", "Conditional Elimination")
     , ("constprop", "Constant Propagation")
 --    , ("nzp", "-/0/+ Analysis")
     , ("deadcode", "Dead Code Elimination")

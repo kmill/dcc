@@ -9,34 +9,39 @@ import IR
 import Control.Monad
 import Data.Maybe
 import Debug.Trace
+import Data.Int
+import Text.ParserCombinators.Parsec (SourcePos)
 
 
-data CondMap a b = CondSet (Maybe (M.Map a b)) (Maybe (M.Map a b))
-data Assignable = AssignVar (Var SourcePos VarName)
-                | AssignCon (Lit SourcePos Int64)
+data Assignable = AssignVar SourcePos VarName
+                | AssignCon SourcePos Int64
 data Assigned = InVar VarName
-              | InRet
+              | InRet String
 
-type AssignMap = CondMap Assigned Assignable
+data AssignMap = AssignMap (Maybe (M.Map Assigned Assignable)) (Maybe (M.Map Assigned Assignable)) (Maybe Label)
 
 condAssignLattice :: DataflowLattice AssignMap
 condAssignLattice = DataflowLattice { fact_name = "Branch Assignments"
-                                   , fact_bot = AssignMap (Just M.empty) (Just M.empty)
+                                   , fact_bot = AssignMap (Just M.empty) (Just M.empty) Nothing
                                    , fact_join = add
                                    }
-  where add _ (OldFact o@(AssignMap ol or)) (NewFact n@(AssignMap nl nr)) = (c, n')
+  where add _ (OldFact o@(AssignMap ol or fl)) (NewFact n@(AssignMap nl nr ll)) = (c, n')
           where c = n /= n'
                 n'
-                    | M.null or && M.null nr = AssignMap ol nl
-                    | otherwise = AssignMap Nothing Nothing
+                    | M.null or && M.null nr && fl == ll = AssignMap ol nl fl
+                    | otherwise = AssignMap Nothing Nothing Nothing
                           
+emptyCEFact :: AssignMap
+emptyCEFact = fact_bot condAssignLattice
+
 condAssignness :: BwdTransfer MidIRInst AssignMap
 condAssignness = mkBTransfer f
   where f :: MidIRInst e x -> Fact x AssignMap -> AssignMap
-        f (Store v (Lit _ v')) k@(AssignMap (Just kr) kl) = AssignMap (combineMaps (singleton ((InVar v),(AssignCon v'))) kr) kl
-        f (Store v (Var _ v')) k@(AssignMap (Just kr) kl) = AssignMap (combineMaps (singleton ((InVar v),(AssignVar v'))) kr) kl 
-        f (Return _ (Just (Lit _ v')) k@(AssignMap (Just kr) kl) = AssignMap (combineMaps (singleton ((InRet, (AssignCon v')))) kr) kl
-        f (Return _ (Just (Var _ v')) k@(AssignMap (Just kr) kl) = AssignMap (combineMaps (singleton ((InRet, (AssignVar v')))) kr) kl
+        f (Store v (Lit p v')) k@(AssignMap (Just kr) kl lbl) = AssignMap (combineMaps (M.singleton (InVar v) AssignCon p v') kr) kl lbl
+        f (Store v (Var p v')) k@(AssignMap (Just kr) kl lbl) = AssignMap (combineMaps (M.singleton (InVar v) AssignVar p v') kr) kl lbl
+        f (Return _ rx (Just (Lit p v'))) k@(AssignMap (Just kr) kl lbl) = AssignMap (combineMaps (M.singleton (InRet rx) AssignCon p v') kr) kl lbl
+        f (Return _ rx (Just (Var p v'))) k@(AssignMap (Just kr) kl lbl) = AssignMap (combineMaps (M.singleton (InRet rx) AssignVar p v') kr) kl lbl
+        f (Branch _ lbl) kl = AssignMap (Just M.empty) (Just M.empty) lbl
         f _ k = AssignMap Nothing Nothing
 
 combineMaps :: (M.Map Assigned Assignable) -> (M.Map Assigned Assignable) -> Maybe (M.Map Assigned Assignable)
@@ -44,27 +49,19 @@ combineMaps a b
   | M.size (M.intersection a b) > 0 = Nothing
   | otherwise = Just (M.union a b)
 
---Special case of fromJust for Branch, since it could be removed in the previous transfer.
-lastLabelElim :: forall m . FuelMonad m => BwdRewrite m MidIRInst LastLabel
-lastLabelElim = deepBwdRw ll
+condElim :: forall m . FuelMonad m => BwdRewrite m MidIRInst AssignMap
+condElim = deepBwdRw ll
   where
-    ll :: MidIRInst e x -> Fact x LastLabel -> m (Maybe (Graph MidIRInst e x))
-    ll (Branch p l) f = 
-      return $ case lookupFact l f of
-          Nothing -> Nothing
-          Just mm -> mm >>= (Just . mkLast . (Branch p))
-    ll (CondBranch p ce tl fl) f
-        | tl == fl = return $ Just $ mkLast $ Branch p tl
-        | otherwise =
-            return $ do tl' <- fun tl
-                        fl' <- fun fl
-                        guard $ [tl', fl'] /= [tl, fl]
-                        Just $ mkLast $ CondBranch p ce tl' fl'
-        where
-          fun :: Label -> Maybe Label
-          --fun l = fromJust (lookupFact l f) `mplus` (Just l)
-          fun l = fromMaybe (Just l) (lookupFact l f) `mplus` (Just l)
---    ll (Enter p l args) (Just l')
---        = return $ Just (mkFirst (Enter p l args)
---                         <*> mkLast (Branch p l'))
+    ll :: MidIRInst e x -> Fact x AssignMap -> m (Maybe (Graph MidIRInst e x))
+--    ll (CondBranch p ce tl fl) f@(AssignMap (Just a) (Just b) lbl')
+--        | M.size (M.intersection a b) == 1 && M.size a == 1 && M.size b == 1 = 
+--          case head (M.keys $ M.intersection a b) of 
+--            InRet r -> return Just $ mkLast $ Return p r (Just (Cond p ce (assignment (head $ M.elems a)) (assignment (head $ M.elems b))))
+--            InVar v -> case lbl' of
+--              Just lbl -> return Just $ (mkMiddle $ Store p v (Cond p ce (assignment (head $ M.elems a)) (assignment (head $ M.elems b)))) <*> (mkLast $ Branch p lbl)
+--              _ -> return Nothing
+--        | otherwise = return Nothing
     ll _ f = return Nothing
+    assignment :: Assignable -> Expr VarName
+    assignment (AssignVar p x) = Var p x
+    assignment (AssignCon p x) = Lit p x

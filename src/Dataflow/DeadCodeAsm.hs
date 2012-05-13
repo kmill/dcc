@@ -41,11 +41,8 @@ type Live = (S.Set Reg, S.Set SpillLoc)
 liveLattice :: DataflowLattice Live 
 liveLattice = DataflowLattice { fact_name = "Live registers"
                               , fact_bot = (S.empty, S.empty)
-                              , fact_join = joinProd add add
+                              , fact_join = joinProd joinSets joinSets
                               } 
-    where add _ (OldFact old) (NewFact new) = (ch, j)
-              where  j = new `S.union` old
-                     ch = changeIf (S.size j > S.size old) 
 
 liveness :: BwdTransfer Asm Live 
 liveness = mkBTransfer3 livee livem livex
