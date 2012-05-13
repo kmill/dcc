@@ -42,7 +42,9 @@ regAlloc lir
          massgraph <- evalStupidFuelMonad (massageGraph mlabels graph) maxBound
          --graph' <- error $ I.graphToGraphViz show massgraph
          let graph' = foldl1 (|*><*|) $ map (\mlabel -> doRegAlloc freeSpillLocs mlabel (subgraph massgraph mlabel)) mlabels
-         graph'' <- evalStupidFuelMonad (collectSpill mlabels graph') maxBound
+         graph'' <- evalStupidFuelMonad (simplifySpillsAndBetterify mlabels graph') maxBound
+         graph'' <- evalStupidFuelMonad (performDeadAsmPass' mlabels graph'') maxBound
+         graph'' <- evalStupidFuelMonad (collectSpill mlabels graph'') maxBound
          let lir' = LowIRRepr fields strs meths graph''
          evalStupidFuelMonad (performDeadAsmPass lir') maxBound
     where
@@ -50,14 +52,11 @@ regAlloc lir
       subgraph (GMany _ body _) label = let blocks = postorder_dfs_from body label
                                         in foldl1 (|*><*|) (map blockGraph blocks)
 
-
--- | Collects and rewrites the spills in the graph to moves.
-collectSpill :: [Label] -> Graph A.Asm C C -> RM (Graph A.Asm C C)
-collectSpill mlabels graph
+simplifySpillsAndBetterify :: [Label] -> Graph A.Asm C C -> RM (Graph A.Asm C C)
+simplifySpillsAndBetterify mlabels graph
     = do let pg = toPGraph graph
              spillWebs = GenWebs.getWebs spillAliveDead mlabels pg
              spillTable = GenWebs.makeTables spillWebs
---             spillInterf = GenWebs.makeInterfGraph mlabels pg spillWebs
          (_, smvs, _) <- analyzeAndRewriteBwd
                          (collectSpillMovePass spillTable)
                          (JustC mlabels)
@@ -70,17 +69,23 @@ collectSpill mlabels graph
          (graph'', _, _) <- analyzeAndRewriteFwd
                             betterifySpills
                             (JustC mlabels)
-                            graph'
+                            (trace (unlines $ concatMap (graphToAsm False graph') mlabels) graph')
                             (mapFromList (map (\l -> (l, fact_bot betterifyLattice)) mlabels))
-         (_, f, _) <- analyzeAndRewriteBwd
+         return graph''
+
+
+-- | Collects and rewrites the spills in the graph to moves.
+collectSpill :: [Label] -> Graph A.Asm C C -> RM (Graph A.Asm C C)
+collectSpill mlabels graph
+    = do (_, f, _) <- analyzeAndRewriteBwd
                       collectSpillPass
                       (JustC mlabels)
-                      graph''
+                      graph
                       mapEmpty
          (g, _, _) <- analyzeAndRewriteFwd
                       (rewriteSpillPass f)
                       (JustC mlabels)
-                      graph''
+                      graph
                       f
          return g
 
@@ -243,10 +248,7 @@ combineSpills graph moves
                   
                         sw' = sw { swMoves = mvs }
                   
-      fixedWeb web = case GenWebs.webVar web of
-                       SpillID _ -> False
-                       SpillSID _ -> False
-                       SpillArg _ -> True
+      fixedWeb web = fixedSpill (GenWebs.webVar web)
 
       colorSpills :: SpillWorklists -> SpillWorklists
       colorSpills sw
@@ -291,11 +293,9 @@ betterifySpills :: forall m. (CheckpointMonad m, FuelMonad m) =>
                    FwdPass m Asm BetterifyFact
 betterifySpills = FwdPass
                   { fp_lattice = betterifyLattice
-                  , fp_transfer = bTransfer
+                  , fp_transfer = mkFTransfer3 ftCO ftOO ftOC
                   , fp_rewrite = rewrite }
     where 
-          
-          bTransfer = mkFTransfer3 ftCO ftOO ftOC
           ftCO :: Asm C O -> BetterifyFact -> BetterifyFact
           ftCO (Enter _ _ numargs _) (spills, regs)
               = (spills'', regs')
@@ -308,9 +308,8 @@ betterifySpills = FwdPass
           
           removeBindingsTo :: Ord k => BetterifyLoc -> M.Map k (WithTop BetterifyLoc)
                            -> M.Map k (WithTop BetterifyLoc)
-          removeBindingsTo x oldMap = newMap
-              where newMap = M.mapMaybe f oldMap
-                    f p@(PElem v) = if v == x then Nothing else Just p
+          removeBindingsTo x oldMap = M.mapMaybe f oldMap
+              where f p@(PElem v) = if v == x then Nothing else Just p
                     f y = Just y
           
           lookupBInt64 :: BetterifyLoc -> BetterifyFact -> BetterifyLoc
@@ -327,12 +326,12 @@ betterifySpills = FwdPass
           handleToR :: BetterifyLoc -> Reg -> BetterifyFact -> BetterifyFact
           handleToR v r (spills, regs)
               = ( removeBindingsTo (BReg r) spills
-                , M.insert r (PElem v') $ removeBindingsTo (BReg r) regs )
+                , removeBindingsTo (BReg r) $ M.insert r (PElem v') regs )
               where v' = lookupBInt64 v (spills, regs)
                            
           handleToS :: BetterifyLoc -> SpillLoc -> BetterifyFact -> BetterifyFact
           handleToS v s (spills, regs)
-              = ( M.insert s (PElem v') $ removeBindingsTo (BSpill s) spills
+              = ( removeBindingsTo (BSpill s) $ M.insert s (PElem v') spills
                 , removeBindingsTo (BSpill s) regs )
               where v' = lookupBInt64 v (spills, regs)
           
@@ -384,7 +383,8 @@ betterifySpills = FwdPass
                            _ -> Nothing
           rwOO (MovIRMtoR pos (IRM_R r0) r) f
               = return $ case getR r0 f of
-                           Just (BReg r0') | r0' /= r0 -> Just $ mkMiddle $ mov pos r0' r
+                           Just (BReg r0') | r0' == r -> Just emptyGraph
+                                           | r0' /= r0 -> Just $ mkMiddle $ mov pos r0' r
                            Just (BInt64 i) -> Just $ mkMiddle $ mov pos i r
                            _ -> Nothing
           rwOO n f = return $ mkMiddle `fmap` mapAsm rename (const Nothing) n

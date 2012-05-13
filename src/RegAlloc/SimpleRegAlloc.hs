@@ -9,6 +9,7 @@ import CodeGenerate
 import qualified IR as I
 import Dataflow
 import DataflowTypes
+import Dataflow.DeadCodeAsm
 import qualified Data.Set as S
 import Data.List
 import Control.Monad.State
@@ -21,8 +22,10 @@ import AliveDead
 
 regAlloc :: LowIRRepr -> I.GM LowIRRepr
 regAlloc (LowIRRepr fields strs meths graph)
-    = do graph'' <- evalStupidFuelMonad (Allocator.collectSpill mlabels graph') 22222222
-         return $ LowIRRepr fields strs meths graph''
+    = do graph'' <- evalStupidFuelMonad (Allocator.collectSpill mlabels graph') maxBound
+         let lir' = LowIRRepr fields strs meths graph''
+         return lir'
+--         evalStupidFuelMonad (performDeadAsmPass lir') maxBound
       where GMany _ body _ = graph
             graph' = foldl (|*><*|) emptyClosedGraph bodies
             bodies = map f (mapElems body)

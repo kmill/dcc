@@ -80,6 +80,11 @@ data SpillLoc = SpillID Int
               | SpillArg Int
                 deriving (Eq, Ord, Show)
 
+fixedSpill :: SpillLoc -> Bool
+fixedSpill (SpillArg _) = True
+fixedSpill (SpillID _) = False
+fixedSpill (SpillSID _) = False
+
 type SpillLocSupply = [SpillLoc]
 
 freeSpillLocs :: SpillLocSupply
