@@ -1,10 +1,11 @@
 -- | The 'CLI' module is for parsing decaf command line arguments to
 -- meet the 6.035 specification.
 
-module CLI ( compilerOpts, CompilerOpts(..), TargetFlag(..), OptFlags(..)) where
+module CLI ( compilerOpts, CompilerOpts(..), TargetFlag(..), hasOptFlag, OptFlags) where
 
 import System.Console.GetOpt
 import System.Exit
+import qualified Data.Set as S
 
 -- | This type contains the result of parsing command line arguments
 -- | for the decaf compiler.
@@ -39,7 +40,7 @@ defaultOptions
                    , debugMode = False
                    , compatMode = False
                    , helpMode = False
-                   , optMode = optNone
+                   , optMode = defaultOptFlags
                    , macMode = False
                    , regAllocMode = False
                    }
@@ -56,24 +57,37 @@ data TargetFlag = TargetScan -- ^ Given by @scan@.
                 | TargetDefault -- ^ The default value if no target is given.
                   deriving (Show, Eq)
 
-data OptFlags = OptFlags { touched :: Bool
-                         , optCommonSubElim :: Bool
-                         , optConstProp :: Bool
-                         , optCopyProp :: Bool
-                         , optDeadCode :: Bool
-                         , optBlockElim :: Bool 
-                         , optFlat :: Bool
-                         , optUnflat :: Bool
-                         , optTailcall :: Bool
-                         , optLICM :: Bool
-                         , optParallelize :: Bool
-                         , optNZP :: Bool
-                         , optRA :: Bool }
-              deriving (Show)
+type OptFlags = S.Set String
 
-optAllD = OptFlags True True True True True True True True True True True True True
-optAll = OptFlags False True True True True True True True True True True True True
-optNone = OptFlags False False False False False False False False False False False False False
+defaultOptFlags :: OptFlags
+defaultOptFlags = S.empty
+
+hasOptFlag :: String -> OptFlags -> Bool
+hasOptFlag name opts = name `S.member` opts
+          
+optimizations =
+    [ ("cse", "Constant Subexpression Elimination")
+    , ("copyprop", "Copy Propagation")
+    , ("constprop", "Constant Propagation")
+    , ("nzp", "-/0/+ Analysis")
+    , ("deadcode", "Dead Code Elimination")
+    , ("blockelim", "Block Elimination")
+    , ("flat", "Flatten Optimization")
+    , ("unflat", "Unflatten Optimization")
+    , ("tailcall", "Tailcall Elimination")
+    , ("licm", "Loop Invariant Code Motion")
+    , ("parallelize", "Automatic Loop Parallelization")
+    , ("deadcodeasm", "Dead code elimination on assembly")
+    ]
+
+showOptimizations :: String
+showOptimizations = unlines $ map showOpt optimizations
+    where maxnamelength = maximum $ map (length . fst) optimizations
+          showOpt (name, desc) = replicate (maxnamelength - length name) ' '
+                                 ++ name ++ " : " ++ desc
+          optimizations' = [("all", "Enables ALL optimizations")
+                           ,("none", "Disables ALL optimizations")]
+                           ++ optimizations
 
 options :: [OptDescr (CompilerOpts -> CompilerOpts)]
 options =
@@ -89,20 +103,8 @@ options =
     , Option ['c']     ["compat"]  (NoArg compat')             "Enables compatibility mode with 6.035 output spec"
     , Option ['h']  ["help"]    (NoArg help')               "Prints this usage information"
     , Option ['r']  ["regalloc"] (NoArg regalloc')          "Enables the register allocator"
-    , Option ['O']     ["opt"]     (ReqArg optimize' "OPTIMIZATION") ("Enables optimizations:\n" ++
-                                                                      "\t         all : Enables ALL optimizations\n" ++
-                                                                      "\t        none : Disables ALL optimizations\n" ++
-                                                                      "\t         cse : Constant Subexpression Elimination\n" ++
-                                                                      "\t    copyprop : Copy Propagation\n" ++
-                                                                      "\t   constprop : Constant Propagation\n" ++
-                                                                      "\t         nzp : -/0/+ Analysis\n" ++
-                                                                      "\t    deadcode : Dead Code Elimination\n" ++
-                                                                      "\t   blockelim : Block Elimination\n" ++
-                                                                      "\t        flat : Flatten Optimization\n" ++
-                                                                      "\t      unflat : Unflatten Optimization\n" ++
-                                                                      "\t    tailcall : Tailcall Elimination\n" ++ 
-                                                                      "\t        licm : Loop Invariant Code Motin\n" ++
-                                                                      "\t parallelize : Automatic Loop Parallelization")
+    , Option ['O']     ["opt"]     (ReqArg optimize' "OPTIMIZATION") ("Enables optimizations:\n"
+                                                                      ++ showOptimizations)
     ]
     where outfile' s opts = opts { outputFile = Just s }
           target' t opts = opts { target = targetOpt t }
@@ -130,24 +132,11 @@ targetOpt s
 optOpt :: CompilerOpts -> String -> OptFlags
 optOpt opts s 
   = case s of
-    "all" -> optAll
-    "cse" -> oFlags { optCommonSubElim = True }
-    "constprop" -> oFlags { optConstProp = True }
-    "nzp" -> oFlags { optNZP = True }
-    "copyprop" -> oFlags { optCopyProp = True }
-    "deadcode" -> oFlags { optDeadCode = True }  
-    "blockelim" -> oFlags { optBlockElim = True }
-    "flat" -> oFlags { optFlat = True }
-    "unflat" -> oFlags { optUnflat = True }
-    "licm" -> oFlags { optLICM = True }
-    "tailcall" -> oFlags { optTailcall = True }
-    "parallelize" -> oFlags { optParallelize = True }
-    "ra" -> oFlags { optRA = True }
-    "none" -> optNone
-    _ -> oFlags
-    where oFlags = case touched $ optMode opts of 
-            True -> optNone
-            False -> optMode opts
+      "all" -> S.fromList $ map fst optimizations
+      "none" -> S.empty
+      name | any (\opt -> fst opt == name) optimizations
+               -> S.insert name (optMode opts)
+           | otherwise -> (optMode opts)
 
 -- | Takes an argument list and gives a 'CompilerOpts'.  If there's a
 -- parse error or help request, this function uses 'System.Exit' to
