@@ -383,8 +383,8 @@ betterifySpills = FwdPass
                                | s /= s' -> Just $mkMiddle $ Reload pos s' r
                            _ -> Nothing
           rwOO (MovIRMtoR pos (IRM_R r0) r) f
-              = return $ case getR r f of
-                           Just (BReg r') -> Just $ mkMiddle $ mov pos r' r
+              = return $ case getR r0 f of
+                           Just (BReg r0') | r0' /= r0 -> Just $ mkMiddle $ mov pos r0' r
                            Just (BInt64 i) -> Just $ mkMiddle $ mov pos i r
                            _ -> Nothing
           rwOO n f = return $ mkMiddle `fmap` mapAsm rename (const Nothing) n
