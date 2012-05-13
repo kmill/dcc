@@ -11,13 +11,12 @@ import Data.Maybe
 import Debug.Trace
 
 
-data CondMap a b = CondSet (Maybe (M.Map a b)) (Maybe (M.Map a b))
 data Assignable = AssignVar (Var SourcePos VarName)
                 | AssignCon (Lit SourcePos Int64)
 data Assigned = InVar VarName
-              | InRet
+              | InRet String
 
-type AssignMap = CondMap Assigned Assignable
+data AssignMap = AssignMap (Maybe (M.Map Assigned Assignable)) (Maybe (M.Map Assigned Assignable))
 
 condAssignLattice :: DataflowLattice AssignMap
 condAssignLattice = DataflowLattice { fact_name = "Branch Assignments"
@@ -44,22 +43,16 @@ combineMaps a b
   | M.size (M.intersection a b) > 0 = Nothing
   | otherwise = Just (M.union a b)
 
---Special case of fromJust for Branch, since it could be removed in the previous transfer.
-lastLabelElim :: forall m . FuelMonad m => BwdRewrite m MidIRInst LastLabel
-lastLabelElim = deepBwdRw ll
+condElim :: forall m . FuelMonad m => BwdRewrite m MidIRInst AssignMap
+condElim = deepBwdRw ll
   where
-    ll :: MidIRInst e x -> Fact x LastLabel -> m (Maybe (Graph MidIRInst e x))
-    ll (Branch p l) f = 
-      return $ case lookupFact l f of
-          Nothing -> Nothing
-          Just mm -> mm >>= (Just . mkLast . (Branch p))
-    ll (CondBranch p ce tl fl) f
-        | tl == fl = return $ Just $ mkLast $ Branch p tl
-        | otherwise =
-            return $ do tl' <- fun tl
-                        fl' <- fun fl
-                        guard $ [tl', fl'] /= [tl, fl]
-                        Just $ mkLast $ CondBranch p ce tl' fl'
+    ll :: MidIRInst e x -> Fact x AssignMap -> m (Maybe (Graph MidIRInst e x))
+    ll (CondBranch p ce tl fl) f@(AssignMap a b)
+        | M.size (M.intersection a b) == 1 && M.size a == 1 && M.size b == 1 = 
+          case first (M.keys $ M.intersection a b) of 
+            InRet r -> return $ mkLast $ Return p r (Just (Cond p ce (first $ M.elems a) (first $ M.elems b)))
+            InVar v -> return $ mkLast $ Store p v (Cond p ce (first $ M.elems a) (first $ M.elems b))
+        | otherwise = return Nothing
         where
           fun :: Label -> Maybe Label
           --fun l = fromJust (lookupFact l f) `mplus` (Just l)
