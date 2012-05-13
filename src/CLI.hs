@@ -6,6 +6,7 @@ module CLI ( compilerOpts, CompilerOpts(..), TargetFlag(..), hasOptFlag, OptFlag
 import System.Console.GetOpt
 import System.Exit
 import qualified Data.Set as S
+import Data.List
 import Data.List.Utils(split)
 
 -- | This type contains the result of parsing command line arguments
@@ -95,6 +96,18 @@ showOptimizations = unlines $ map showOpt optimizations
           showOpt (name, desc) = replicate (maxnamelength - length name) ' '
                                  ++ name ++ " : " ++ desc
 
+showOptClasses :: String
+showOptClasses = "\n Optimization classes which can be passed to --opt:\n"
+                 ++ (unlines $ map showOptClass optimizationClasses)
+    where maxnamelength = max 10 (maximum $ map (length . fst) optimizationClasses)
+          showOptClass (name, opts) = replicate (maxnamelength - length name) ' '
+                                      ++ name ++ " : " ++ optlist opts
+          optlist opts = prelines $ map (intercalate " ") $ intoFive opts
+          prelines = intercalate ("\n   " ++ replicate maxnamelength ' ')
+          intoFive list | length list < 5 = [list]
+                        | otherwise = let (xs,ys) = splitAt 5 list
+                                      in xs:(intoFive ys)
+
 options :: [OptDescr (CompilerOpts -> CompilerOpts)]
 options =
     [ Option ['o']  ["out"]     (ReqArg outfile' "FILE")    "output FILE"
@@ -161,6 +174,7 @@ compilerOpts argv
         (o,_,[]) -> let opts = foldl (flip id) defaultOptions o
                     in case helpMode opts of
                          True -> do putStr $ usageInfo header options
+                                    putStr $ showOptClasses
                                     exitSuccess
                          False -> return opts
         (_,_,errs) -> do putStr (concat errs ++ usageInfo header options)
