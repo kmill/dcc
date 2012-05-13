@@ -70,7 +70,7 @@ optimizations =
     [ ("cse", "Constant Subexpression Elimination")
     , ("copyprop", "Copy Propagation")
     , ("constprop", "Constant Propagation")
-    , ("nzp", "-/0/+ Analysis")
+--    , ("nzp", "-/0/+ Analysis")
     , ("deadcode", "Dead Code Elimination")
     , ("blockelim", "Block Elimination")
     , ("flat", "Flatten Optimization")
@@ -83,6 +83,11 @@ optimizations =
     , ("colorspills", "Recolor spills in assembly")
     , ("betterifyasm", "Constant/copy propagation on assembly")
     ]
+
+optimizationClasses =
+    [ ("all", map fst optimizations)
+    , ("basic", ["constprop", "deadcode", "blockelim", "winnowstr"])
+    , ("asm", ["deadcodeasm", "colorspills", "betterifyasm"]) ]
 
 showOptimizations :: String
 showOptimizations = unlines $ map showOpt optimizations
@@ -106,8 +111,8 @@ options =
     , Option ['r']  ["regalloc"] (NoArg regalloc')          "Enables the register allocator"
     , Option ['O']     ["opt"]     (ReqArg optimize' "OPTIMIZATION") ("Enables optimizations:\n"
                                                                       ++ showOptimizations
-                                                                      ++ "\nPrefixing an optimization with '-' disables it"
-                                                                      ++ "\nall/none enables/disables ALL optimizations")
+                                                                      ++ "\nPrefixing an optimization with '-' disables it."
+                                                                      ++ "\nall/none enables/disables ALL optimizations.")
     ]
     where outfile' s opts = opts { outputFile = Just s }
           target' t opts = opts { target = targetOpt t }
@@ -138,12 +143,14 @@ targetOpt s
 optOpt :: String -> OptFlags -> OptFlags
 optOpt s opts
   = case s of
-      "all" -> S.fromList $ map fst optimizations
       "none" -> S.empty
-      '-':name -> S.delete name opts
-      name | any (\opt -> fst opt == name) optimizations
-               -> S.insert name opts
-           | otherwise -> opts
+      '-':name -> opts S.\\ optLookup name
+      name -> opts `S.union` optLookup name
+    where optLookup name = case lookup name optimizationClasses of
+                             Just s -> S.fromList s
+                             Nothing -> case lookup name optimizations of
+                                          Just _ -> S.singleton name
+                                          Nothing -> S.empty
 
 -- | Takes an argument list and gives a 'CompilerOpts'.  If there's a
 -- parse error or help request, this function uses 'System.Exit' to
