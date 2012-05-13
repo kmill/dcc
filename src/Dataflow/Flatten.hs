@@ -20,6 +20,9 @@ nullTransfer = mkFTransfer ft
     where
       ft :: MidIRInst e x -> () -> Fact x ()
       ft (Branch _ l) f = mapSingleton l f
+      ft (ThreadReturn _ l) f = mapSingleton l f
+      ft (Parallel _ ll _ _ el) f = mkFactBase nullLattice
+                                    [(el, ()), (ll, ())]
       ft (CondBranch _ _ tl fl) f = mkFactBase nullLattice
                                     [(tl, ()), (fl, ())]
       ft (Return _ _ _) f = mapEmpty
@@ -89,6 +92,8 @@ flattenRewrite = deepFwdRw fl
                                                   (reverse fargs ++ [dest'] ++ as))
                       | otherwise = doCall as (a:fargs)
       fl (Branch _ _) f = return Nothing
+      fl (ThreadReturn _ _) f = return Nothing
+      fl (Parallel _ ll _ _ el) f = return Nothing
       fl (CondBranch pos e tl fl) f
           | nonTrivial e = withTmpC pos e
                            (\e' -> CondBranch pos e' tl fl)

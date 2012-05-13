@@ -109,6 +109,7 @@ methodArgVars method midir
                     JustC enter' -> enter'
       in case enter of
            Enter pos label argvars -> argvars
+           _ -> error "assertion failure - method should start with Entry"
 
 ---
 --- Expr
