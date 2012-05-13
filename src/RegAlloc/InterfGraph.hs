@@ -316,7 +316,6 @@ makeInterfGraph mlabels graph webs = InterfGraph idToWebMap adjs moves fixedRegs
 
 type AdjListFact = (S.Set WebID, M.Map WebID (S.Set WebID))
 
--- | Finds all register-to-register moves in the graph.
 buildAdjLists :: [Label] -> Graph (PNode Asm) C C -> M.Map NodePtr (S.Set WebID, S.Set WebID)
               -> M.Map Label (M.Map WebID (S.Set WebID))
 buildAdjLists mlabels graph usedef

@@ -58,3 +58,19 @@ toPGraph g = g'
                        in mkFirst (PNode (NodePtr l 0) e)
                               <*> mkMiddles (map (uncurry ($)) (zip innerptrs inner))
                               <*> mkLast (PNode lastptr x)
+
+-- | Given a node pointer and a graph, returns the instruction at that point. 
+-- | WARNING: if you transform the graph before doing this, everything will be ruined
+getNodeInstOO :: NonLocal n => NodePtr -> Graph (PNode n) C C -> Maybe (n O O)
+getNodeInstOO (NodePtr label offset) graph 
+    = let BodyBlock block = lookupBlock graph label 
+          (_, inner, _) = blockToNodeList block 
+      in case offset of 
+           0 -> Nothing
+           n 
+               | n > 0 && n < (length inner) + 1 -> Just $ pNodeToInstOO $ inner !! (n-1)
+               | otherwise -> Nothing
+
+
+pNodeToInstOO :: NonLocal n => PNode n O O -> n O O 
+pNodeToInstOO (PNode _ inst) = inst 

@@ -28,7 +28,6 @@ import Compiler.Hoopl
 import Compiler.Hoopl.Fuel
 import IR
 import Debug.Trace
-import Data.Maybe
 import CLI
 
 import Dataflow.IRWebs
@@ -76,6 +75,20 @@ dataflows
       , DFA optDeadCode performDeadCodePass
       --, DFA optDeadCode testDominatorPass
       ]
+      
+    where
+      optCommonSubElim = hasOptFlag "cse"
+      optCopyProp = hasOptFlag "copyprop"
+      optConstProp = hasOptFlag "constprop"
+      optNZP = hasOptFlag "nzp"
+      optDeadCode = hasOptFlag "deadcode"
+      optBlockElim = hasOptFlag "blockelim"
+      optFlat = hasOptFlag "flat"
+      optUnflat = hasOptFlag "unflat"
+      optTailcall = hasOptFlag "tailcall"
+      optLICM = hasOptFlag "licm"
+      optParallelize = hasOptFlag "parallelize"
+      optDeadCodeAsm = hasOptFlag "deadcodeasm"
 
 performDataflowAnalysis :: OptFlags -> MidIRRepr -> RM MidIRRepr 
 performDataflowAnalysis opts midir

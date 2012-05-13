@@ -22,9 +22,12 @@ import Data.Maybe
 import AST (SourcePos, noPosition)
 import Debug.Trace
 import Data.Function
+import Data.Either (lefts, rights)
 import Util.NodeLocate
 import qualified LoopAnalysis as L
 import RegAlloc.InterfGraph
+import qualified Dataflow.GenWebs as GenWebs
+import Dataflow.OptSupport (joinProd, joinSets, setLattice, (><))
 
 dotrace = False
 
@@ -33,18 +36,42 @@ trace' a b = if dotrace then trace a b else b
 -- | Main entry point to allocating registers for the IR
 regAlloc :: LowIRRepr -> I.GM LowIRRepr
 regAlloc lir
-    = do LowIRRepr fields strs meths graph <- evalStupidFuelMonad (performDeadAsmPass lir) 2222222
+    = do LowIRRepr fields strs meths graph <- evalStupidFuelMonad (performDeadAsmPass lir) maxBound
          let GMany _ body _ = graph
              mlabels = map I.methodEntry meths
-         massgraph <- evalStupidFuelMonad (massageGraph mlabels graph) 22222222
+         massgraph <- evalStupidFuelMonad (massageGraph mlabels graph) maxBound
          --graph' <- error $ I.graphToGraphViz show massgraph
          let graph' = foldl1 (|*><*|) $ map (\mlabel -> doRegAlloc freeSpillLocs mlabel (subgraph massgraph mlabel)) mlabels
-         graph'' <- evalStupidFuelMonad (collectSpill mlabels graph') 22222222
-         return $ LowIRRepr fields strs meths graph''
+         graph'' <- evalStupidFuelMonad (simplifySpillsAndBetterify mlabels graph') maxBound
+         graph'' <- evalStupidFuelMonad (performDeadAsmPass' mlabels graph'') maxBound
+         graph'' <- evalStupidFuelMonad (collectSpill mlabels graph'') maxBound
+         let lir' = LowIRRepr fields strs meths graph''
+         evalStupidFuelMonad (performDeadAsmPass lir') maxBound
     where
       subgraph :: Graph A.Asm C C -> Label -> Graph A.Asm C C
       subgraph (GMany _ body _) label = let blocks = postorder_dfs_from body label
                                         in foldl1 (|*><*|) (map blockGraph blocks)
+
+simplifySpillsAndBetterify :: [Label] -> Graph A.Asm C C -> RM (Graph A.Asm C C)
+simplifySpillsAndBetterify mlabels graph
+    = do let pg = toPGraph graph
+             spillWebs = GenWebs.getWebs spillAliveDead mlabels pg
+             spillTable = GenWebs.makeTables spillWebs
+         (_, smvs, _) <- analyzeAndRewriteBwd
+                         (collectSpillMovePass spillTable)
+                         (JustC mlabels)
+                         pg
+                         mapEmpty
+         let spillMoves = M.unions $ map (\l -> fst $ fromJust $ lookupFact l smvs) mlabels
+             spillInterf = GenWebs.makeInterfGraph mlabels pg spillWebs spillMoves
+             colors = combineSpills spillInterf spillMoves
+             graph' = mapGraph (renameSpills colors spillInterf) pg
+         (graph'', _, _) <- analyzeAndRewriteFwd
+                            betterifySpills
+                            (JustC mlabels)
+                            (trace (unlines $ concatMap (graphToAsm False graph') mlabels) graph')
+                            (mapFromList (map (\l -> (l, fact_bot betterifyLattice)) mlabels))
+         return graph''
 
 
 -- | Collects and rewrites the spills in the graph to moves.
@@ -62,26 +89,34 @@ collectSpill mlabels graph
                       f
          return g
 
+renameSpills :: forall e x. M.Map WebID SpillLoc -> GenWebs.InterfGraph SpillLoc 
+             -> PNode A.Asm e x -> A.Asm e x
+renameSpills colors igraph (PNode l n)
+    = case n of
+        A.Spill pos r s -> A.Spill pos r (getColorDef s)
+        A.Reload pos s r -> A.Reload pos (getColorUse s) r
+        n' -> n'
+      where getColorUse s = colors M.! GenWebs.lookupVarUse s l (GenWebs.igWebTable igraph)
+            getColorDef s = colors M.! GenWebs.lookupVarDef s l (GenWebs.igWebTable igraph)
+             
+
+spillAliveDead :: forall e x. A.Asm e x -> ([SpillLoc], [SpillLoc])
+spillAliveDead (A.Enter _ _ args _) = if args > 6
+                                      then ([], lefts $ drop 6 (take args A.argLocation))
+                                      else ([], [])
+spillAliveDead (A.Spill _ _ s) = ([], [s])
+spillAliveDead (A.Reload _ s _) = ([s], [])
+spillAliveDead _ = ([], [])
 
 -- | Gets the list of spills for each entry point. TODO: make it also
 -- find live ranges for spills so we can reuse stack space.
 collectSpillPass :: (CheckpointMonad m, FuelMonad m)
                     => BwdPass m A.Asm (S.Set SpillLoc)
 collectSpillPass = BwdPass
-                   { bp_lattice = getSpillLattice
+                   { bp_lattice = setLattice
                    , bp_transfer = getSpillTransfer
                    , bp_rewrite = noBwdRewrite }
     where
-      getSpillLattice :: DataflowLattice (S.Set SpillLoc)
-      getSpillLattice = DataflowLattice
-                        { fact_name = "spill lattice"
-                        , fact_bot = S.empty
-                        , fact_join = add
-                        }
-          where add _ (OldFact old) (NewFact new) = (ch, j)
-                    where j = S.union new old
-                          ch = changeIf $ S.size j > S.size old
-
       getSpillTransfer :: BwdTransfer A.Asm (S.Set SpillLoc)
       getSpillTransfer = mkBTransfer3 usedCO usedOO usedOC
           where
@@ -98,21 +133,283 @@ collectSpillPass = BwdPass
                          ((fromMaybe S.empty) . (flip lookupFact f))
                          (successors x)
 
+-- This is of (moves, tomove)
+type CollectSpillMoveFact = (M.Map NodePtr (S.Set WebID, S.Set WebID),
+                             M.Map Reg (S.Set WebID))
+
+-- | Collects a list of "spill moves"
+collectSpillMovePass :: (CheckpointMonad m, FuelMonad m)
+                        => GenWebs.WebTables SpillLoc
+                        -> BwdPass m (PNode A.Asm) CollectSpillMoveFact
+collectSpillMovePass spills
+    = BwdPass
+      { bp_lattice = getSpillMoveLattice
+      , bp_transfer = getSpillMoveTransfer
+      , bp_rewrite = noBwdRewrite }
+    where
+      getSpillMoveLattice :: DataflowLattice CollectSpillMoveFact
+      getSpillMoveLattice = DataflowLattice
+                            { fact_name = "Spill move lattice"
+                            , fact_bot = (M.empty, M.empty)
+                            , fact_join = joinProd (joinMaps (joinProd joinSets joinSets))
+                                          (joinMaps joinSets) }
+      getSpillMoveTransfer :: BwdTransfer (PNode A.Asm) CollectSpillMoveFact
+      getSpillMoveTransfer = mkBTransfer3 usedCO usedOO usedOC
+          where
+            usedCO :: (PNode A.Asm) C O -> CollectSpillMoveFact -> CollectSpillMoveFact
+            usedCO (PNode _ n) (moves, tomove) = (moves, remove dead tomove)
+                where (_, dead) = getAliveDead n
+            
+            usedOO :: (PNode A.Asm) O O -> CollectSpillMoveFact -> CollectSpillMoveFact
+            usedOO (PNode l (A.Reload _ s r)) (moves, tomove)
+                = case M.lookup r tomove of
+                    Just webs -> (moves', M.delete r tomove)
+                        where spillID = GenWebs.lookupVarUse s l spills
+                              moves' = M.insertWith update l
+                                       (S.singleton spillID, webs)
+                                       moves
+                              update = S.union >< S.union
+                    Nothing -> (moves, tomove)
+            usedOO (PNode l (A.Spill _ r s)) (moves, tomove)
+                = (moves, tomove')
+                  where tomove' = M.insertWith S.union r (S.singleton spillID) tomove
+                        spillID = GenWebs.lookupVarDef s l spills
+            usedOO (PNode l n) (moves, tomove)
+                = (moves, remove dead tomove)
+                  where (_, dead) = getAliveDead n
+            
+            usedOC :: (PNode A.Asm) O C -> FactBase CollectSpillMoveFact -> CollectSpillMoveFact
+            usedOC (PNode l n) fs = (moves, remove dead tomove)
+                where (moves, tomove) = joinOutFacts getSpillMoveLattice n fs
+                      (_, dead) = getAliveDead n
+            
+            remove :: Ord k => [k] -> M.Map k v -> M.Map k v
+            remove items m = foldl (flip id) m (map M.delete items)
+
+data SpillWorklists = SpillWorklists
+    { swAliases :: M.Map WebID WebID
+    , swMoves :: [(NodePtr, WebID, WebID)]
+    , swWebs :: [WebID]
+    , swColors :: M.Map WebID SpillLoc
+    , swInterfGraph :: GenWebs.InterfGraph SpillLoc
+    }
+    deriving Show
+
+swGetAlias :: WebID -> SpillWorklists -> WebID
+swGetAlias i sw = case M.lookup i (swAliases sw) of
+                    Just i' -> swGetAlias i' sw
+                    Nothing -> i
+
+-- | Main entry point for spill recoloring
+combineSpills :: GenWebs.InterfGraph SpillLoc
+              -> M.Map NodePtr (S.Set WebID, S.Set WebID)
+              -> M.Map WebID SpillLoc
+combineSpills graph moves
+    = let sw = makeSpillWorklists graph moves
+          sw' = mergeSpills sw
+          sw'' = colorSpills sw'
+      in swColors sw''
+    where
+      makeSpillWorklists :: GenWebs.InterfGraph SpillLoc
+                         -> M.Map NodePtr (S.Set WebID, S.Set WebID)
+                         -> SpillWorklists
+      makeSpillWorklists graph moves
+          = SpillWorklists
+            { swAliases = M.empty
+            , swMoves = do (l, (srcs, dests)) <- M.toList moves
+                           s <- S.toList srcs
+                           d <- S.toList dests
+                           return (l, s, d)
+            , swWebs = GenWebs.igGetWebIDs graph
+            , swColors = M.empty
+            , swInterfGraph = graph
+            }
+
+      addAlias :: WebID -> WebID -> SpillWorklists -> SpillWorklists
+      addAlias u v sw
+          = sw { swAliases = M.insert v u $ swAliases sw
+               , swWebs = delete v $ swWebs sw
+               , swInterfGraph = GenWebs.igMergeWebs u v $ swInterfGraph sw }
+
+      mergeSpills :: SpillWorklists -> SpillWorklists
+      mergeSpills sw
+          = case swMoves sw of
+              [] -> sw
+              (l,s,d):mvs
+                  | u == v -> mergeSpills sw'
+                  | fixedWeb vweb || interferes -> mergeSpills sw'
+                  | otherwise -> mergeSpills (addAlias u v sw')
+                  where s' = swGetAlias s sw
+                        d' = swGetAlias d sw
+                        dweb = GenWebs.igGetWeb d' (swInterfGraph sw)
+                        (u, v) = if fixedWeb dweb then (d', s') else (s', d')
+                        vweb = GenWebs.igGetWeb v (swInterfGraph sw)
+                        interferes = GenWebs.igInterferes u v (swInterfGraph sw)
+                  
+                        sw' = sw { swMoves = mvs }
+                  
+      fixedWeb web = fixedSpill (GenWebs.webVar web)
+
+      colorSpills :: SpillWorklists -> SpillWorklists
+      colorSpills sw
+          = let sw' = emptyStack (swWebs sw) sw
+                getAliasColor i = swColors sw' M.! swGetAlias i sw'
+                webids = GenWebs.igGetWebIDs (swInterfGraph sw')
+            in sw' { swColors = M.fromList $ map (\i -> (i, getAliasColor i)) $ webids }
+          where emptyStack [] sw = sw
+                emptyStack (i:is) sw
+                    | fixedWeb web
+                        = let sw' = sw { swColors = M.insert i (GenWebs.webVar web) $ swColors sw }
+                          in emptyStack is sw'
+                    | otherwise
+                        = let adj = filter (`elem` swWebs sw) $
+                                    S.toList $ GenWebs.igGetAdj i (swInterfGraph sw)
+                              neighcolors = catMaybes $ map (`M.lookup` swColors sw') adj
+                              okColors = A.freeSpillLocs \\ neighcolors
+                              sw' = sw { swColors = M.insert i (head okColors) $ swColors sw }
+                          in emptyStack is sw'
+                    where web = GenWebs.igGetWeb i (swInterfGraph sw)
+
+data BetterifyLoc = BInt64 Int64
+                  | BSpill SpillLoc
+                  | BReg Reg
+                    deriving (Eq, Ord, Show)
+type BetterifyFact = ( M.Map SpillLoc (WithTop BetterifyLoc)
+                     , M.Map Reg (WithTop BetterifyLoc))
+
+betterifyLattice :: DataflowLattice BetterifyFact
+betterifyLattice = DataflowLattice
+                   { fact_name = "betterify lattice"
+                   , fact_bot = (M.empty, M.empty)
+                   , fact_join = joinProd
+                                 (joinMaps (extendJoinDomain add))
+                                 (joinMaps (extendJoinDomain add)) }
+    where add _ (OldFact bl1) (NewFact bl2)
+              = if bl1 == bl2
+                then (NoChange, PElem bl1)
+                else (SomeChange, Top)
+
+betterifySpills :: forall m. (CheckpointMonad m, FuelMonad m) =>
+                   FwdPass m Asm BetterifyFact
+betterifySpills = FwdPass
+                  { fp_lattice = betterifyLattice
+                  , fp_transfer = mkFTransfer3 ftCO ftOO ftOC
+                  , fp_rewrite = rewrite }
+    where 
+          ftCO :: Asm C O -> BetterifyFact -> BetterifyFact
+          ftCO (Enter _ _ numargs _) (spills, regs)
+              = (spills'', regs')
+                where spills' = M.fromList $ map (\a -> (a, Top)) $ 
+                                lefts $ drop 6 $ take numargs A.argLocation
+                      spills'' = if numargs > 6 then spills' else M.empty
+                      regs' = M.fromList $ map (\a -> (a, Top)) $
+                              rights $ take (min 6 numargs) A.argLocation
+          ftCO _ f = f
+          
+          removeBindingsTo :: Ord k => BetterifyLoc -> M.Map k (WithTop BetterifyLoc)
+                           -> M.Map k (WithTop BetterifyLoc)
+          removeBindingsTo x oldMap = M.mapMaybe f oldMap
+              where f p@(PElem v) = if v == x then Nothing else Just p
+                    f y = Just y
+          
+          lookupBInt64 :: BetterifyLoc -> BetterifyFact -> BetterifyLoc
+          lookupBInt64 v (spills, regs)
+              = case v of
+                  BReg r -> case M.lookup r regs of
+                              Just (PElem (BInt64 i)) -> BInt64 i
+                              _ -> BReg r
+                  BSpill l -> case M.lookup l spills of
+                                Just (PElem (BInt64 i)) -> BInt64 i
+                                _ -> BSpill l
+                  _ -> v
+          
+          handleToR :: BetterifyLoc -> Reg -> BetterifyFact -> BetterifyFact
+          handleToR v r (spills, regs)
+              = ( removeBindingsTo (BReg r) spills
+                , removeBindingsTo (BReg r) $ M.insert r (PElem v') regs )
+              where v' = lookupBInt64 v (spills, regs)
+                           
+          handleToS :: BetterifyLoc -> SpillLoc -> BetterifyFact -> BetterifyFact
+          handleToS v s (spills, regs)
+              = ( removeBindingsTo (BSpill s) $ M.insert s (PElem v') spills
+                , removeBindingsTo (BSpill s) regs )
+              where v' = lookupBInt64 v (spills, regs)
+          
+          removeToR :: Reg -> BetterifyFact -> BetterifyFact
+          removeToR r (spills, regs)
+              = ( removeBindingsTo (BReg r) spills
+                , M.insert r Top $ removeBindingsTo (BReg r) regs )
+          
+          ftOO :: Asm O O -> BetterifyFact -> BetterifyFact
+          ftOO (Spill _ r s) f = handleToS (BReg r) s f
+          ftOO (Reload _ s r) f = handleToR (BSpill s) r f
+          ftOO (MovIRMtoR _ (IRM_I (Imm32 i)) r) f = handleToR (BInt64 $ fromIntegral i) r f
+          ftOO (MovIRMtoR _ (IRM_R r0) r) f = handleToR (BReg r0) r f
+          ftOO (Mov64toR _ (Imm64 i) r) f = handleToR (BInt64 i) r f
+          ftOO n f = let (alive, dead) = getAliveDead n
+                     in foldl (flip id) f (map removeToR dead)
+          
+          ftOC :: Asm O C -> BetterifyFact -> FactBase BetterifyFact
+          ftOC = distributeFact
+          
+          rewrite :: FwdRewrite m Asm BetterifyFact
+          rewrite = deepFwdRw3 rwCO rwOO rwOC
+          
+          rwCO :: Asm C O -> BetterifyFact -> m (Maybe (Graph Asm C O))
+          rwCO n f = return Nothing
+          
+          getR :: Reg -> BetterifyFact -> Maybe BetterifyLoc
+          getR r (spills, regs) = case M.lookup r regs of
+                                    Just (PElem v) -> Just v
+                                    _ -> Nothing
+          
+          getS :: SpillLoc -> BetterifyFact -> Maybe BetterifyLoc
+          getS s (spills, regs) = case M.lookup s spills of
+                                    Just (PElem v) -> Just v
+                                    _ -> Nothing
+          
+          rwOO :: Asm O O -> BetterifyFact -> m (Maybe (Graph Asm O O))
+          rwOO (Spill pos r s) f
+              = return $ case getR r f of
+                           Just (BReg r') -> Just $ mkMiddle $ Spill pos r' s
+                           Just (BSpill s') | s == s' -> Just emptyGraph
+                           _ -> Nothing
+          rwOO (Reload pos s r) f
+              = return $ case getS s f of
+                           Just (BReg r') -> Just $ mkMiddle $ mov pos r' r
+                           Just (BInt64 i) -> Just $ mkMiddle $ mov pos i r
+                           Just (BSpill s')
+                               | s /= s' -> Just $mkMiddle $ Reload pos s' r
+                           _ -> Nothing
+          rwOO (MovIRMtoR pos (IRM_R r0) r) f
+              = return $ case getR r0 f of
+                           Just (BReg r0') | r0' == r -> Just emptyGraph
+                                           | r0' /= r0 -> Just $ mkMiddle $ mov pos r0' r
+                           Just (BInt64 i) -> Just $ mkMiddle $ mov pos i r
+                           _ -> Nothing
+          rwOO n f = return $ mkMiddle `fmap` mapAsm rename (const Nothing) n
+              where pinned = getPinned n
+                    rename r
+                        | r `elem` pinned  = Nothing
+                        | otherwise
+                          = case getR r f of
+                              Just (BReg r') | r == r' -> Nothing
+                                             | otherwise -> Just r'
+                              _ -> Nothing
+          
+          rwOC :: Asm O C -> BetterifyFact -> m (Maybe (Graph Asm O C))
+          rwOC n f = return Nothing
+
 -- | Rewrites the spills to moves.
 rewriteSpillPass :: (CheckpointMonad m, FuelMonad m) =>
                     FactBase (S.Set SpillLoc) -> FwdPass m Asm (S.Set SpillLoc)
 rewriteSpillPass fb = FwdPass 
-                      { fp_lattice = noLattice
+                      { fp_lattice = rwLattice
                       , fp_transfer = sTransfer
                       , fp_rewrite = rewriteSpill }
-    where noLattice :: DataflowLattice (S.Set SpillLoc)
-          noLattice = DataflowLattice
-                      { fact_name = "simple replicate"
-                      , fact_bot = S.empty
-                      , fact_join = add }
-              where add _ (OldFact old) (NewFact new) = (ch, j)
-                        where j = S.union new old
-                              ch = changeIf $ S.size j > S.size old
+    where rwLattice :: DataflowLattice (S.Set SpillLoc)
+          rwLattice = setLattice
+          
           sTransfer :: FwdTransfer Asm (S.Set SpillLoc)
           sTransfer = mkFTransfer3 g g' g''
               where 
@@ -120,7 +417,7 @@ rewriteSpillPass fb = FwdPass
                 g (Enter p l _ _) _ = fromMaybe S.empty (lookupFact l fb)
                 g e f = f
                 g' e f = f
-                g'' e f = mkFactBase noLattice $ zip (successors e) (repeat f)
+                g'' e f = mkFactBase rwLattice $ zip (successors e) (repeat f)
 
           rewriteSpill :: forall m. FuelMonad m => FwdRewrite m Asm (S.Set SpillLoc)
           rewriteSpill = mkFRewrite d
@@ -483,9 +780,9 @@ insertSpills spillLocs pg wl = (spillLocs', graph')
                     genReload reg = Reload noPosition (toReload M.! (l, reg)) reg
           
           rewriteCoal :: forall e x. NodePtr -> Asm e x -> Asm e x
-          rewriteCoal l n = mapAsm (ms l) (md l) n
-          ms l r = fromMaybe r $ M.lookup (l, r) usesMap
-          md l r = fromMaybe r $ M.lookup (l, r) defsMap
+          rewriteCoal l n = fromMaybe n $ mapAsm (ms l) (md l) n
+          ms l r = Just $ fromMaybe r $ M.lookup (l, r) usesMap
+          md l r = Just $ fromMaybe r $ M.lookup (l, r) defsMap
           
           idToWeb :: [(WebID, Web)]
           idToWeb = M.toList $ igIDToWeb (wInterfGraph wl)
@@ -548,12 +845,12 @@ rewriteGraph pg wl = graph'
           fe (PNode l n) = mkFirst n
           
           fm :: PNode Asm O O -> Graph Asm O O
-          fm (PNode l n) = case mapAsm fs fd n of
+          fm (PNode l n) = case fromMaybe n $ mapAsm fs fd n of
                              MovIRMtoR _ (IRM_R rs) rd
                                  | rs == rd -> emptyGraph
                              n -> mkMiddle n
-              where fs r = fromMaybe r $ M.lookup (l, r) usesColorMap
-                    fd r = fromMaybe r $ M.lookup (l, r) defsColorMap
+              where fs r = Just $ fromMaybe r $ M.lookup (l, r) usesColorMap
+                    fd r = Just $ fromMaybe r $ M.lookup (l, r) defsColorMap
           
           fx :: PNode Asm O C -> Graph Asm O C
           fx (PNode l n) = mkLast n
