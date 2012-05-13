@@ -29,11 +29,11 @@ fi
 
 
 runcompiler_opt() {
-    $base/../../dcc -target codegen -opt all -o $2 $1
+    $base/../../dcc -r -target codegen -opt all -o $2 $1
 }
 
 runcompiler_unopt() {
-    $base/../../dcc -target codegen -opt none -o $2 $1
+    $base/../../dcc -r -target codegen -opt none -o $2 $1
 }
 
 
