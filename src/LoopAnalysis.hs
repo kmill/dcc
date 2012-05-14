@@ -12,9 +12,15 @@ import Debug.Trace
 import IR
 
 import Control.Monad
-
+import qualified Control.Monad.LPMonad as LP
+import Data.LinearProgram.GLPK.Solver
+import Data.LinearProgram.Common
+import Data.Algebra
+import System.IO.Unsafe
 
 import Util.NodeLocate
+
+import Text.ParserCombinators.Parsec.Pos (newPos, SourcePos)
 
 import Data.Int
 import Data.Maybe
@@ -22,7 +28,16 @@ import qualified Data.Set as S
 import qualified Data.Map as Map
 
 
+-- required for using Int64s as coefficients in a LP 
+instance Group Int64 where 
+    zero = 0 
+    (^+^) = (+)
+    (^-^) = (-) 
+    neg x = (-x)
 
+instance Ring Int64 where 
+    one = 1 
+    (*#) = (*)
 
 
 data Loop = Loop { loop_header :: Label 
@@ -52,6 +67,9 @@ loopNestToList :: LoopNest -> [Loop]
 loopNestToList (LeafLoop l) = [l]
 loopNestToList (LoopNest l n) = l:(loopNestToList n)
 
+
+dsp :: SourcePos 
+dsp = newPos "" (-1) (-1) 
 
 findLoops :: FactBase DominFact -> Graph MidIRInst C C -> [Label] -> S.Set Loop 
 findLoops dominators graph mlabels = S.fromList loops
@@ -237,12 +255,124 @@ analyzeParallelizationPass midir = parallelLoops
                       | otherwise -> case (linConstExpr loop expr1, linConstExpr loop expr2) of 
                                        (Nothing, _) -> False 
                                        (_, Nothing) -> False 
-                                       (Just linExpr1, Just linExpr2) -> solveLinExprs linExpr1 linExpr2 
-              where v@(variant, invariant) = loopVarInfos Map.! loop 
-                    (variantNames, invariantNames) = loopVarNames v 
+                                       (Just linExpr1, Just linExpr2) -> noLinSoln loop linExpr1 linExpr2 
+          
+          -- Tests for whether two separate iterations of a given loop 
+          -- can access the same data. Uses the glpk-hs package to solve 
+          -- an integer linear program. 
+
+          -- Given two expressions f(i, j) and g(i, j) for loop i. 
+          -- have equations:
+          -- f(i1, j1) = f(i2, j2) 
+          -- i1 /= i2 (i1 <= i2-1 or i1 >= i2+1)
+          -- i1, i2 >= imin and i1, i2 <= imax-1 
+          -- j1, j2 >= jmin and j1, j2 <= jmax-1
+          noLinSoln :: Loop -> MidIRExpr -> MidIRExpr -> Bool 
+          noLinSoln loop expr1 expr2 
+              = concreteBounds && noLessSoln && noGreaterSoln
+              where noLessSoln = case unsafePerformIO $ LP.evalLPT lessLP of 
+                                   Success -> False
+                                   v -> True
+                    noGreaterSoln = case unsafePerformIO $ LP.evalLPT greaterLP of 
+                                      Success -> False 
+                                      v -> True
+                    concreteBounds = isJust bounds
+                    loopVarInfo = Map.union myVariables $ Map.union parentVars childVars 
+                    parentVars = Map.fromList [(n, i) | p <- loopParents Map.! loop, i@(n, _, _, _) <- loop_variables p]
+                    childVars = Map.fromList [(n, i) | c <- loopChildren Map.! loop, i@(n, _, _, _) <- loop_variables c]
+                    myVariables = Map.fromList [(n, i) | i@(n, _, _, _) <- loop_variables loop]
+
+                    usedVariables :: S.Set VarName
+                    usedVariables = S.union (fold_EE addUsedVariables S.empty expr1) (fold_EE addUsedVariables S.empty expr2)
+                    addUsedVariables :: S.Set VarName -> MidIRExpr -> S.Set VarName 
+                    addUsedVariables set (Var _ v) = S.insert v set 
+                    addUsedVariables set _ = set
+
+                    bounds :: Maybe (Map.Map VarName (Int64, Int64))
+                    bounds = foldM maybeAddBounds Map.empty $ S.toList usedVariables
+                    maybeAddBounds :: (Map.Map VarName (Int64, Int64)) -> VarName -> Maybe (Map.Map VarName (Int64, Int64))
+                    maybeAddBounds map var 
+                        = case Map.lookup var loopVarInfo of 
+                            Just (_, (Lit _ l), (Lit _ u), _) 
+                                | l <= u -> Just $ Map.insert var (l, u) map
+                                | otherwise -> Just $ Map.insert var (u, l) map
+                            _ -> Nothing
                     
-                    solveLinExprs :: MidIRExpr -> MidIRExpr -> Bool 
-                    solveLinExprs expr1 expr2 = trace ("Dep: " ++ (show expr1) ++ ", " ++ (show expr2)) True
+                    mBounds = fromJust bounds
+
+                    officialBounds :: Map.Map String (Int64, Int64) 
+                    officialBounds = Map.union expr1Bounds expr2Bounds 
+
+                    -- When we're doing the inequalities, we have to keep track of whether the looping variables 
+                    -- are linear functions of the iteration (base induction variable). therefore, if j = a*i+b 
+                    -- and i1 < i2, j1 < j2 only if a is positive. If not, i1 < i2 => j1 > j2. 
+                    officialLoopVars :: [(String, String, Bool)]
+                    officialLoopVars = [( (show var) ++ "_1", (show var) ++ "_2", i > 0) | (var, _, _, i) <- loop_variables loop]
+                    
+                    expr1Bounds = Map.fromList [( (show var) ++ "_1", mBounds Map.! var) | var <- S.toList usedVariables]
+                    expr2Bounds = Map.fromList [( (show var) ++ "_2", mBounds Map.! var) | var <- S.toList usedVariables]
+
+                    linFunc1 :: LinFunc String Int64
+                    linFunc1 = fold_EE (addCoeffs "_1") Map.empty expr1 
+
+                    linFunc2 :: LinFunc String Int64 
+                    linFunc2 = fold_EE (addCoeffs "_2") Map.empty expr2
+
+                    addCoeffs :: String -> LinFunc String Int64 -> MidIRExpr -> LinFunc String Int64
+                    addCoeffs suf fun (BinOp _ OpAdd (Lit _ i) _) = addCoeff "parallel_const" i fun 
+                    addCoeffs suf fun (BinOp _ OpAdd _ (Lit _ i)) = addCoeff "parallel_const" i fun 
+                    addCoeffs suf fun (BinOp _ OpMul (Lit _ i) (Var _ v)) = addCoeff ( (show v) ++ suf) i fun
+                    addCoeffs suf fun _ = fun
+
+                    addCoeff :: String -> Int64 -> LinFunc String Int64 -> LinFunc String Int64 
+                    addCoeff v i fun = case Map.lookup v fun of 
+                                         Nothing -> Map.insert v i fun 
+                                         Just i2 -> Map.insert v (i+i2) fun
+                                                    
+                    createMin1 :: String -> LinFunc String Int64
+                    createMin1 v = (var v) ^-^ (var "parallel_const")
+
+                    createPlus1 :: String -> LinFunc String Int64
+                    createPlus1 v = (var v) ^+^ (var "parallel_const") 
+
+                    lessLP :: LP.LPT String Int64 IO ReturnCode 
+                    lessLP = do LP.setObjective Map.empty
+                                -- Make the dependencies equal
+                                LP.equal linFunc1 linFunc2
+                                -- Set bounds on all of our looping variables
+                                mapM (\(v, (l, u)) -> LP.setVarBounds v $ Bound l (u-1)) $ Map.toList officialBounds
+                                LP.varEq "parallel_const" 1 -- and the "constant" variable should always be 1
+                                -- Make our main looping variables (the current loop) inequal 
+                                -- Specifically for this LP, make it < 
+                                mapM (\(v1, v2, p) -> if p 
+                                                      then LP.leq (var v1) (createMin1 v2)
+                                                      else LP.geq (var v1) (createPlus1 v2)) officialLoopVars
+                                -- Set the kinds on all of our variables 
+                                mapM (\v -> LP.setVarKind v IntVar) $ Map.keys officialBounds
+                                LP.setVarKind "parallel_const" IntVar
+                                -- Finally, try to solve the integer linear program 
+                                (code, _) <- LP.glpSolve $ mipDefaults {msgLev=MsgOff}
+                                return code
+
+                    greaterLP :: LP.LPT String Int64 IO ReturnCode 
+                    greaterLP = do LP.setObjective Map.empty
+                                   -- Make the dependencies equal
+                                   LP.equal linFunc1 linFunc2
+                                   -- Set bounds on all of our looping variables
+                                   mapM (\(v, (l, u)) -> LP.setVarBounds v $ Bound l (u-1)) $ Map.toList officialBounds
+                                   LP.varEq "parallel_const" 1 -- and the "constant" variable should always be 1
+                                   -- Make our main looping variables (the current loop) inequal 
+                                   -- Specifically for this LP, make it > 
+                                   mapM (\(v1, v2, p) -> if p 
+                                                         then LP.geq (var v1) (createPlus1 v2)
+                                                         else LP.leq (var v2) (createMin1 v2)) officialLoopVars
+                                   -- Set the kinds on all of our variables 
+                                   mapM (\v -> LP.setVarKind v IntVar) $ Map.keys officialBounds
+                                   LP.setVarKind "parallel_const" IntVar
+                                   -- Finally, try to solve the integer linear program 
+                                   (code, _) <- LP.glpSolve $ mipDefaults {msgLev=MsgOff} 
+                                   return code
+
 
           -- Try to place the expression into linear constant form 
           -- where the expression represents a linear function of a number 
@@ -254,8 +384,9 @@ analyzeParallelizationPass midir = parallelLoops
                                       case hasNonLoopVariables newExpr of 
                                         True -> do newExpr <- tryRemoveNonLoops newExpr
                                                    linConstExpr loop newExpr
-                                        False -> rejectNonLinear newExpr
-                                                 
+                                        False -> do newExpr <- makeLinear newExpr 
+                                                    rejectNonLinear newExpr
+                                                    
               where v@(variants, invariants) = loopVarInfos Map.! loop 
                     (variantNames, invariantNames) = loopVarNames v 
                     varNameToWebID :: Map.Map VarName WebID 
@@ -264,7 +395,7 @@ analyzeParallelizationPass midir = parallelLoops
                     availableLoopVars = S.union myVariables $ S.union parentVars childVars 
                     parentVars = S.fromList [var | p <- loopParents Map.! loop, (var, _, _, _) <- loop_variables p] 
                     childVars = S.fromList [var | c <- loopChildren Map.! loop, (var, _, _, _) <- loop_variables c]
-                    myVariables = S.fromList $ [var | (var, _, _, _) <- loop_variables loop]
+                    myVariables = S.fromList [var | (var, _, _, _) <- loop_variables loop]
 
                     rejectObviousProblems :: MidIRExpr -> Maybe MidIRExpr 
                     rejectObviousProblems expr
@@ -285,8 +416,40 @@ analyzeParallelizationPass midir = parallelLoops
                         | otherwise = Just expr 
 
                     isNonLinear :: Bool -> MidIRExpr -> Bool 
-                    isNonLinear b (BinOp _ OpMul (Var _ _) (Var _ _)) = True
-                    isNonLinear b _ = b 
+                    isNonLinear b (BinOp _ OpMul (Lit _ _) (Var _ _)) = b || False
+                    isNonLinear b (BinOp _ OpAdd _ _) = b || False 
+                    isNonLinear b (Lit _ _) = b || False 
+                    isNonLinear b (Var _ _) = b || False 
+                    isNonLinear b _ = True 
+
+                    makeLinear :: MidIRExpr -> Maybe MidIRExpr 
+                    makeLinear expr = case lineared of 
+                                        Nothing -> Just expr 
+                                        Just expr' -> makeLinear expr'
+                        where lineared = mapEE linearize expr
+
+                    linearize :: MidIRExpr -> Maybe MidIRExpr 
+                    -- Coefficients should be distributed
+                    linearize (BinOp _ OpMul expr (BinOp _ op expr1 expr2))
+                        | op == OpAdd || op == OpSub 
+                            = Just $ (BinOp dsp op (BinOp dsp OpMul expr expr1) (BinOp dsp OpMul expr expr2))
+                    -- Coefficients should be combined if they're multiplied
+                    linearize (BinOp _ OpMul (Lit _ i1) (Lit _ i2)) = Just (Lit dsp (i1*i2))
+                    linearize (BinOp _ OpMul expr (Lit _ i)) = Just $ BinOp dsp OpMul (Lit dsp i) expr
+                    linearize (BinOp _ OpMul (Lit _ i1) (BinOp _ OpMul (Lit _ i2) expr)) 
+                        = Just (BinOp dsp OpMul (Lit dsp (i1*i2)) expr)
+                    linearize (BinOp _ OpSub expr1 expr2) = Just (BinOp dsp OpAdd expr1 (UnOp dsp OpNeg expr2))
+                    linearize (UnOp _ OpNeg (Lit _ i)) = Just (Lit dsp (-i))
+                    linearize (UnOp _ OpNeg (BinOp _ op expr1 expr2))
+                        | op == OpAdd || op == OpSub 
+                            = Just $ (BinOp dsp op (UnOp dsp OpNeg expr1) (UnOp dsp OpNeg expr2))
+                    linearize (UnOp _ OpNeg (BinOp _ OpMul (Lit _ i) expr) ) 
+                        =  Just $ BinOp dsp OpMul (Lit dsp (-i)) expr
+                    linearize (UnOp _ OpNeg (UnOp _ OpNeg expr)) = Just expr
+                    linearize (BinOp _ OpAdd (Lit _ i1) (Lit _ i2)) = Just (Lit dsp (i1+i2))
+                    linearize _ = Nothing
+                              
+
 
                     hasNonLoopVariables :: MidIRExpr -> Bool 
                     hasNonLoopVariables expr = fold_EE isNonLoopVar False expr 

@@ -74,7 +74,7 @@ dataflows
       , DFA optBlockElim performBlockElimPass 
       -- It's good to end with this for good measure (and removes dead blocks)
       , DFA optDeadCode performDeadCodePass
-      --, DFA optDeadCode testDominatorPass
+      , DFA optDeadCode testDominatorPass
       ]
 
 performDataflowAnalysis :: OptFlags -> MidIRRepr -> RM MidIRRepr 
