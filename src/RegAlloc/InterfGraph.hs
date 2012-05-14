@@ -97,6 +97,14 @@ igWebIDs g = M.keys $ igIDToWeb g
 igGetWeb :: WebID -> InterfGraph -> Web
 igGetWeb i g = igIDToWeb g M.! i
 
+-- | Gets the adjacency list of a web by id
+igGetAdj :: WebID -> InterfGraph -> S.Set WebID
+igGetAdj i g = M.findWithDefault S.empty i $ igAdjLists g
+
+-- | Merges the second web's adjacency list into the first.
+igMergeAdjs :: WebID -> WebID -> InterfGraph -> InterfGraph
+igMergeAdjs i j g = g { igAdjLists = M.insertWith S.union i (igGetAdj j g) (igAdjLists g) }
+
 ---
 --- Building the webs
 ---

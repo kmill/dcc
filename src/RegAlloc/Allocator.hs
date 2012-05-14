@@ -321,15 +321,15 @@ doRegAlloc spillLocs mlabel graph
                     spilledWebs <- wSpilledWebs `fmap` get
                     wl <- get
                     if trace' ("endState:\n" ++ displayWL wl) $ not $ null spilledWebs
-                       then let (spillLocs', graph') = insertSpills spillLocs pg wl
+                       then let (spillLocs', graph') = insertSpills spillLocs pg wl interfgraph
                             in trace' ("spilledCode:\n" ++ unlines (graphToAsm graph' mlabel)) $ return $ doRegAlloc spillLocs' mlabel graph'
-                       else let graph' = rewriteGraph pg wl
+                       else let graph' = rewriteGraph pg wl interfgraph
                             in trace' ("endCode:\n" ++ unlines (graphToAsm graph' mlabel)++"\n****\n****\n") $ return graph'
       in evalState main (trace' ("initCode:\n" ++ unlines (graphToAsm graph mlabel) ++ "\ninitState:\n" ++ displayWL initState) initState)
 
-insertSpills :: SpillLocSupply -> Graph (PNode Asm) C C -> RWorklists 
+insertSpills :: SpillLocSupply -> Graph (PNode Asm) C C -> RWorklists -> InterfGraph
              -> (SpillLocSupply, Graph Asm C C)
-insertSpills spillLocs pg wl = (spillLocs', graph')
+insertSpills spillLocs pg wl igraph = (spillLocs', graph')
     where GMany _ body _ = pg
           graph' = foldl (|*><*|) emptyClosedGraph bodies
           bodies = map f (mapElems body)
@@ -376,11 +376,11 @@ insertSpills spillLocs pg wl = (spillLocs', graph')
           md l r = Just $ fromMaybe r $ M.lookup (l, r) defsMap
           
           idToWeb :: [(WebID, Web)]
-          idToWeb = M.toList $ igIDToWeb (wInterfGraph wl)
+          idToWeb = M.toList $ igIDToWeb igraph
 
           newWebReg :: WebID -> Reg
           newWebReg i = let i' = getPreAlias' i wl
-                            web = igIDToWeb (wInterfGraph wl) M.! i'
+                            web = igIDToWeb igraph M.! i'
                         in case webPrecolored web of
                              True -> webReg web
                              False -> SReg $ "web_" ++ show i'
@@ -415,8 +415,8 @@ insertSpills spillLocs pg wl = (spillLocs', graph')
                                     d <- S.toList $ webDefs w
                                     return $ ((d, newWebReg i'), sl)
 
-rewriteGraph :: Graph (PNode Asm) C C -> RWorklists -> Graph Asm C C
-rewriteGraph pg wl = graph'
+rewriteGraph :: Graph (PNode Asm) C C -> RWorklists -> InterfGraph -> Graph Asm C C
+rewriteGraph pg wl igraph = graph'
     where GMany _ body _ = pg
           graph' = foldl (|*><*|) emptyClosedGraph bodies
           bodies = map f (mapElems body)
@@ -446,17 +446,20 @@ rewriteGraph pg wl = graph'
           fx :: PNode Asm O C -> Graph Asm O C
           fx (PNode l n) = mkLast n
           
-          idToWeb = M.toList $ igIDToWeb (wInterfGraph wl)
+          idToWeb :: [(WebID, Web)]
+          idToWeb = M.toList $ igIDToWeb igraph
+          
+          usesColorMap, defsColorMap :: M.Map (NodePtr, Reg) Reg
           usesColorMap = M.fromList $ do (i, w) <- idToWeb
                                          u <- S.toList $ webUses w
                                          case M.lookup i (wColoredWebs wl) of
                                            Just r -> return ((u, webReg w), MReg r)
-                                           Nothing -> mzero
+                                           Nothing -> error "shouldn't be! allocator.hs"
           defsColorMap = M.fromList $ do (i, w) <- idToWeb
                                          d <- S.toList $ webDefs w
                                          case M.lookup i (wColoredWebs wl) of
                                            Just r -> return ((d, webReg w), MReg r)
-                                           Nothing -> mzero
+                                           Nothing -> error "shouldn't be! allocator.hs"
 
 
 -- | "Simplify"
@@ -619,6 +622,7 @@ combine u v =
        forM_ adjv' $ \t -> do
          trace' ("  addToAdjList " ++ show t ++ " " ++ show u) $ addToAdjList t u
          decrementDegree t
+       modify $ \wl -> wl { wInterfGraph = igMergeAdjs u v $ wInterfGraph wl }
        wl <- get
        let d = wDegrees wl M.! u
        when (d >= numUsableRegisters
