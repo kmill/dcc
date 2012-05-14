@@ -91,6 +91,11 @@ genTmpReg :: CGM A.Reg
 genTmpReg = CGM $ \opts -> do s <- I.genUniqueName "s"
                               return [A.SReg s]
 
+genCallout :: SourcePos -> Int -> String -> CGM (A.Asm O O)
+genCallout pos nargs name = do opts <- getOpts
+                               let name' = if macMode opts then '_':name else name
+                               return $ A.Callout pos nargs (A.Imm32Label name' 0)
+
 --genSpill :: Reg -> CGM (Graph A.Asm O O)
 --genReload :: String -> CGM
 --giveBackTmpReg :: CGM A.Reg
@@ -154,12 +159,12 @@ instToAsm (I.Call pos d name args)
                     <*> mkMiddle (A.mov pos (A.MReg A.RAX) (A.SReg $ show d))
 instToAsm (I.Callout pos d name args)
     = do gargs <- genSetArgs pos args
+         callout <- genCallout pos (length args) name
          opts <- getOpts
-         let name' = if macMode opts then '_':name else name
          return $ gargs
                     <*> mkMiddle (A.mov pos (A.Imm32 0) (A.MReg A.RAX))
                     <*> genSetSP opts pos args
-                    <*> mkMiddle (A.Callout pos (length args) (A.Imm32Label name' 0))
+                    <*> mkMiddle callout
                     <*> genResetSP opts pos args
                     <*> mkMiddle (A.mov pos (A.MReg A.RAX) (A.SReg $ show d))
 instToAsm (I.Branch pos l)
@@ -178,10 +183,11 @@ instToAsm (I.Return pos fname (Just exp))
          return $ g <*> mkMiddle (A.MovIRMtoR pos irm (A.MReg A.RAX))
                     <*> (mkLast $ A.Leave pos True 0)
 instToAsm (I.Fail pos)
-    = return $ mkMiddles [ A.mov pos (A.Imm32 1) (A.MReg A.RDI)
-                         , A.mov pos (A.Imm32 0) (A.MReg A.RAX)
-                         , A.Callout pos 1 (A.Imm32Label "exit" 0) ]
-               <*> mkLast (A.ExitFail pos)
+    = do exit <- genCallout pos 1 "exit"
+         return $ mkMiddles [ A.mov pos (A.Imm32 1) (A.MReg A.RDI)
+                            , A.mov pos (A.Imm32 0) (A.MReg A.RAX)
+                            , exit ]
+                    <*> mkLast (A.ExitFail pos)
 
 genSetArgs :: SourcePos -> [MidIRExpr] -> CGM (Graph A.Asm O O)
 genSetArgs pos args = do opts <- getOpts
