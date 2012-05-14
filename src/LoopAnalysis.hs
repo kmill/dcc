@@ -71,6 +71,16 @@ loopNestToList (LoopNest l n) = l:(loopNestToList n)
 dsp :: SourcePos 
 dsp = newPos "" (-1) (-1) 
 
+-- Returns whether a node dominates another node 
+dominatesNode :: FactBase DominFact -> NodePtr -> NodePtr -> Bool
+dominatesNode domins (NodePtr l1 o1) (NodePtr l2 o2) 
+    | l1 /= l2 = S.member l1 dominLabel2
+    | otherwise = o1 <= o2
+    where dominLabel2 = case mapLookup l2 domins of 
+                          Just (PElem d) -> d 
+                          _ -> S.empty
+
+
 findLoops :: FactBase DominFact -> Graph MidIRInst C C -> [Label] -> S.Set Loop 
 findLoops dominators graph mlabels = S.fromList loops
     where GMany _ body _ = graph
@@ -95,7 +105,90 @@ backEdgeToLoop dominators graph mlabels (loopBack, loopHeader) = Loop loopHeader
           BodyBlock headerBlock = lookupBlock graph loopHeader
           loopVariables = findLoopVariables graph headerDomins headerBlock loopBackBlock
          
-                    
+type BasicLoop = (Label, Label, S.Set Label)
+data InductionLoc = Beginning | End deriving (Eq, Show)
+
+findInductionVariables :: Graph (PNode MidIRInst) C C -> [Label] -> FactBase DominFact -> Webs -> BasicLoop -> [LoopVariable]
+findInductionVariables pGraph mlabels domins webs (header, loopBack, body)
+    = error "Not yet implemted :-{"
+    where loopWebs = websIntersectingBlocks webs body 
+          -- Now that we have a list of the webs, look at each one and determine if it's an induction variable
+          basicInductionVars = S.fromList $ catMaybes [makeInductionVar $ getWeb x webs | x <- S.toList loopWebs]
+          
+          -- Let's see if we can find the loop limit induction variable which will help us determine our upper bounds
+          
+
+          headerDomins = case mapLookup header domins of 
+                           Just (PElem domin) -> domin
+                           _ -> S.empty 
+
+          backDomins = case mapLookup loopBack domins of 
+                         Just (PElem domin) -> domin 
+                         _ -> S.empty
+
+          makeInductionVar :: Web -> Maybe (VarName, Int64, Int64)
+          makeInductionVar web 
+              | (S.size $ webDefs web) /= 2 = Nothing
+              | otherwise = let [def1, def2] = S.toList $ webDefs web
+                                varName = webVar web
+                            in case (inductionStart def1, inductionStep web def2) of 
+                                 (Just init, Just (inc, End)) -> Just (varName, init, inc)
+                                 (Just init, Just (inc, Beginning)) -> Just (varName, init+inc, inc)
+                                 _ -> case (inductionStart def2, inductionStep web def1) of 
+                                        (Just init, Just (inc, End)) -> Just (varName, init, inc)
+                                        (Just init, Just (inc, Beginning)) -> Just (varName, init+inc, inc)
+                                        _ -> Nothing 
+
+          
+          inductionStart :: NodePtr -> Maybe Int64
+          inductionStart def = case getNodeInstOO def pGraph of 
+                                 Just (Store _ _ (Lit _ i))
+                                     | S.member (nodeLabel def) headerDomins -> Just i  
+                                 _ -> Nothing 
+                                      
+          -- Induction step attempts to tell us both what the step value of this induction variable is
+          -- and whether the induction step is at the beginning or end of the loop (affects the "start" 
+          -- value of the variable
+          inductionStep :: Web -> NodePtr -> Maybe (Int64, InductionLoc) 
+          inductionStep web def 
+              = case inst of 
+                  Just (Store _ v (BinOp _ OpAdd (Var _ x) (Lit _ i)))
+                      | v == x -> indLoc i 
+                  Just (Store _ v (BinOp _ OpSub (Var _ x) (Lit _ i)))
+                      | v == x -> indLoc (-i)
+                  Just (Store _ v (BinOp _ OpAdd (Lit _ i) (Var _ x))) 
+                      | v == x -> indLoc i 
+                  Just (Store _ v (BinOp _ OpAdd (UnOp _ OpNeg (Lit _ i)) (Var _ x)))
+                      | v == x -> indLoc (-i)
+                  _ -> Nothing
+
+                where inst :: Maybe (MidIRInst O O)
+                      inst = getNodeInstOO def pGraph
+                      indLoc :: Int64 -> Maybe (Int64, InductionLoc)
+                      indLoc i = case inductionLoc of 
+                                   Nothing -> Nothing 
+                                   Just loc -> Just (i, loc) 
+                      inductionLoc
+                          | beginningOfLoop def web = Just Beginning 
+                          | endOfLoop def web = Just End 
+                          | otherwise = Nothing
+
+          beginningOfLoop :: NodePtr -> Web -> Bool 
+          beginningOfLoop def web 
+              = all (\use -> dominatesNode domins def use ) loopUses
+                where loopUses = S.toList $ S.filter (\use -> S.member (nodeLabel use) body) $ webUses web 
+
+          endOfLoop :: NodePtr -> Web -> Bool 
+          endOfLoop def web 
+              = (S.member (nodeLabel def) backDomins) && all loopUseOkay loopUses 
+                where loopUses = S.toList $ S.filter (\u -> S.member (nodeLabel u) body) $ webUses web
+                      loopUseOkay use
+                          | use == def = True 
+                          | (nodeLabel def == loopBack) && dominatesNode domins use def = True 
+                          | dominatesNode domins def use = False 
+                          | S.member (nodeLabel use) reaches = False 
+                      reaches = findReaching loopBack (nodeLabel def) pGraph mlabels 
+
 
 findLoopVariables :: Graph MidIRInst C C -> S.Set Label -> Block MidIRInst C C -> Block MidIRInst C C -> [LoopVariable]
 findLoopVariables graph headerDomin headerBlock loopbackBlock 
@@ -168,9 +261,6 @@ analyzeParallelizationPass midir = parallelLoops
           loopVarNames :: LoopVarInfo -> (S.Set VarName, S.Set VarName) 
           loopVarNames (variant, invariant) = (S.map webIDToVarName variant, S.map webIDToVarName invariant) 
               where webIDToVarName id = webVar $ getWeb id webs 
-
-
-
 
           graph = midIRGraph midir
           pGraph = toPGraph graph
