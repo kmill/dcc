@@ -225,7 +225,7 @@ statementToMidIR fname env c b (HExprSt _ expr)
 statementToMidIR fname env c b (HAssignSt senv pos loc op expr)
     = case loc of
         HPlainLocation _ pos tok ->
-            let (isfield, a, var') = fromJust $ lookup (tokenString tok) env -- destination var
+            let (isfield, _, var') = fromJust $ lookup (tokenString tok) env -- destination var
                 loc' = HLoadLoc senv pos loc -- load destination var
             in do (gex, ex) <- case op of
                                  A.Assign -> expressionToMidIR env expr
@@ -348,8 +348,8 @@ expressionToMidIR env (HLoadLoc senv pos loc)
             in return (GNil, if isarray
                              then varToLabel pos var'
                              else if isfield
-                                  then Var pos var'
-                                  else Load pos (varToLabel pos var'))
+                                  then Load pos (varToLabel pos var')
+                                  else Var pos var')
         HArrayLocation _ pos tok iexpr ->
             let var = tokenString tok -- array var name (for error message)
                 (_, _, var') = fromJust $ lookup var env -- destination array var
