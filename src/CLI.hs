@@ -105,7 +105,9 @@ showOptClasses = "\n Optimization classes which can be passed to --opt:\n"
                                       ++ name ++ " : " ++ optlist opts
           optlist opts = prelines $ map (intercalate " ") $ intoFive opts
           prelines = intercalate ("\n   " ++ replicate maxnamelength ' ')
-          intoFive list | length list < 5 = [list]
+          intoFive :: [a] -> [[a]]
+          intoFive list | null list = []
+                        | length list < 5 = [list]
                         | otherwise = let (xs,ys) = splitAt 5 list
                                       in xs:(intoFive ys)
 
