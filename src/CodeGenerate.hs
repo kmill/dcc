@@ -572,12 +572,12 @@ lowIRToAsm m opts
           , ".globl main" 
           , ".globl _main" 
           , "main:"
-          , "_main:"
-          , ind "subq $8, %rsp"
-          , ind "call method_main"
-          , ind "movq $0, %rax"
-          , ind "addq $8, %rsp"
-          , ind "ret" ]
+          , "_main:" ]
+      ++  (if macMode opts then [ ind "subq $8, %rsp" ] else [])
+      ++  [ ind "call method_main"
+          , ind "movq $0, %rax" ]
+      ++  (if macMode opts then [ ind "addq $8, %rsp" ] else [])
+      ++  [ ind "ret" ]
       ++ newline
       ++ ["# methods"]
       ++ (concatMap (showMethod (lowIRGraph m)) (lowIRMethods m))
