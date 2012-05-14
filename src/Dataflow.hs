@@ -60,7 +60,7 @@ dataflows
       --, DFA optLICM performLICMPass
       , DFA optCommonSubElim performCSEPass
       , DFA optCopyProp performCopyPropPass
-      --, DFA optCondElim performCondElimPass
+      , DFA optCondElim performCondElimPass
       -- doing constprop after flatten/cse does great good! see tests/codegen/fig18.6.dcf
       , DFA optConstProp performConstPropPass
       , DFA optDeadCode performDeadCodePass
@@ -181,8 +181,10 @@ copyPropPass = FwdPass
                , fp_rewrite = copyProp }
 
 condElimPass :: (CheckpointMonad m, FuelMonad m) => BwdPass m MidIRInst AssignMap 
-condElimPass = debugBwdTransfers trace show (const $ const True) $ debugBwdJoins trace (const True) $ BwdPass 
-               { bp_lattice = condAssignLattice
+--condElimPass = debugBwdJoins trace (const True) $ BwdPass 
+--condElimPass = debugBwdTransfers trace show (const $ const True) $ debugBwdJoins trace (const True) $ BwdPass 
+condElimPass = BwdPass
+                { bp_lattice = condAssignLattice
                , bp_transfer = condAssignness
                , bp_rewrite = condElim }
 
