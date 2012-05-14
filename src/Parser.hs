@@ -296,13 +296,18 @@ ident :: DParser Token
 ident = dtoken Identifier
 
 -- | Parses a string into an Int64
-parseInt64 :: Bool -> String -> Int64
+parseInt64 :: Bool -> String -> Maybe Int64
 parseInt64 neg s =
     case s of
       ('0':'x':_) -> justRead
-      ('0':'b':rest) -> let loop ('0':s') v = loop s' 2*v
-                            loop ('1':s') v = loop s' (2*v + (if neg then -1 else 1))
-                            loop _ v = v
-                        in loop rest 0
+      ('0':'b':rest) -> if length rest > 64
+                        then Nothing
+                        else Just $ let loop ('0':s') v = loop s' 2*v
+                                        loop ('1':s') v = loop s' (2*v + (if neg then -1 else 1))
+                                        loop _ v = v
+                                    in loop rest 0
       _ -> justRead
-    where justRead = read (if neg then '-':s else s)
+    where justRead = let v = read (if neg then '-':s else s) :: Integer
+                         v' = fromIntegral v :: Int64
+                         v'' = fromIntegral v' :: Integer
+                     in if v == v'' then Just v' else Nothing
