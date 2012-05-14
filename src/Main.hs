@@ -141,11 +141,11 @@ doLowIRFile :: CompilerOpts -> String -> String -> Either String IR.MidIRRepr ->
 doLowIRFile opts ifname input midir
     = case midir of                      
         Left err -> Left err
-        Right m -> let assem = do lowir <- CodeGenerate.toAss m
+        Right m -> let assem = do lowir <- CodeGenerate.toAss opts m
                                   lowir <- (if debugMode opts then return else allocator) lowir
                                   lowir <- runWithFuel maxBound $ do
                                              lowir <- performAsmDataflowAnalysis (optMode opts) lowir
-                                             lowir <- performBakeSpills lowir
+                                             lowir <- performBakeSpills opts lowir
                                              return lowir
                                   return lowir
                    in Right (IR.runGM assem)
