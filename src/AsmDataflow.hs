@@ -19,6 +19,7 @@ import DataflowTypes
 import Dataflow.DeadCodeAsm
 import Dataflow.ColorSpills
 import Dataflow.BetterifyAsm
+import Dataflow.BlockElimAsm
 
 ---
 ---
@@ -34,6 +35,7 @@ dataflows
       , ADFA (hasOptFlag "colorspills") performColorSpills
       , ADFA (hasOptFlag "betterifyasm") performBetterifyPass
       , ADFA (hasOptFlag "betterifyasm") performDeadAsmPass
+      , ADFA (hasOptFlag "blockelimasm") performBlockElimAsm
       ]
 
 performAsmDataflowAnalysis :: OptFlags -> LowIRRepr -> RM LowIRRepr

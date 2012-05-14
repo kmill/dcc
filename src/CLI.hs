@@ -84,12 +84,19 @@ optimizations =
     , ("deadcodeasm", "Dead code elimination on assembly")
     , ("colorspills", "Recolor spills in assembly")
     , ("betterifyasm", "Constant/copy propagation on assembly")
+    , ("blockelimasm", "Block elimination on assembly")
     ]
 
 optimizationClasses =
     [ ("all", map fst optimizations)
-    , ("basic", ["constprop", "deadcode", "blockelim", "winnowstr"])
-    , ("asm", ["deadcodeasm", "colorspills", "betterifyasm"]) ]
+    , ("basic", [ "constprop"
+                , "deadcode"
+                , "blockelim"
+                , "winnowstr"])
+    , ("asm", [ "deadcodeasm" 
+              , "colorspills"
+              , "betterifyasm"
+              , "blockelimasm"]) ]
 
 showOptimizations :: String
 showOptimizations = unlines $ map showOpt optimizations
