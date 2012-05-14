@@ -331,8 +331,10 @@ checkFieldDecl (FieldDecl pos t vars)
        checkvar (PlainVar pos' tok)
            = addEnvBinding (tokenPos tok) (tokenString tok)
              (getDUType t (tokenPos tok))
-       checkvar (ArrayVar pos' tok1 len)
-           = do when (len <= 0) $ addError $ SemArraySizeError (tokenPos tok1)
+       checkvar (ArrayVar pos' tok1 mlen)
+           = do case mlen of
+                  Nothing -> addError $ SemRangeCheckError (tokenPos tok1)
+                  Just len -> when (len <= 0) $ addError $ SemArraySizeError (tokenPos tok1)
                 addEnvBinding (tokenPos tok1) (tokenString tok1)
                                   (tArray (tokenPos tok1) Nothing
                                               (getDUType t (tokenPos tok1)))
@@ -463,8 +465,9 @@ checkExpr (ExprLiteral pos tok)
         BooleanLiteral -> return $ tBool pos
         IntLiteral -> error "uh oh" -- This shouldn't be used because of ExprIntLiteral
         _ -> error "uh oh"
-checkExpr (ExprIntLiteral pos tok)
-    = return $ tInt pos
+checkExpr (ExprIntLiteral pos mint)
+    = do when (isNothing mint) $ addError $ SemRangeCheckError pos
+         return $ tInt pos
 checkExpr (LoadLoc pos loc)
     = checkLocation loc
 checkExpr (ExprMethod pos call)

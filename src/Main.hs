@@ -217,6 +217,9 @@ showSemError ls ud (SemNotScalarError t pos)
 showSemError ls ud (SemArraySizeError pos)
     = printf "%s\nArray must have positive length.\n"
       (posToLineView ls pos)
+showSemError ls ud (SemRangeCheckError pos)
+    = printf "%s\nOut of bounds for a 64-bit integer.\n"
+      (posToLineView ls pos)
           
 posToLineView :: [String] -> SourcePos -> String
 posToLineView ls pos

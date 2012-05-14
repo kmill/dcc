@@ -153,8 +153,9 @@ fieldDeclToSTerms (FieldDecl pos t decls) = map (fieldVarToSTerm t) decls
 fieldVarToSTerm :: DType -> FieldVar -> (String, SymbolTerm)
 fieldVarToSTerm t (PlainVar pos tok) 
     = (tokenString tok, Term (tokenPos tok) (dTypeToSType t))
-fieldVarToSTerm t (ArrayVar pos tok len) 
+fieldVarToSTerm t (ArrayVar pos tok (Just len))
     = (tokenString tok, Term (tokenPos tok) (SArray (dTypeToSType t) len) )
+fieldVarToSTerm _ _ = error "fieldVarToSTerm: Semantic check didn't find out-of-bounds int"
 
 methodDeclToSTerm :: MethodDecl -> (String, SymbolTerm)
 methodDeclToSTerm (MethodDecl pos t tok args _) 
@@ -205,7 +206,8 @@ instance HybridAST FieldDecl (HFieldDecl Int) Int where
 
 instance HybridAST FieldVar (HFieldVar Int) Int where
     createHybridAST e (PlainVar pos tok) = HPlainVar e pos tok
-    createHybridAST e (ArrayVar pos tok len) = HArrayVar e pos tok len 
+    createHybridAST e (ArrayVar pos tok (Just len)) = HArrayVar e pos tok len 
+    createHybridAST _ _ = error "createHybridAST HFieldVar: out-of-bounds length"
 
 instance HybridAST MethodDecl (HMethodDecl Int) Int where
     createHybridAST e (MethodDecl pos t tok args st) 
@@ -257,7 +259,8 @@ instance HybridAST Expr (HExpr Int) Int where
             BooleanLiteral -> HExprBoolLiteral e pos (str == "true")
             _ -> error "OH NO!"
           where str = tokenString tok
-    createHybridAST e (ExprIntLiteral pos num) = HExprIntLiteral e pos num
+    createHybridAST e (ExprIntLiteral pos (Just num)) = HExprIntLiteral e pos num
+    createHybridAST e (ExprIntLiteral _ _) = error "createHybridAST ExprIntLiteral out of bounds"
     createHybridAST e (LoadLoc pos loc) = HLoadLoc e pos (createHybridAST e loc)
     createHybridAST e (ExprMethod pos call) = HExprMethod e pos (createHybridAST e call) 
                                                 
