@@ -56,7 +56,7 @@ dataflows
       , DFA optTailcall performTailcallPass
       , DFA optDeadCode performDeadCodePass
       , DFA optBlockElim performBlockElimPass
-      , DFA (\opts -> optCommonSubElim opts || optFlat opts) performFlattenPass
+      , DFA optFlat performFlattenPass
       --, DFA optLICM performLICMPass
       , DFA optCommonSubElim performCSEPass
       , DFA optCopyProp performCopyPropPass
@@ -64,12 +64,12 @@ dataflows
       -- doing constprop after flatten/cse does great good! see tests/codegen/fig18.6.dcf
       , DFA optConstProp performConstPropPass
       , DFA optDeadCode performDeadCodePass
-      , DFA (\opts -> optCommonSubElim opts || optFlat opts || optUnflat opts ) performUnflattenPass 
+      , DFA optUnflat performUnflattenPass 
       , DFA optCopyProp performCopyPropPass
       , DFA optConstProp performConstPropPass
       , DFA optDeadCode performDeadCodePass
       , DFA optTailcall performTailcallPass 
-      --, DFA optParallelize performParallelizePass
+      , DFA optParallelize performParallelizePass
       --, DFA optNZP performNZPPass
       , DFA optDeadCode performDeadCodePass 
       , DFA optBlockElim performBlockElimPass 
@@ -82,13 +82,13 @@ dataflows
     where
       optCommonSubElim = hasOptFlag "cse"
       optCopyProp = hasOptFlag "copyprop"
-      optConstProp = hasOptFlag "constprop"
+      optConstProp opts = hasOptFlag "constprop" opts || optParallelize opts
       optCondElim = hasOptFlag "condelim"
       optNZP = hasOptFlag "nzp"
       optDeadCode = hasOptFlag "deadcode"
       optBlockElim = hasOptFlag "blockelim"
-      optFlat = hasOptFlag "flat"
-      optUnflat = hasOptFlag "unflat"
+      optFlat opts = hasOptFlag "flat" opts || optCommonSubElim opts
+      optUnflat opts = hasOptFlag "unflat" opts || optFlat opts
       optTailcall = hasOptFlag "tailcall"
       optLICM = hasOptFlag "licm"
       optParallelize = hasOptFlag "parallelize"
@@ -270,7 +270,7 @@ getVariablesPass = BwdPass
             used IndStore{} f = f
             used (Call _ x _ _) f = S.insert x f
             used (Callout _ x _ _) f = S.insert x f
-            used (Parallel _ ll x _ el) f = S.insert x $ S.union (fact f el) (fact f ll)
+            used (Parallel _ l x _ _) f = S.insert x $ fact f l
             used (Branch _ l) f = fact f l
             used (ThreadReturn _ l) f = fact f l
             used (CondBranch _ _ tl fl) f = fact f tl `S.union` fact f fl
@@ -312,7 +312,7 @@ getLitLabelsPass = BwdPass
             used (IndStore _ e1 e2) f = S.unions [getLabs e1, getLabs e2, f]
             used (Call _ _ _ es) f = f `S.union` S.unions [getLabs e | e <- es]
             used (Callout _ _ _ es) f = f `S.union` S.unions [getLabs e | e <- es]
-            used (Parallel _ ll x _ el) fs = fact fs ll `S.union` fact fs el
+            used (Parallel _ l x _ _) fs = fact fs l
             used (Branch _ l) f = fact f l
             used (ThreadReturn _ l) f = fact f l
             used (CondBranch _ e tl fl) f = getLabs e `S.union` fact f tl `S.union` fact f fl
@@ -331,7 +331,7 @@ removeUnusedStrings :: MidIRRepr -> RM MidIRRepr
 removeUnusedStrings midir@(MidIRRepr fields strs meths graph)
     = do labelBase <- getLitLabels midir
          let mlabels = map methodEntry meths
-             labels = S.unions $ map (\l -> fromJust $ lookupFact l labelBase) mlabels
+             labels = S.unions $ map (\l -> fromMaybe (error "blargh") $ lookupFact l labelBase) mlabels
              strs' = filter (\(s, _, _) -> s `S.member` labels) strs
          return $ midir { midIRStrings = strs' }
 
