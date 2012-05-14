@@ -181,7 +181,7 @@ copyPropPass = FwdPass
                , fp_rewrite = copyProp }
 
 condElimPass :: (CheckpointMonad m, FuelMonad m) => BwdPass m MidIRInst AssignMap 
-condElimPass = BwdPass 
+condElimPass = debugBwdTransfers trace show (const $ const True) $ debugBwdJoins trace (const True) $ BwdPass 
                { bp_lattice = condAssignLattice
                , bp_transfer = condAssignness
                , bp_rewrite = condElim }

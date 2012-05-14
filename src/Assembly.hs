@@ -151,22 +151,26 @@ instance Show Scalar where
     show SFour = "4"
     show SEight = "8"
 
+showDisp :: Imm32 -> String
+showDisp (Imm32 0) = ""
+showDisp d = show d
+
 instance Show MemAddr where
     show (MemAddr Nothing lit Nothing _)
         -- Rip-relative addressing!
         -- http://www.x86-64.org/documentation/assembly.html
-        = show lit ++ "(%rip)"
+        = showDisp lit ++ "(%rip)"
     show (MemAddr (Just base) lit Nothing _)
-        = show lit ++ "(" ++ show base ++ ")"
+        = showDisp lit ++ "(" ++ show base ++ ")"
     show (MemAddr Nothing lit (Just index) SOne)
-        = show lit ++ "(, " ++ show index ++ ")"
+        = showDisp lit ++ "(, " ++ show index ++ ")"
     show (MemAddr Nothing lit (Just index) s)
-        = show lit ++ "(, " ++ show index ++ ", " ++ show s ++ ")"
+        = showDisp lit ++ "(, " ++ show index ++ ", " ++ show s ++ ")"
     show (MemAddr (Just base) lit (Just index) SOne)
-        = show lit ++ "(" ++ show base ++ ", "
+        = showDisp lit ++ "(" ++ show base ++ ", "
           ++ show index ++ ")"
     show (MemAddr (Just base) lit (Just index) s)
-        = show lit ++ "(" ++ show base ++ ", "
+        = showDisp lit ++ "(" ++ show base ++ ", "
           ++ show index ++ ", " ++ show s ++ ")"
 
 instance Show Flag where
@@ -369,8 +373,9 @@ instance Show (Asm e x) where
       where adjSP = case st of
                       0 -> ""
                       _ -> printf "subq $%d, %s" st (show (MReg RSP))
-  show (Leave pos returns st) = printf "addq $%d, %%rsp\n   " st ++ showNullOp "ret" pos
+  show (Leave pos returns st) = fixsp ++ showNullOp "ret" pos
                                 ++ (if not returns then " (void method)" else "")
+      where fixsp = if st == 0 then "" else printf "addq $%d, %%rsp\n   " st
 --    printf "%s# leave  %s"
 --                        adjSP (showPos pos)
 --      where adjSP = case st of

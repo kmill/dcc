@@ -322,10 +322,10 @@ doRegAlloc spillLocs mlabel graph
                     wl <- get
                     if trace' ("endState:\n" ++ displayWL wl) $ not $ null spilledWebs
                        then let (spillLocs', graph') = insertSpills spillLocs pg wl
-                            in trace' ("spilledCode:\n" ++ unlines (graphToAsm False graph' mlabel)) $ return $ doRegAlloc spillLocs' mlabel graph'
+                            in trace' ("spilledCode:\n" ++ unlines (graphToAsm graph' mlabel)) $ return $ doRegAlloc spillLocs' mlabel graph'
                        else let graph' = rewriteGraph pg wl
-                            in trace' ("endCode:\n" ++ unlines (graphToAsm False graph' mlabel)++"\n****\n****\n") $ return graph'
-      in evalState main (trace' ("initCode:\n" ++ unlines (graphToAsm False graph mlabel) ++ "\ninitState:\n" ++ displayWL initState) initState)
+                            in trace' ("endCode:\n" ++ unlines (graphToAsm graph' mlabel)++"\n****\n****\n") $ return graph'
+      in evalState main (trace' ("initCode:\n" ++ unlines (graphToAsm graph mlabel) ++ "\ninitState:\n" ++ displayWL initState) initState)
 
 insertSpills :: SpillLocSupply -> Graph (PNode Asm) C C -> RWorklists 
              -> (SpillLocSupply, Graph Asm C C)

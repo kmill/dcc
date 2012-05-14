@@ -3,6 +3,7 @@
 -- | Bakes spills into being moves
 module RegAlloc.BakeSpills(performBakeSpills) where
 
+import CLI
 import qualified Data.Set as S
 import Data.Int
 import Data.Maybe
@@ -14,24 +15,24 @@ import Assembly
 import Compiler.Hoopl
 
 performBakeSpills :: (CheckpointMonad m, FuelMonad m)
-                     => LowIRRepr -> m LowIRRepr
-performBakeSpills asm
-    = do graph' <- collectSpills mlabels graph
+                     => CompilerOpts -> LowIRRepr -> m LowIRRepr
+performBakeSpills opts asm
+    = do graph' <- collectSpills opts mlabels graph
          return $ asm { lowIRGraph = graph' }
       where graph = lowIRGraph asm
             mlabels = (map I.methodEntry $ lowIRMethods asm)
 
 -- | Collects and rewrites the spills in the graph to moves.
 collectSpills :: (CheckpointMonad m, FuelMonad m)
-                 => [Label] -> Graph Asm C C -> m (Graph Asm C C)
-collectSpills mlabels graph
+                 => CompilerOpts -> [Label] -> Graph Asm C C -> m (Graph Asm C C)
+collectSpills opts mlabels graph
     = do (_, f, _) <- analyzeAndRewriteBwd
                       collectSpillPass
                       (JustC mlabels)
                       graph
                       mapEmpty
          (g, _, _) <- analyzeAndRewriteFwd
-                      (rewriteSpillPass f)
+                      (rewriteSpillPass opts f)
                       (JustC mlabels)
                       graph
                       f
@@ -65,11 +66,12 @@ collectSpillPass = BwdPass
 
 -- | Rewrites the spills to moves.
 rewriteSpillPass :: (CheckpointMonad m, FuelMonad m) =>
-                    FactBase (S.Set SpillLoc) -> FwdPass m Asm (S.Set SpillLoc)
-rewriteSpillPass fb = FwdPass 
-                      { fp_lattice = rwLattice
-                      , fp_transfer = sTransfer
-                      , fp_rewrite = rewriteSpill }
+                    CompilerOpts -> FactBase (S.Set SpillLoc)
+                    -> FwdPass m Asm (S.Set SpillLoc)
+rewriteSpillPass opts fb = FwdPass 
+                           { fp_lattice = rwLattice
+                           , fp_transfer = sTransfer
+                           , fp_rewrite = rewriteSpill }
     where rwLattice :: DataflowLattice (S.Set SpillLoc)
           rwLattice = setLattice
           
@@ -103,7 +105,8 @@ rewriteSpillPass fb = FwdPass
 
                 d _ f = return Nothing
                 
-                countSpillID f = toNearestSafeSP $ fromIntegral $ 8 * (length $ normalSpills f)
+                countSpillID f = toNearestSafeSP $ fromIntegral $
+                                 8 * (length $ normalSpills f)
                 normalSpills f = S.toList $ S.filter (\s -> case s of
                                                               SpillArg _ -> False
                                                               _ -> True) f
@@ -117,5 +120,7 @@ rewriteSpillPass fb = FwdPass
                              Nothing SOne
                 
                 toNearestSafeSP :: Int32 -> Int32
-                toNearestSafeSP i = i + ((i+8) `rem` (8*2))
+                toNearestSafeSP i = if macMode opts 
+                                    then i + ((i+8) `rem` (8*2))
+                                    else i
 
