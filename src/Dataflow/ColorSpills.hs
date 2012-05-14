@@ -29,7 +29,7 @@ performColorSpills asm
                        (JustC mlabels)
                        pg
                        mapEmpty
-       let spillMoves = M.unions $ map (\l -> fst $ fromJust $ lookupFact l smvs) mlabels
+       let spillMoves = M.unions $ map (\l -> fst $ fromMaybe (error "ColorSpills") $ lookupFact l smvs) mlabels
            spillInterf = makeInterfGraph mlabels pg spillWebs spillMoves
            colors = combineSpills spillInterf spillMoves
            graph' = mapGraph (renameSpills colors spillInterf) pg

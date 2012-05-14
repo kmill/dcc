@@ -225,7 +225,7 @@ statementToMidIR fname env c b (HExprSt _ expr)
 statementToMidIR fname env c b (HAssignSt senv pos loc op expr)
     = case loc of
         HPlainLocation _ pos tok ->
-            let (isfield, _, var') = fromJust $ lookup (tokenString tok) env -- destination var
+            let (isfield, _, var') = fromMaybe (error "MidIR") $ lookup (tokenString tok) env -- destination var
                 loc' = HLoadLoc senv pos loc -- load destination var
             in do (gex, ex) <- case op of
                                  A.Assign -> expressionToMidIR env expr
@@ -234,11 +234,11 @@ statementToMidIR fname env c b (HAssignSt senv pos loc op expr)
                   return $ gex <*> makeStore pos isfield var' ex
         HArrayLocation _ pos tok iexpr ->
             let var = tokenString tok -- array var name (for error message)
-                (_, _, var') = fromJust $ lookup var env -- destination array var
+                (_, _, var') = fromMaybe (error "MidIR") $ lookup var env -- destination array var
                                                          -- (and definitely a field)
                 -- | it's convenient to use envLookup here since it
                 -- keeps track of the length of the arrays!
-                (Term _ (SArray _ len)) = fromJust $ envLookup var senv
+                (Term _ (SArray _ len)) = fromMaybe (error "MidIR") $ envLookup var senv
                 -- | gets the pointer to var'[i']
                 arrptr i' = (BinOp pos OpAdd
                                        (varToLabel pos var')
@@ -344,7 +344,7 @@ expressionToMidIR env (HExprStringLiteral _ pos _)
 expressionToMidIR env (HLoadLoc senv pos loc)
     = case loc of
         HPlainLocation _ pos tok ->
-            let (isfield, isarray, var') = fromJust $ lookup (tokenString tok) env
+            let (isfield, isarray, var') = fromMaybe (error "MidIR") $ lookup (tokenString tok) env
             in return (GNil, if isarray
                              then varToLabel pos var'
                              else if isfield
@@ -352,11 +352,11 @@ expressionToMidIR env (HLoadLoc senv pos loc)
                                   else Var pos var')
         HArrayLocation _ pos tok iexpr ->
             let var = tokenString tok -- array var name (for error message)
-                (_, _, var') = fromJust $ lookup var env -- destination array var
+                (_, _, var') = fromMaybe (error "MidIR") $ lookup var env -- destination array var
                                                          -- (and definitely a field)
                 -- | it's convenient to use envLookup here since it
                 -- keeps track of the length of the arrays!
-                (Term _ (SArray _ len)) = fromJust $ envLookup var senv
+                (Term _ (SArray _ len)) = fromMaybe (error "MidIR") $ envLookup var senv
                 -- | gets the pointer to var'[i']
                 arrptr i' = (BinOp pos OpAdd
                                        (varToLabel pos var')

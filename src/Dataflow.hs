@@ -60,7 +60,7 @@ dataflows
       --, DFA optLICM performLICMPass
       , DFA optCommonSubElim performCSEPass
       , DFA optCopyProp performCopyPropPass
-      , DFA optCondElim performCondElimPass
+      --, DFA optCondElim performCondElimPass
       -- doing constprop after flatten/cse does great good! see tests/codegen/fig18.6.dcf
       , DFA optConstProp performConstPropPass
       , DFA optDeadCode performDeadCodePass

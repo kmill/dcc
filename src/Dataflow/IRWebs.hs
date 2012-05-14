@@ -158,7 +158,7 @@ duPass = BwdPass
 
 collectDU :: [Label] -> Graph (PNode MidIRInst) C C -> M.Map Label (S.Set DU)
 collectDU mlabels graph
-    = M.fromList $ map (\l -> (l, getDUs $ fromJust $ lookupFact l f)) mlabels
+    = M.fromList $ map (\l -> (l, getDUs $ fromMaybe (error "IRWebs") $ lookupFact l f)) mlabels
       where f :: FactBase DUBuildFact
             f = runGM $ evalStupidFuelMonad getf 2222222
             getf :: RM (FactBase DUBuildFact)

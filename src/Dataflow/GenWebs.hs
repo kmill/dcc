@@ -169,7 +169,7 @@ duPass aliveDeadFn = BwdPass
 collectDU :: forall a n. (Show a, Ord a, NonLocal n) =>
              AliveDeadFun n a -> [Label] -> Graph (PNode n) C C -> M.Map Label (S.Set (DU a))
 collectDU aliveDeadFn mlabels graph
-    = M.fromList $ map (\l -> (l, getDUs $ fromJust $ lookupFact l f)) mlabels
+    = M.fromList $ map (\l -> (l, getDUs $ fromMaybe (error "GenWebs 1") $ lookupFact l f)) mlabels
       where f :: FactBase (DUBuildFact a)
             f = runGM $ evalStupidFuelMonad getf maxBound
             getf :: RM (FactBase (DUBuildFact a))
@@ -286,7 +286,7 @@ buildAdjLists :: forall n. NonLocal n =>
               -> M.Map NodePtr (S.Set WebID, S.Set WebID) -- ^ move map
               -> M.Map Label (M.Map WebID (S.Set WebID))
 buildAdjLists mlabels graph usedef moves
-    = M.fromList $ map (\l -> (l, snd $ fromJust $ lookupFact l facts)) mlabels
+    = M.fromList $ map (\l -> (l, snd $ fromMaybe (error "GenWebs 2") $ lookupFact l facts)) mlabels
     where alLattice :: DataflowLattice AdjListFact
           alLattice = DataflowLattice
                       { fact_name = "alLattice"
