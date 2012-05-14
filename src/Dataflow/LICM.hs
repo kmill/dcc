@@ -95,27 +95,27 @@ isIndStore :: (Ord v) => SInst v -> Bool
 isIndStore SIndStore{} = True
 isIndStore _ = False
 
-motionSetTransfer :: S.Set Loop -> BwdTransfer MidIRInst MotionSet
-motionSetTransfer loops = mkBTransfer3 btCO btOO btOC
+motionSetTransfer :: BwdTransfer MidIRInst MotionSet
+motionSetTransfer = mkBTransfer3 btCO btOO btOC
     where btCO :: MidIRInst C O -> MotionSet -> MotionSet
-          btCO i@(Enter _ _ args) f = addDefinitions args f
+          btCO i@(Enter _ _ args) f = invalidateList args f
           btCO _ f = f
 
           btOO :: MidIRInst O O -> MotionSet -> MotionSet
           btOO i@(Store _ var expr) f
-             = addDefinition var (S.insert (storeInst i) f)
-             --  = (\res -> trace ("store " ++ (show i) ++ " with lattice " ++ (show f) ++ "\n" ++ (show res) ++ "\n") res) $ addDefinition var (S.insert (storeInst i) f)
+             = invalidate var (S.insert (storeInst i) f)
+             --  = (\res -> trace ("store " ++ (show i) ++ " with lattice " ++ (show f) ++ "\n" ++ (show res) ++ "\n") res) $ invalidate var (S.insert (storeInst i) f)
           btOO i@(DivStore _ var _ expr1 expr2) f
-              = addDefinition var (S.insert (storeInst i) f)
+              = invalidate var (S.insert (storeInst i) f)
           btOO i@(IndStore _ _ _) f = S.insert (storeInst i) f
-          btOO (Call _ var _ _) f = addDefinition var f
-          btOO (Callout _ var _ _) f = addDefinition var f
+          btOO (Call _ var _ _) f = invalidate var f
+          btOO (Callout _ var _ _) f = invalidate var f
 
           btOC :: MidIRInst O C -> FactBase MotionSet -> MotionSet
           btOC _ = S.unions . mapElems
 
-          addDefinition :: VarName -> S.Set MSInst -> S.Set MSInst
-          addDefinition var fact = S.filter (not . dependsOn var) fact'
+          invalidate :: VarName -> S.Set MSInst -> S.Set MSInst
+          invalidate var fact = S.filter (not . dependsOn var) fact'
               where fact'
                         | killIndStores = S.filter (not . isIndStore) fact
                         | otherwise = fact
@@ -124,13 +124,15 @@ motionSetTransfer loops = mkBTransfer3 btCO btOO btOC
                     dependsOn :: VarName -> MSInst -> Bool
                     dependsOn var = S.member var . instDepend
 
-          addDefinitions :: [VarName] -> S.Set MSInst -> MotionSet
-          addDefinitions vars initial = foldr addDefinition initial vars
+          invalidateList :: [VarName] -> S.Set MSInst -> MotionSet
+          invalidateList vars initial = foldr invalidate initial vars
 
-motionTransfer :: S.Set Loop -> BwdTransfer MidIRInst MotionFact
-motionTransfer loops = pairBwdTransfer (motionSetTransfer loops) liveness
+motionTransfer :: BwdTransfer MidIRInst MotionFact
+motionTransfer = pairBwdTransfer motionSetTransfer liveness
 
-motionRewrite :: forall m . FuelMonad m => S.Set Loop -> BwdRewrite m MidIRInst MotionFact
+motionRewrite :: forall m . FuelMonad m => BwdRewrite m MidIRInst MotionFact
+motionRewrite = noBwdRewrite
+{-
 motionRewrite loops = trace (show loops) $ mkBRewrite3 idRewr idRewr r
     where idRewr :: MidIRInst e x -> Fact x MotionFact -> m (Maybe (Graph MidIRInst e x))
           idRewr i _ = return Nothing
@@ -145,3 +147,7 @@ motionRewrite loops = trace (show loops) $ mkBRewrite3 idRewr idRewr r
           r i _ = return Nothing
           getInstrs :: FactBase MotionFact -> [MidIRInst O O]
           getInstrs = catMaybes . map unStoreInst . S.toList . S.unions . mapElems . mapMap fst
+-}
+
+performLICMPass :: S.Set Loop -> MidIRRepr -> RM MidIRRepr
+performLICMPass = undefined

@@ -51,17 +51,17 @@ individualAnalysis opts (DFA optCheck perform) midir
 
 dataflows :: [DFA]
 dataflows
-    = [ DFA optConstProp performConstPropPass
+    = [ --DFA optConstProp performConstPropPass
       -- , DFA optNZP performNZPPass
-      , DFA optTailcall performTailcallPass
+      DFA optTailcall performTailcallPass
       , DFA optDeadCode performDeadCodePass
       , DFA optBlockElim performBlockElimPass
       , DFA (\opts -> optCommonSubElim opts || optFlat opts) performFlattenPass
-      --, DFA optLICM performLICMPass
+      , DFA optLICM performLICMPass
       , DFA optCommonSubElim performCSEPass
       , DFA optCopyProp performCopyPropPass
       -- doing constprop after flatten/cse does great good! see tests/codegen/fig18.6.dcf
-      , DFA optConstProp performConstPropPass
+      --, DFA optConstProp performConstPropPass
       , DFA optDeadCode performDeadCodePass
       , DFA (\opts -> optCommonSubElim opts || optFlat opts || optUnflat opts ) performUnflattenPass 
       , DFA optCopyProp performCopyPropPass
@@ -114,8 +114,18 @@ performCSEPass midir
          let nonTemps' = S.unions $ mapElems nonTemps
          performFwdPass (csePass nonTemps') midir emptyExprFact
 
-performLICMPass midir = performBwdPass (licmPass loops) midir emptyMotionFact
-    where loops = midirLoops midir
+performLICMPass :: MidIRRepr -> RM MidIRRepr
+performLICMPass midir
+    = do
+        (_, factBase, _) <- analyzeAndRewriteBwd
+                                 (licmPass loops)
+                                 (JustC mlabels)
+                                 graph
+                                 (mapFromList (map (\l -> (l, emptyMotionFact) ) mlabels))
+        return $ midir { midIRGraph = doLICM loops factBase graph }
+    where graph = midIRGraph midir
+          mlabels = (map methodEntry $ midIRMethods midir)
+          loops = midirLoops midir
 
 performUnflattenPass :: MidIRRepr -> RM MidIRRepr 
 performUnflattenPass midir
@@ -137,7 +147,7 @@ testDominatorPass midir
                              (mapFromList (map (\l -> (l, fact_bot dominatorLattice) ) mlabels))
          let loops = findLoops factBase graph mlabels
              parallelLoops = analyzeParallelizationPass midir 
-         return $ trace (show parallelLoops) midir 
+         return midir 
     where graph = midIRGraph midir
           mlabels = (map methodEntry $ midIRMethods midir)
 
@@ -196,11 +206,11 @@ csePass nonTemps = FwdPass
                    , fp_rewrite = cseRewrite nonTemps }
 
 licmPass :: (CheckpointMonad m, FuelMonad m, UniqueNameMonad m)
-            => S.Set Loop -> BwdPass m MidIRInst MotionFact
-licmPass loops = trace (show loops) $ BwdPass
+            => BwdPass m MidIRInst MotionFact
+licmPass loops = BwdPass
            { bp_lattice = motionLattice
-           , bp_transfer = motionTransfer loops
-           , bp_rewrite = motionRewrite loops }
+           , bp_transfer = motionTransfer
+           , bp_rewrite = motionRewrite }
 
 dominatorPass :: (CheckpointMonad m, FuelMonad m, UniqueNameMonad m)
                  => FwdPass m MidIRInst DominFact
