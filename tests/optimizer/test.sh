@@ -33,7 +33,7 @@ runcompiler_opt() {
 }
 
 runcompiler_unopt() {
-    $base/../../dcc -r -target codegen -opt none -o $2 $1
+    $base/../../dcc -target codegen -opt none -o $2 $1
 }
 
 
