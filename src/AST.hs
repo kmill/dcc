@@ -49,8 +49,8 @@ noPosition = newPos "<none>" (-1) (-1)
 
 data DProgram = DProgram !SourcePos [FieldDecl] [MethodDecl]
 data FieldDecl = FieldDecl !SourcePos DType [FieldVar]
-data FieldVar = PlainVar SourcePos Token
-              | ArrayVar SourcePos Token Int64
+data FieldVar = PlainVar !SourcePos Token
+              | ArrayVar !SourcePos Token (Maybe Int64)
 data MethodDecl = MethodDecl !SourcePos MethodType Token [MethodArg] Statement
 data MethodType = MethodReturns DType
                 | MethodVoid
@@ -77,7 +77,7 @@ data CalloutArg = CArgExpr Expr
 data Expr = BinaryOp !SourcePos Expr Token Expr
           | UnaryOp !SourcePos Token Expr
           | ExprLiteral !SourcePos Token
-          | ExprIntLiteral !SourcePos Int64
+          | ExprIntLiteral !SourcePos (Maybe Int64)
           | LoadLoc !SourcePos DLocation
           | ExprMethod !SourcePos MethodCall
 
@@ -255,7 +255,9 @@ instance PP Expr where
         = (text $ tokenString t) <> (pp e)
     pp (ExprLiteral _ t)
        = text $ tokenString t
-    pp (ExprIntLiteral _ i)
+    pp (ExprIntLiteral _ Nothing)
+        = text "<INT_OUT_OF_BOUNDS>"
+    pp (ExprIntLiteral _ (Just i))
        = text $ show i
     pp (LoadLoc _ loc) = pp loc
     pp (ExprMethod _ mc) = pp mc
