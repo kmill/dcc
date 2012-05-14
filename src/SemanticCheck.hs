@@ -72,6 +72,14 @@ deriveEnv e = LexicalEnv { lexicalBindings=Map.empty
                          , methReturnType=methReturnType e
                          , isInsideLoop=isInsideLoop e}
 
+-- | Create a sub-environment of a lexical environment.
+deriveEnv' :: Maybe DUTerm -> LexicalEnv -> LexicalEnv
+deriveEnv' ret e = LexicalEnv { lexicalBindings=Map.empty
+                              , parentEnv=Just e
+                              , methReturnType=ret
+                              , isInsideLoop=isInsideLoop e}
+
+
 -- | Creates a sub-environment while extending it with multiple bindings.
 extendEnv :: [(String, DUTerm)] -> Maybe DUTerm -> LexicalEnv -> LexicalEnv
 extendEnv bindings ret e
@@ -343,17 +351,18 @@ getMethodType :: MethodType -> SourcePos -> DUTerm
 getMethodType (MethodReturns t) = getDUType t
 getMethodType MethodVoid = tVoid
 
-getMArg :: MethodArg -> (String, DUTerm)
-getMArg (MethodArg t tok) = (tokenString tok, getDUType t (tokenPos tok))
-
 checkMethodDecl :: MethodDecl -> SemChecker ()
 checkMethodDecl (MethodDecl pos t tok args st)
     = do addEnvBinding pos name ftyp
-         local (extendEnv targs (Just retType)) (checkStatement st)
+         local (deriveEnv' (Just retType)) $ do 
+           mapM_ handleArg args
+           checkStatement st
       where name = tokenString tok
-            ftyp = tFunc (tokenPos tok) retType [atyp | (_,atyp) <- targs]
+            ftyp = tFunc (tokenPos tok) retType (map argType args)
             retType = getMethodType t pos
-            targs = map getMArg args
+            handleArg arg@(MethodArg t tok) = addEnvBinding (tokenPos tok) (tokenString tok)
+                                              (argType arg)
+            argType (MethodArg t tok) = getDUType t (tokenPos tok)
 
 checkStatement :: Statement -> SemChecker ()
 checkStatement (Block pos vdecls statements)
