@@ -65,6 +65,14 @@ exprToFloatExpr (BinOp _ op expr1 expr2)
              return $ FBinOp op expr1' expr2'
 exprToFloatExpr _ = Nothing
 
+floorFloatExpr :: FloatExpr -> FloatExpr 
+floorFloatExpr expr = case floored of 
+                        Nothing -> expr 
+                        Just expr' -> floorFloatExpr expr'
+    where floored = mapFEE floorIt (makeLinear expr)
+          floorIt (FLit d) = Just $ ILit $ floor d
+          floorIt _ = Nothing
+
 fold_FEE :: (a -> FloatExpr -> a) -> a -> FloatExpr -> a 
 fold_FEE f z e@(ILit _) = f z e 
 fold_FEE f z e@(FLit _) = f z e 
@@ -86,6 +94,39 @@ mapFEE f e@(FBinOp op e1 e2)
         (Nothing, Nothing) -> f e 
         (e1', e2') -> Just $ fromMaybe e' (f e') 
             where e' = FBinOp op (fromMaybe e1 e1') (fromMaybe e2 e2')
+
+makeLinear :: FloatExpr -> FloatExpr 
+makeLinear expr = case lineared of 
+                    Nothing -> expr 
+                    Just expr' -> makeLinear expr'
+    where lineared = mapFEE linearize expr
+
+linearize :: FloatExpr -> Maybe FloatExpr
+-- We're now in the land of floats 
+linearize (ILit i) = Just $ FLit $ fromIntegral i
+-- Coefficients should be distributed
+linearize (FBinOp OpMul expr (FBinOp op expr1 expr2))
+    | op == OpAdd || op == OpSub 
+        = Just $ (FBinOp op (FBinOp OpMul expr expr1) (FBinOp OpMul expr expr2))
+linearize (FBinOp OpMul (FBinOp op expr1 expr2) expr)
+    | op == OpAdd || op == OpSub 
+        = Just $ (FBinOp op (FBinOp OpMul expr expr1) (FBinOp OpMul expr expr2))
+-- Coefficients should be combined if they're multiplied
+linearize (FBinOp OpMul (FLit i1) (FLit i2)) = Just (FLit (i1*i2))
+-- Or added or subtracted 
+linearize (FBinOp OpMul expr (FLit i)) = Just $ FBinOp OpMul (FLit i) expr
+linearize (FBinOp OpMul (FLit i1) (FBinOp OpMul (FLit i2) expr)) 
+    = Just (FBinOp OpMul (FLit (i1*i2)) expr)
+linearize (FBinOp OpSub expr1 expr2) = Just (FBinOp OpAdd expr1 (FUnOp OpNeg expr2))
+linearize (FUnOp OpNeg (FLit i)) = Just (FLit (-i))
+linearize (FUnOp OpNeg (FBinOp op expr1 expr2))
+    | op == OpAdd || op == OpSub 
+        = Just $ (FBinOp op (FUnOp OpNeg expr1) (FUnOp OpNeg expr2))
+linearize (FUnOp OpNeg (FBinOp OpMul (FLit i) expr) ) 
+    =  Just $ FBinOp OpMul (FLit (-i)) expr
+linearize (FUnOp OpNeg (FUnOp OpNeg expr)) = Just expr
+linearize (FBinOp OpAdd (FLit i1) (FLit i2)) = Just (FLit (i1+i2))
+linearize _ = Nothing
 
 -- required for using Int64s as coefficients in a LP 
 instance Group Int64 where 
@@ -410,22 +451,74 @@ findLoopVariables graph headerDomin headerBlock loopbackBlock
           findIncValue v (BinOp _ OpAdd (Lit _ i) (Var _ x)) =  Just i 
           findIncValue v _ = Nothing
 
-      
+calculateLoopCosts :: NonLocal n => Graph n C C -> S.Set BasicLoop -> S.Set Loop -> Map.Map Loop Int
+calculateLoopCosts graph basicLoops loops = concreteLoopCosts
+    where headerToBasicLoop = Map.fromList [(h, l) | l@(h, _, _) <- S.toList basicLoops]
+          headerToConcreteLoop = Map.fromList [(loop_header l, l) | l <- S.toList loops] 
+
+          concreteLoopCosts = Map.fromList [(l, headerToLoopCost Map.! loop_header l) | l <- S.toList loops]
+          headerToLoopCost = Map.fromList [(h, findLoopCost l) | l@(h, _, _) <- S.toList basicLoops]
+          
+
+          looseChildren :: Map.Map BasicLoop (S.Set BasicLoop)
+          looseChildren = Map.fromList [(l, findLoopChildren l) | l <- S.toList basicLoops]
+
+          findLoopChildren :: BasicLoop -> S.Set BasicLoop
+          findLoopChildren (ph, _, pb) = S.fromList [l | l <- S.toList basicLoops, isLoopChild l] 
+              where isLoopChild (ch, _, cb)
+                        = S.size cb < S.size pb && S.member ch pb 
+
+          strictChildren :: Map.Map BasicLoop (S.Set BasicLoop) 
+          strictChildren = Map.fromList [(l, findStrictChildren l) | l <- S.toList basicLoops]
+          
+          findStrictChildren :: BasicLoop -> S.Set BasicLoop 
+          findStrictChildren parent = S.fromList [l | l <- S.toList children, isStrictChild l] 
+              where children = fromMaybe S.empty $ Map.lookup parent looseChildren 
+                    grandChildren = [fromMaybe S.empty $ Map.lookup c looseChildren | c <- S.toList children]
+                    isStrictChild child = all (S.notMember child) grandChildren
+
+          findLoopCost :: BasicLoop -> Int 
+          findLoopCost loop@(h, _, body) = iterations * (childCosts + blockCosts)
+              where iterations = findNumIterations loop
+                    childCosts = sum [findLoopCost c | c <- S.toList myStrictChilds]
+                    myStrictChilds = fromMaybe S.empty $ Map.lookup loop strictChildren
+                    myLooseChilds = fromMaybe S.empty $ Map.lookup loop looseChildren
+                    allChildBlocks = S.unions $ S.toList $ S.map (\(_, _, b) -> b) myLooseChilds
+                    blockCosts = sum [findBlockCost b | b <- S.toList body]
+                    findBlockCost bLabel
+                        | S.member bLabel allChildBlocks = 0 
+                        | otherwise = let BodyBlock block = lookupBlock graph bLabel
+                                          (_, inner, _) = blockToNodeList block
+                                          in length inner
+
+          defaultIterations = 50
+          findNumIterations :: BasicLoop -> Int
+          findNumIterations (h, _, b) 
+              = case Map.lookup h headerToConcreteLoop of 
+                  Nothing -> defaultIterations
+                  Just loop -> let (_, _, end, _) = loop_base loop 
+                               in case floorFloatExpr end of 
+                                    ILit i
+                                          | (fromIntegral i) > defaultIterations -> fromIntegral i
+                                    _ -> defaultIterations
+                    
 
 analyzeParallelizationPass :: MidIRRepr -> S.Set Loop 
-analyzeParallelizationPass midir = parallelLoops
+analyzeParallelizationPass midir = trace (show loopCosts) parallelLoops
     where basicLoops = findBasicLoops domins graph mlabels
           -- Let's see if we can identify induction vars
           loops = S.fromList $ catMaybes [insertIndVars l | l <- S.toList basicLoops]
+          loopCosts = calculateLoopCosts graph basicLoops loops
           insertIndVars :: BasicLoop -> Maybe Loop 
           insertIndVars b@(header, back, body) 
               = do (lv, bv, ivs) <- findInductionVariables pGraph mlabels domins webs b 
                    return $ Loop header body ivs lv bv
-
+                          
           
           -- First pass, removes obviously non-parallel loops (such as loops that contain returns or callouts)
           noBreaksRetsCallsLoops = S.filter (\l -> noCalls l && noRets l && noBreaks l) loops 
           -- Second pass, removes loops that write to values that aren't loop invariant (i.e. for loops calculating a sum)
+          -- Actually, loops calculating a sum might still be parallelizable by induction variable identification. 
           noVariantWritesLoops = S.filter (\l -> noVariantWrites (loopVarInfos Map.! l) l) noBreaksRetsCallsLoops
           -- Third pass, removes all loops with cross-loop dependencies. This is the big one that involves solving some 
           -- equations. This should effectively return all of the parallelizable loops.
@@ -695,7 +788,7 @@ analyzeParallelizationPass midir = parallelLoops
                                            case hasNonLoopVariables newExpr of 
                                              True -> do newExpr <- tryRemoveNonLoops newExpr
                                                         linConstFloatExpr loop newExpr
-                                             False -> do newExpr <- makeLinear newExpr 
+                                             False -> do newExpr <- return $ makeLinear newExpr 
                                                          rejectNonLinear newExpr
                                                     
               where v@(variants, invariants) = loopVarInfos Map.! loop 
@@ -729,41 +822,6 @@ analyzeParallelizationPass midir = parallelLoops
                     isNonLinear b (FLit _) = b || False 
                     isNonLinear b (FVar _) = b || False 
                     isNonLinear b _ = True 
-
-                    makeLinear :: FloatExpr -> Maybe FloatExpr 
-                    makeLinear expr = case lineared of 
-                                        Nothing -> Just expr 
-                                        Just expr' -> makeLinear expr'
-                        where lineared = mapFEE linearize expr
-
-                    linearize :: FloatExpr -> Maybe FloatExpr
-                    -- We're now in the land of floats 
-                    linearize (ILit i) = Just $ FLit $ fromIntegral i
-                    -- Coefficients should be distributed
-                    linearize (FBinOp OpMul expr (FBinOp op expr1 expr2))
-                        | op == OpAdd || op == OpSub 
-                            = Just $ (FBinOp op (FBinOp OpMul expr expr1) (FBinOp OpMul expr expr2))
-                    linearize (FBinOp OpMul (FBinOp op expr1 expr2) expr)
-                        | op == OpAdd || op == OpSub 
-                            = Just $ (FBinOp op (FBinOp OpMul expr expr1) (FBinOp OpMul expr expr2))
-                    -- Coefficients should be combined if they're multiplied
-                    linearize (FBinOp OpMul (FLit i1) (FLit i2)) = Just (FLit (i1*i2))
-                    -- Or added or subtracted 
-                    linearize (FBinOp OpMul expr (FLit i)) = Just $ FBinOp OpMul (FLit i) expr
-                    linearize (FBinOp OpMul (FLit i1) (FBinOp OpMul (FLit i2) expr)) 
-                        = Just (FBinOp OpMul (FLit (i1*i2)) expr)
-                    linearize (FBinOp OpSub expr1 expr2) = Just (FBinOp OpAdd expr1 (FUnOp OpNeg expr2))
-                    linearize (FUnOp OpNeg (FLit i)) = Just (FLit (-i))
-                    linearize (FUnOp OpNeg (FBinOp op expr1 expr2))
-                        | op == OpAdd || op == OpSub 
-                            = Just $ (FBinOp op (FUnOp OpNeg expr1) (FUnOp OpNeg expr2))
-                    linearize (FUnOp OpNeg (FBinOp OpMul (FLit i) expr) ) 
-                        =  Just $ FBinOp OpMul (FLit (-i)) expr
-                    linearize (FUnOp OpNeg (FUnOp OpNeg expr)) = Just expr
-                    linearize (FBinOp OpAdd (FLit i1) (FLit i2)) = Just (FLit (i1+i2))
-                    linearize _ = Nothing
-                              
-
 
                     hasNonLoopVariables :: FloatExpr -> Bool 
                     hasNonLoopVariables expr = fold_FEE isNonLoopVar False expr 
