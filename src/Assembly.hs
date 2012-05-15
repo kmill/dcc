@@ -17,6 +17,7 @@ import Debug.Trace
 data LowIRRepr = LowIRRepr
     { lowIRFields :: [LowIRField]
     , lowIRStrings :: [(String, SourcePos, String)]
+    , lowIRIPCSize :: Int
     , lowIRMethods :: [I.Method]
     , lowIRGraph :: Graph Asm C C }
 data LowIRField = LowIRField SourcePos String Int64
@@ -78,12 +79,14 @@ instance Show OperRM where
 data SpillLoc = SpillID Int
               | SpillSID String
               | SpillArg Int
+              | SpillIPC Int
                 deriving (Eq, Ord, Show)
 
 fixedSpill :: SpillLoc -> Bool
 fixedSpill (SpillArg _) = True
 fixedSpill (SpillID _) = False
 fixedSpill (SpillSID _) = False
+fixedSpill (SpillIPC _) = True
 
 type SpillLocSupply = [SpillLoc]
 
@@ -368,8 +371,9 @@ instance Show (Asm e x) where
   show (CMovRMtoR pos flag a b) = showBinOp opcode pos a b
             where opcode = "cmov" ++ show flag ++ "q"
 
-  show (Enter pos lbl nargs st) = printf "%s: %s  # %d args  %s"
-                                  (show lbl) adjSP nargs (showPos pos)
+  show (Enter pos lbl nargs st)
+      = printf "%s: %s  # %d args  %s"
+        (show lbl) adjSP nargs (showPos pos)
       where adjSP = case st of
                       0 -> ""
                       _ -> printf "subq $%d, %s" st (show (MReg RSP))
