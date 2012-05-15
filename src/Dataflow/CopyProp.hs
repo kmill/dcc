@@ -42,7 +42,7 @@ varIsCopy = mkFTransfer ft
       ft (Call _ x _ _) f = removeBindingsTo x $ Map.insert x Top f 
       ft (Callout _ x _ _ ) f = removeBindingsTo x $ Map.insert x Top f 
       ft (Parallel _ ll var _ el) f
-          = mkFactBase copyLattice mkFactBase 
+          = mkFactBase copyLattice 
               [ (ll, removeBindingsTo var $ Map.insert var Top f)
               , (el, f) ]
       ft (Branch _ l) f = mapSingleton l f 

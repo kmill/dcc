@@ -65,9 +65,8 @@ liveness = mkBTransfer3 liveCO liveOO liveOC
           liveOC inst@(CondBranch _ _ tl fl) fb = S.union (f S.\\ (S.fromList dead)) $ S.fromList alive 
               where f = fact fb tl `S.union` fact fb fl
                     (alive, dead) = getMidAliveDead inst
-          liveOC inst@(Parallel _ ll _ _ el) fb = S.union ((S.delete f var) S.\\ (S.fromList dead)) $ S.fromList alive 
-              where f = fact fb ll `S.union` fact fb el
-                    (alive, dead) = getMidAliveDead inst
+          liveOC inst@(Parallel _ ll var _ el) fb
+              = S.delete var (fact fb ll) `S.union` fact fb el
           liveOC inst@(Return _ _ _) _ = S.fromList alive 
               where (alive, _) = getMidAliveDead inst 
           liveOC inst@(Fail _) _ = S.fromList alive 

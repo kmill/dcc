@@ -25,7 +25,7 @@ type GM = I.GM
 toAss :: CompilerOpts -> I.MidIRRepr -> GM LowIRRepr
 toAss opts (I.MidIRRepr fields strs meths graph)
     = do graph' <- mgraph'
-         return $ LowIRRepr (map toLowField fields) strs meths graph'
+         return $ LowIRRepr (map toLowField fields) strs 0 meths graph'
     where GMany _ body _ = graph
           mgraph' = do graphs' <- mapM f (mapElems body)
                        return $ foldl (|*><*|) emptyClosedGraph graphs'
@@ -104,7 +104,7 @@ instToAsm :: forall e x. I.MidIRInst e x -> CGM (Graph A.Asm e x)
 instToAsm (I.Label pos l) = return $ mkFirst $ A.Label pos l
 instToAsm (I.PostEnter pos l) = return $ mkFirst $ A.Label pos l
 instToAsm (I.Enter pos l args)
-    = do return $ mkFirst (A.Enter pos l (length args) 0 0)
+    = do return $ mkFirst (A.Enter pos l (length args) 0)
 --                    <*> (genPushRegs pos A.calleeSaved)
                     <*> (genLoadArgs pos args)
 instToAsm (I.Store pos d sexp)
