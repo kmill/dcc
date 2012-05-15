@@ -28,6 +28,59 @@ import qualified Data.Set as S
 import qualified Data.Map as Map
 
 
+-- To be completely general for dependency analysis, we put expressions into 
+-- this form that can potentially include floating point numbers. 
+-- This allows us to more generally solve looping equations.
+data FloatExpr = ILit Int64
+               | FLit Double 
+               | FVar VarName 
+               | FUnOp UnOp FloatExpr 
+               | FBinOp BinOp FloatExpr FloatExpr 
+                 deriving (Eq, Ord)
+
+instance Show FloatExpr where 
+    showsPrec _ (ILit x) = shows x 
+    showsPrec _ (FLit x) = shows x
+    showsPrec _ (FVar v) = shows v 
+    showsPrec p (FUnOp op expr) = showParen (p>0) (shows op . showString " " . showsPrec 1 expr)
+    showsPrec p (FBinOp op ex1 ex2)
+        = showParen (p>0) (showsPrec 1 ex1 . showString " " . shows op . showString " " . showsPrec 1 ex2)
+
+exprToFloatExpr :: MidIRExpr -> Maybe FloatExpr 
+exprToFloatExpr (Lit _ i) = Just $ ILit i 
+exprToFloatExpr (Var _ v) = Just $ FVar v 
+exprToFloatExpr (UnOp _ op expr) 
+    | op == OpNeg = do expr' <- exprToFloatExpr expr 
+                       return $ (FUnOp op expr')
+exprToFloatExpr (BinOp _ op expr1 expr2) 
+    | op == OpAdd || op == OpSub || op == OpMul 
+        = do expr1' <- exprToFloatExpr expr1
+             expr2' <- exprToFloatExpr expr2
+             return $ FBinOp op expr1' expr2'
+exprToFloatExpr _ = Nothing
+
+fold_FEE :: (a -> FloatExpr -> a) -> a -> FloatExpr -> a 
+fold_FEE f z e@(ILit _) = f z e 
+fold_FEE f z e@(FLit _) = f z e 
+fold_FEE f z e@(FVar _) = f z e 
+fold_FEE f z e@(FUnOp _ expr) = f (fold_FEE f z expr) e 
+fold_FEE f z e@(FBinOp _ expr1 expr2) = f (fold_FEE f (fold_FEE f z expr2) expr1) e 
+
+mapFEE :: MaybeChange FloatExpr -> MaybeChange FloatExpr 
+mapFEE f e@(ILit _) = f e 
+mapFEE f e@(FLit _) = f e 
+mapFEE f e@(FVar _) = f e 
+mapFEE f e@(FUnOp op expr) 
+    = case mapFEE f expr of 
+        Nothing -> f e 
+        Just expr' -> Just $ fromMaybe e' (f e') 
+            where e' = FUnOp op expr'
+mapFEE f e@(FBinOp op e1 e2) 
+    = case (mapFEE f e1, mapFEE f e2) of 
+        (Nothing, Nothing) -> f e 
+        (e1', e2') -> Just $ fromMaybe e' (f e') 
+            where e' = FBinOp op (fromMaybe e1 e1') (fromMaybe e2 e2')
+
 -- required for using Int64s as coefficients in a LP 
 instance Group Int64 where 
     zero = 0 
@@ -47,6 +100,8 @@ data Loop = Loop { loop_header :: Label
 
 type BackEdge = (Label, Label)
 type LoopVariable = (VarName, MidIRExpr, MidIRExpr, Int64)
+
+type IndVar = (VarName, FloatExpr, FloatExpr, Int64) 
 
 midirLoops :: MidIRRepr -> S.Set Loop
 midirLoops midir = findLoops domins graph mlabels
@@ -87,6 +142,12 @@ findLoops dominators graph mlabels = S.fromList loops
           backEdges = findBackEdges dominators (mapElems body)
           loops = map (backEdgeToLoop dominators graph mlabels) backEdges
 
+findLoopsSilly :: FactBase DominFact -> Graph MidIRInst C C -> [Label] -> S.Set (Loop, Label) 
+findLoopsSilly dominators graph mlabels = S.fromList loops
+    where GMany _ body _ = graph
+          backEdges = findBackEdges dominators (mapElems body)
+          loops = map (\(b, h) -> (backEdgeToLoop dominators graph mlabels (b, h), b)) backEdges
+
 
 findBackEdges :: NonLocal n => FactBase DominFact -> [Block n C C] -> [BackEdge]
 findBackEdges _ [] = []
@@ -108,15 +169,77 @@ backEdgeToLoop dominators graph mlabels (loopBack, loopHeader) = Loop loopHeader
 type BasicLoop = (Label, Label, S.Set Label)
 data InductionLoc = Beginning | End deriving (Eq, Show)
 
-findInductionVariables :: Graph (PNode MidIRInst) C C -> [Label] -> FactBase DominFact -> Webs -> BasicLoop -> [LoopVariable]
+findInductionVariables :: Graph (PNode MidIRInst) C C -> [Label] -> FactBase DominFact -> Webs -> BasicLoop -> S.Set IndVar
 findInductionVariables pGraph mlabels domins webs (header, loopBack, body)
-    = error "Not yet implemted :-{"
+    = case trace (show limitVar) limitVar of 
+        Nothing -> S.empty
+        Just lv -> trace (show basicInductionVars) $ makeRestOfTheVariables lv (makeBaseVar lv)
     where loopWebs = websIntersectingBlocks webs body 
           -- Now that we have a list of the webs, look at each one and determine if it's an induction variable
           basicInductionVars = S.fromList $ catMaybes [makeInductionVar $ getWeb x webs | x <- S.toList loopWebs]
+          varNameToInfo = Map.fromList [(v, a) | a@(v, _, _) <- S.toList basicInductionVars]
+          basicIndNames = S.map (\(a, _, _) -> a) basicInductionVars
+          BodyBlock headerBlock = lookupBlock pGraph header 
+          (_, _, mx') = blockToNodeList headerBlock 
+          mx :: MidIRInst O C 
+          mx = case mx' of 
+                 JustC (PNode _ x) -> x 
+
+          makeRestOfTheVariables lv bv = S.insert lv $ S.insert bv $ S.fromList $ otherVars
+              where otherVars = catMaybes [finishIndVar x lv bv | x <- S.toList $ basicInductionVars]
           
+          finishIndVar (n, init, inc) (lv, _, _, _) (bv, _, _, _)
+              | n == lv || n == bv = Nothing
+          finishIndVar (n, init, inc) _ (_, _, iEnd, _) = Just (n, init, end, inc) 
+              where end = FBinOp OpAdd (FBinOp OpMul (ILit inc) iEnd) init
+
           -- Let's see if we can find the loop limit induction variable which will help us determine our upper bounds
-          
+          limitVar :: Maybe IndVar 
+          limitVar = case mx of 
+                       CondBranch _ expr tl fl
+                           | S.member fl body -> makeLimitVar expr
+                           | S.member tl body -> makeReverseLimitVar expr 
+                       _ -> Nothing 
+
+          makeLimitVar :: MidIRExpr -> Maybe IndVar
+          makeLimitVar (BinOp _ CmpGTE (Var _ v) expr)
+              = do fExpr <- exprToFloatExpr expr 
+                   (v, init, inc) <- Map.lookup v varNameToInfo
+                   guard $ inc > 0
+                   return (v, init, minOne fExpr, inc)
+          makeLimitVar (BinOp _ CmpGT (Var _ v) expr)
+              = do fExpr <- exprToFloatExpr expr 
+                   (v, init, inc) <- Map.lookup v varNameToInfo
+                   guard $ inc > 0 
+                   return (v, init, fExpr, inc) 
+          makeLimitVar (BinOp _ CmpLTE (Var _ v) expr) 
+              = do fExpr <- exprToFloatExpr expr 
+                   (v, init, inc) <- Map.lookup v varNameToInfo 
+                   guard $ inc < 0 
+                   return (v, init, plusOne fExpr, inc)
+          makeLimitVar (BinOp _ CmpLT (Var _ v) expr) 
+              = do fExpr <- exprToFloatExpr expr 
+                   (v, init, inc) <- Map.lookup v varNameToInfo 
+                   guard $ inc < 0 
+                   return (v, init, fExpr, inc)
+          makeLimitVar (BinOp _ CmpGTE expr (Var _ v)) 
+              = makeLimitVar (BinOp dsp CmpLTE (Var dsp v) expr)
+          makeLimitVar (BinOp _ CmpGT expr (Var _ v))
+              = makeLimitVar (BinOp dsp CmpLT (Var dsp v) expr) 
+          makeLimitVar (BinOp _ CmpLTE expr (Var _ v)) 
+              = makeLimitVar (BinOp dsp CmpGTE (Var dsp v) expr)
+          makeLimitVar (BinOp _ CmpLT expr (Var _ v)) 
+              = makeLimitVar (BinOp dsp CmpGT (Var dsp v) expr) 
+          makeLimitVar _ = Nothing
+
+          makeReverseLimitVar (BinOp s CmpGTE e1 e2) 
+              = makeLimitVar (BinOp s CmpLT e1 e2) 
+          makeReverseLimitVar (BinOp s CmpGT e1 e2) 
+              = makeLimitVar (BinOp s CmpLTE e1 e2) 
+          makeReverseLimitVar (BinOp s CmpLTE e1 e2) 
+              = makeLimitVar (BinOp s CmpGT e1 e2) 
+          makeReverseLimitVar (BinOp s CmpLT e1 e2) 
+              = makeLimitVar (BinOp s CmpGTE e1 e2)
 
           headerDomins = case mapLookup header domins of 
                            Just (PElem domin) -> domin
@@ -126,25 +249,36 @@ findInductionVariables pGraph mlabels domins webs (header, loopBack, body)
                          Just (PElem domin) -> domin 
                          _ -> S.empty
 
-          makeInductionVar :: Web -> Maybe (VarName, Int64, Int64)
+          makeInductionVar :: Web -> Maybe (VarName, FloatExpr, Int64)
           makeInductionVar web 
               | (S.size $ webDefs web) /= 2 = Nothing
               | otherwise = let [def1, def2] = S.toList $ webDefs web
                                 varName = webVar web
                             in case (inductionStart def1, inductionStep web def2) of 
                                  (Just init, Just (inc, End)) -> Just (varName, init, inc)
-                                 (Just init, Just (inc, Beginning)) -> Just (varName, init+inc, inc)
+                                 (Just init, Just (inc, Beginning)) -> Just (varName, addF init (ILit inc), inc)
                                  _ -> case (inductionStart def2, inductionStep web def1) of 
                                         (Just init, Just (inc, End)) -> Just (varName, init, inc)
-                                        (Just init, Just (inc, Beginning)) -> Just (varName, init+inc, inc)
+                                        (Just init, Just (inc, Beginning)) -> Just (varName, addF init (ILit inc), inc)
                                         _ -> Nothing 
 
-          
-          inductionStart :: NodePtr -> Maybe Int64
-          inductionStart def = case getNodeInstOO def pGraph of 
-                                 Just (Store _ _ (Lit _ i))
-                                     | S.member (nodeLabel def) headerDomins -> Just i  
-                                 _ -> Nothing 
+          addF :: FloatExpr -> FloatExpr -> FloatExpr 
+          addF f1 f2 = FBinOp OpAdd f1 f2
+
+          minOne :: FloatExpr -> FloatExpr 
+          minOne f = FBinOp OpSub f (ILit 1) 
+                     
+          plusOne :: FloatExpr -> FloatExpr 
+          plusOne f = FBinOp OpAdd f (ILit 1)
+
+          inductionStart :: NodePtr -> Maybe FloatExpr
+          inductionStart def 
+              = case getNodeInstOO def pGraph of 
+                  Just (Store _ _ (Lit _ i))
+                      | S.member (nodeLabel def) headerDomins -> Just $ ILit i 
+                  Just (Store _ _ (Var _ v))
+                      | S.member (nodeLabel def) headerDomins -> Just $ FVar v 
+                  _ -> Nothing 
                                       
           -- Induction step attempts to tell us both what the step value of this induction variable is
           -- and whether the induction step is at the beginning or end of the loop (affects the "start" 
@@ -184,10 +318,23 @@ findInductionVariables pGraph mlabels domins webs (header, loopBack, body)
                 where loopUses = S.toList $ S.filter (\u -> S.member (nodeLabel u) body) $ webUses web
                       loopUseOkay use
                           | use == def = True 
-                          | (nodeLabel def == loopBack) && dominatesNode domins use def = True 
+                          | dominatesNode domins use def = True 
                           | dominatesNode domins def use = False 
                           | S.member (nodeLabel use) reaches = False 
+                          | otherwise = False
                       reaches = findReaching loopBack (nodeLabel def) pGraph mlabels 
+
+
+          -- Makes the base variable, given a limit variable. 
+          -- returns the limit variable if it is a base variable already
+          makeBaseVar :: IndVar -> IndVar 
+          makeBaseVar v@(_, ILit 0, _, 1) = v 
+          makeBaseVar (v, init, end, inc) = (MV $ (show v) ++ "_base", ILit 0, iEnd, 1) 
+              where iEnd
+                        | inc == 1 = FBinOp OpSub end init
+                        | otherwise = FBinOp OpMul (FLit incInv) (FBinOp OpSub end init)
+                    incInv :: Double 
+                    incInv = 1 / (fromIntegral inc) 
 
 
 findLoopVariables :: Graph MidIRInst C C -> S.Set Label -> Block MidIRInst C C -> Block MidIRInst C C -> [LoopVariable]
@@ -244,8 +391,12 @@ findLoopVariables graph headerDomin headerBlock loopbackBlock
       
 
 analyzeParallelizationPass :: MidIRRepr -> S.Set Loop 
-analyzeParallelizationPass midir = parallelLoops
+analyzeParallelizationPass midir = trace (show inductionVars) parallelLoops
     where loops = findLoops domins graph mlabels
+          -- Let's see if we can identify induction vars
+          sillyLoops = findLoopsSilly domins graph mlabels 
+          inductionVars = S.map (\(Loop header body _, back) -> findInductionVariables pGraph mlabels domins webs (header, back, body)) sillyLoops 
+          
           -- First pass, removes obviously non-parallel loops (such as loops that contain returns or callouts)
           noBreaksRetsCallsLoops = S.filter (\l -> noCalls l && noRets l && noBreaks l) loops 
           -- Second pass, removes loops that write to values that aren't loop invariant (i.e. for loops calculating a sum)
@@ -741,7 +892,6 @@ findReaching loopBack loopHeader graph mlabels
                       noSuccessors = null $ successors currentBlock
                                       
 
---dominatorTransfer :: Label -> (Map.Map Label (S.Set Label), Bool) -> (Map.Map Label 
 
 type ReachingFact = Bool 
 reachingLattice :: DataflowLattice ReachingFact 
