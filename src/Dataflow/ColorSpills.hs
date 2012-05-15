@@ -47,13 +47,13 @@ renameSpills colors igraph (PNode l n)
       where getColorUse s = colors M.! lookupVarUse s l (igWebTable igraph)
             getColorDef s = colors M.! lookupVarDef s l (igWebTable igraph)
 
-spillAliveDead :: forall e x. Asm e x -> ([SpillLoc], [SpillLoc])
+spillAliveDead :: forall e x. Asm e x -> Maybe ([SpillLoc], [SpillLoc])
 spillAliveDead (Enter _ _ args _) = if args > 6
-                                    then ([], lefts $ drop 6 (take args argLocation))
-                                    else ([], [])
-spillAliveDead (Spill _ _ s) = ([], [s])
-spillAliveDead (Reload _ s _) = ([s], [])
-spillAliveDead _ = ([], [])
+                                    then Just ([], lefts $ drop 6 (take args argLocation))
+                                    else Just ([], [])
+spillAliveDead (Spill _ _ s) = Just ([], [s])
+spillAliveDead (Reload _ s _) = Just ([s], [])
+spillAliveDead _ = Just ([], [])
 
 -- This is of (moves, tomove)
 type CollectSpillMoveFact = (M.Map NodePtr (S.Set WebID, S.Set WebID),

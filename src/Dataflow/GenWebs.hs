@@ -111,7 +111,7 @@ instance Show a => Show (InterfGraph a) where
 --- Building webs
 ---
 
-type AliveDeadFun n a = forall e x. n e x -> ([a], [a])
+type AliveDeadFun n a = forall e x. n e x -> Maybe ([a], [a])
 
 -- | (dus, undefineds)
 type DUBuildFact a = (S.Set (DU a), S.Set (a, NodePtr))
@@ -138,10 +138,10 @@ duTransfer aliveDeadFn = mkBTransfer3 fe fm fx
               = handle l (aliveDeadFn n) (joinOutFacts duLattice n fb)
           
           handle :: NodePtr
-                 -> ([a], [a]) -- ^ the alive/dead (i.e., uses/defs) for the node
+                 -> Maybe ([a], [a]) -- ^ the alive/dead (i.e., uses/defs) for the node
                  -> DUBuildFact a
                  -> DUBuildFact a
-          handle l (uses, defs) (dus, tomatch)
+          handle l (Just (uses, defs)) (dus, tomatch)
               = let withdef d = S.map makeDU rps
                         where rps = S.filter (\(var, ptr) -> var == d) tomatch
                               makeDU (var, ptr) = DU var l ptr
@@ -159,6 +159,8 @@ duTransfer aliveDeadFn = mkBTransfer3 fe fm fx
                     ddu = S.unions $ map withdef defs
                 in ( S.unions [dus, ddu, ddvirtused]
                    , S.unions [tomatch', dtomatch] )
+          handle l Nothing (dus, tomatch)
+              = (S.empty, S.empty)
 
 duPass :: (Show a, Ord a, NonLocal n, Monad m) => AliveDeadFun n a -> BwdPass m (PNode n) (DUBuildFact a)
 duPass aliveDeadFn = BwdPass

@@ -60,8 +60,10 @@ loopData loop blockMap = (var, lower, upper, elbl)
               | otherwise = firstLower xs
           firstLower (x : xs) = ts x $ firstLower xs
           lower = firstLower $ reverse $ t stores
-          CondBranch _ (BinOp _ CmpGTE (Var _ var) (Lit _ upper)) elbl _
-              = lastInst $ headerBlock loop blockMap
+          (var, upper, elbl)
+              = (case lastInst $ headerBlock loop blockMap of
+                   CondBranch _ (BinOp _ CmpGTE (Var _ var) (Lit _ upper)) elbl _
+                       -> (var, upper, elbl)) :: (VarName, Int64, Label)
 
 parallelHeader :: Int -> Loop -> MidIRMap -> MidIRMap
 parallelHeader threadMax loop blockMap
