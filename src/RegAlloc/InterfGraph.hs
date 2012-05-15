@@ -135,8 +135,6 @@ duTransfer = mkBTransfer3 fe fm fx
               = handle l False S.empty (getAliveDead n) (getPinned n) (getFixed n) f
                 
           fx :: (PNode Asm) O C -> FactBase DUBuildFact -> DUBuildFact
-          fx (PNode l (InternalFunc _ _ (Imm32BlockLabel lab 0))) fb
-              = fromMaybe (S.empty, S.empty) $ lookupFact lab fb
           fx (PNode l n) fb
               = handle l False S.empty (getAliveDead n) (getPinned n) (getFixed n)
                 (joinOutFacts duLattice n fb)
@@ -267,8 +265,9 @@ makeInterfGraph mlabels graph webs = InterfGraph idToWebMap adjs moves fixedRegs
           addDef w d usedef = M.insertWith combineUsedef d (S.empty, S.singleton w) usedef
           
           -- | A map from nodes to (alive, dead) sets of WebIDs
-          usedef = foldl (flip id) M.empty ([addDef w d | (w, web) <- idToWeb, d <- S.toList $ webDefs web]
-                                            ++ [addUse w u | (w, web) <- idToWeb, u <- S.toList $ webUses web])
+          usedef = foldl (flip id) M.empty
+                   ([addDef w d | (w, web) <- idToWeb, d <- S.toList $ webDefs web]
+                    ++ [addUse w u | (w, web) <- idToWeb, u <- S.toList $ webUses web])
           
           -- | The adjacency lists!
           adjs = let adjm = buildAdjLists mlabels graph usedef
@@ -302,13 +301,12 @@ buildAdjLists mlabels graph usedef
               where fe :: PNode Asm C O -> AdjListFact -> AdjListFact
                     fe (PNode l n) f = handle (M.findWithDefault (S.empty, S.empty) l usedef) f
                     fm :: PNode Asm O O -> AdjListFact -> AdjListFact
-                    fm (PNode l (MovIRMtoR _ (IRM_R _) _)) (live, adj)
-                        = let (alive, dead) = usedef M.! l
+                    fm pn@(PNode l (MovIRMtoR _ (IRM_R _) _)) (live, adj)
+                        = let (alive, dead) = fromMaybe (error $ "oaeu " ++ show pn ++ "\n" ++ show usedef) $
+                                              M.lookup l usedef
                           in handle (alive, dead) (live S.\\ alive, adj)
                     fm (PNode l n) f = handle (M.findWithDefault (S.empty, S.empty) l usedef) f
                     fx :: PNode Asm O C -> FactBase AdjListFact -> AdjListFact
-                    fx (PNode l (InternalFunc _ _ (Imm32BlockLabel lab 0))) f
-                        = fromMaybe (S.empty, M.empty) $ lookupFact lab f
                     fx (PNode l n) fs = handle (M.findWithDefault (S.empty, S.empty) l usedef) (joinOutFacts alLattice n fs)
                     
                     handle :: (S.Set WebID, S.Set WebID) -> AdjListFact -> AdjListFact

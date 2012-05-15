@@ -29,7 +29,7 @@ import RegAlloc.InterfGraph
 import qualified Dataflow.GenWebs as GenWebs
 import Dataflow.OptSupport (joinProd, joinSets, setLattice, (><))
 
-dotrace = True
+dotrace = False
 
 trace' a b = if dotrace then trace a b else b 
 
