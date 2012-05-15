@@ -69,7 +69,7 @@ dataflows
       , DFA optConstProp performConstPropPass
       , DFA optDeadCode performDeadCodePass
       , DFA optTailcall performTailcallPass 
-      --, DFA optParallelize performParallelizePass
+      , DFA optParallelize performParallelizePass
       --, DFA optNZP performNZPPass
       , DFA optDeadCode performDeadCodePass 
       , DFA optBlockElim performBlockElimPass 
