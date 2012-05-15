@@ -142,7 +142,7 @@ flattenOp op e@(BinOp _ op' e1 e2)
     | otherwise  = [e]
 flattenOp op e = [e]
 
-simpUnOp :: Ord v => SourcePos -> UnOp -> Expr v -> AM (Expr v)
+simpUnOp :: (Show v, Ord v) => SourcePos -> UnOp -> Expr v -> AM (Expr v)
 simpUnOp pos op sex = msum rules
     where
       rules =
@@ -153,6 +153,23 @@ simpUnOp pos op sex = msum rules
                Lit litpos i <- withExpr sex
                guard $ i /= minBound
                return $ Lit pos (unOp op i)
+          -- Negating a subtraction is the same as reversing the
+          -- subtraction
+          , do guard $ op == OpNeg
+               BinOp pos2 OpSub sex1 sex2 <- withExpr sex
+               simpES $ BinOp pos2 OpSub sex2 sex1
+          -- Negating an addition with a constant is the same as
+          -- subtracting from the negative constant
+          , do guard $ op == OpNeg
+               BinOp pos2 OpAdd (Lit litpos i) sex2 <- withExpr sex
+               guard $ i /= minBound
+               simpES $ BinOp pos2 OpSub (Lit litpos (negate i)) sex2
+          -- Negating a subtraction with a constant is the same as
+          -- adding to the negative constant
+          , do guard $ op == OpNeg
+               BinOp pos2 OpSub (Lit litpos i) sex2 <- withExpr sex
+               guard $ i /= minBound
+               simpES $ BinOp pos2 OpAdd (Lit litpos (negate i)) sex2
           -- Don't put in a default case.
           ]
 
@@ -201,6 +218,37 @@ simpBinOp pos op sex1 sex2 = traceM ("bin", op, sex1, sex2) $ msum rules
                BinOp _ op' (Lit _ i2) sex2_2 <- withExpr sex2
                guard $ op == op'
                simpES $ BinOp pos op (Lit litpos (binOp op i1 i2)) sex2_2
+          -- Reorders the tree if the right-side's left branch is less
+          -- than the left branch
+          , do guard $ op `elem` [OpAdd, OpMul]
+               BinOp pos2 op' sex2_1 sex2_2 <- withExpr sex2
+               guard $ op == op'
+               guard $ sex1 > sex2_1
+               simpES $ BinOp pos op sex2_1 (BinOp pos2 op sex1 sex2_2)
+          -- Adding a negation is the same as just subtracting
+          , do guard $ op == OpAdd
+               UnOp pos1 OpNeg nsex1 <- withExpr sex1
+               simpES $ BinOp pos1 OpSub sex2 nsex1
+          , do guard $ op == OpAdd
+               UnOp pos1 OpNeg nsex2 <- withExpr sex2
+               simpES $ BinOp pos1 OpSub sex1 nsex2
+          -- pulls a constant from the right subtraction branch for an
+          -- addition.
+          , do guard $ op == OpAdd
+               BinOp pos2 OpSub (Lit litpos i) sex2_2 <- withExpr sex2
+               simpES $ BinOp pos OpSub
+                          (BinOp pos2 OpAdd
+                           (Lit litpos i) sex1)
+                          sex2_2
+          -- Subtracting from a negation is the same as negating the
+          -- addition
+          , do guard $ op == OpSub
+               UnOp pos1 OpNeg nsex1 <- withExpr sex1
+               simpES $ UnOp pos1 OpNeg $ BinOp pos OpAdd nsex1 sex2
+          -- Subtracting a negation is the same as addition
+          , do guard $ op == OpSub
+               UnOp _ OpNeg nsex2 <- withExpr sex2
+               simpES $ BinOp pos OpAdd sex1 nsex2
           -- Pulls a constant from the right of a subtraction if it
           -- isn't the most negative number.
           , do guard $ op == OpSub
@@ -264,6 +312,13 @@ simpBinOp pos op sex1 sex2 = traceM ("bin", op, sex1, sex2) $ msum rules
           , do guard $ op == OpMul
                Lit _ 0 <- withExpr sex1
                return sex1
+          -- Muchick R11
+          , do guard $ op == OpMul
+               Lit posl1 i1 <- withExpr sex1
+               BinOp pos2 OpAdd (Lit posl2 i2) sex2_2 <- withExpr sex2
+               simpES $ BinOp pos OpAdd
+                          (Lit posl1 (binOp op i1 i2))
+                          (BinOp pos2 OpMul (Lit posl1 i1) sex2_2)
           -- If we are multiplying a literal by the negation of
           -- something, we can move the negation to the literal as
           -- long as the literal isn't the most negative number.
