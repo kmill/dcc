@@ -137,7 +137,7 @@ doMidIRFile opts ifname input ast
   = case ast of
     Left err -> return $ Left err
     Right hast -> do mir <- MidIR.generateMidIR hast
-                     mir <- runWithFuel maxBound $ (performDataflowAnalysis (optMode opts) mir)
+                     mir <- runWithFuel maxBound $ (performDataflowAnalysis opts mir)
                      return $ Right mir
                     
 doLowIRFile :: CompilerOpts -> String -> String -> Either String IR.MidIRRepr 
@@ -148,7 +148,7 @@ doLowIRFile opts ifname input midir
         Right m -> do lowir <- CodeGenerate.toAss opts m
                       lowir <- (if debugMode opts then return else allocator) lowir
                       lowir <- runWithFuel maxBound $ do
-                                 lowir <- performAsmDataflowAnalysis (optMode opts) lowir
+                                 lowir <- performAsmDataflowAnalysis opts lowir
                                  lowir <- (if debugMode opts then return else performBakeSpills opts) lowir
                                  return lowir
                       return $ Right lowir

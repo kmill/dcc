@@ -38,9 +38,10 @@ dataflows
       , ADFA (hasOptFlag "blockelimasm") performBlockElimAsm
       ]
 
-performAsmDataflowAnalysis :: OptFlags -> LowIRRepr -> RM LowIRRepr
-performAsmDataflowAnalysis opts lowir
+performAsmDataflowAnalysis :: CompilerOpts -> LowIRRepr -> RM LowIRRepr
+performAsmDataflowAnalysis copts lowir
     = foldl (>>=) (return lowir) (map (individualAnalysis opts) dataflows)
     where individualAnalysis :: OptFlags -> ADFA -> LowIRRepr -> RM LowIRRepr
           individualAnalysis opts (ADFA optCheck perform) lowir
               = if optCheck opts then perform lowir else return lowir
+          opts = optMode copts
