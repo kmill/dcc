@@ -66,7 +66,7 @@ collectSpillPass = BwdPass
 
             usedOC :: Asm O C -> FactBase (S.Set SpillLoc) -> (S.Set SpillLoc)
             usedOC (InternalFunc _ fl (Imm32BlockLabel el 0)) f
-                = S.unions [ S.filter (not . isIPC) (fromMaybe S.empty $ lookupFact fl f)
+                = S.unions [ S.filter isIPC (fromMaybe S.empty $ lookupFact fl f)
                            , fromMaybe S.empty $ lookupFact el f ] 
             usedOC x f = S.unions $ map
                          ((fromMaybe S.empty) . (flip lookupFact f))
