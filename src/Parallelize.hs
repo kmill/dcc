@@ -39,15 +39,18 @@ defaultThreadMax = 10
 -- 1. Change loop header pred branch to instance of Parallel
 -- 2. Change loop header conditional branch to jump to threadreturn
 -- 3. Change counter increment
+-- 4. Set loop variable to final value
 forLoop :: Loop -> MidIRRepr -> RM MidIRRepr
 forLoop loop midir = do
     rlbl <- freshLabel
-    let blockMap'' = threadReturn rlbl loop blockMap'
+    prlbl <- freshLabel
+    let blockMap'' = threadReturn rlbl prlbl loop blockMap'
         graph' = GMany NothingO blockMap'' NothingO
     return $ midir { midIRGraph = graph' }
     where graph = midIRGraph midir
           GMany _ blockMap _ = graph
-          blockMap' = parallelHeader defaultThreadMax (t loop) $ fixInc defaultThreadMax loop blockMap
+          threadMax = defaultThreadMax
+          blockMap' = parallelHeader threadMax (t loop) $ fixInc threadMax loop blockMap
 
 -- returns looping variable, lower bound, upper bound, end label
 loopData :: Loop -> MidIRMap -> (VarName, Int64, Int64, Label)
@@ -62,8 +65,9 @@ loopData loop blockMap = (var, lower, upper, elbl)
           lower = firstLower $ reverse $ t stores
           (var, upper, elbl)
               = (case lastInst $ headerBlock loop blockMap of
-                   CondBranch _ (BinOp _ CmpGTE (Var _ var) (Lit _ upper)) elbl _
-                       -> (var, upper, elbl)) :: (VarName, Int64, Label)
+                  CondBranch _ (BinOp _ CmpGTE (Var _ var) (Lit _ upper)) elbl _
+                        -> (var, upper, elbl)
+                  _ -> error "this shoul be a condbranch") :: (VarName, Int64, Label)
 
 parallelHeader :: Int -> Loop -> MidIRMap -> MidIRMap
 parallelHeader threadMax loop blockMap
@@ -126,15 +130,17 @@ lastInst block = case end of
                      JustC inst -> inst
     where (_, _, end) = blockToNodeList block
 
-threadReturn :: Label -> Loop -> MidIRMap -> MidIRMap
-threadReturn rlbl loop blockMap
-    = mapInsert rlbl returnBlock $ mapInsert headerLabel headerBlock' $ mapDelete headerLabel blockMap
+threadReturn :: Label -> Label -> Loop -> MidIRMap -> MidIRMap
+threadReturn rlbl prlbl loop blockMap
+    = mapInsert prlbl postReturnBlock $ mapInsert rlbl returnBlock $ mapInsert headerLabel headerBlock' blockMap
     where headerLabel = loop_header loop
           headerBlock' = mapBlock process $ headerBlock loop blockMap
           process :: forall e x. MidIRInst e x -> MidIRInst e x
           process (CondBranch pos expr elbl llbl)
               = CondBranch pos expr rlbl llbl
           process inst = inst
-          (_, _, _, elbl) = loopData loop blockMap
+          (var, _, upper, elbl) = loopData loop blockMap
           pos = newPos "" 0 0
-          returnBlock = blockOfNodeList (JustC (Label pos rlbl), [], JustC (ThreadReturn pos elbl))
+          returnBlock = blockOfNodeList (JustC (Label pos rlbl), [], JustC (ThreadReturn pos prlbl))
+          postReturnNodes = [Store pos var (Lit pos upper)]
+          postReturnBlock = blockOfNodeList (JustC (Label pos prlbl), postReturnNodes, JustC (Branch pos elbl))
