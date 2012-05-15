@@ -49,8 +49,8 @@ individualAnalysis :: OptFlags -> DFA -> MidIRRepr -> RM MidIRRepr
 individualAnalysis opts (DFA optCheck perform) midir
     = if optCheck opts then perform midir else return midir
 
-dataflows :: [DFA]
-dataflows
+dataflows :: CompilerOpts -> [DFA]
+dataflows copts
     = [ DFA optConstProp performConstPropPass
       -- , DFA optNZP performNZPPass
       , DFA optTailcall performTailcallPass
@@ -60,16 +60,18 @@ dataflows
       --, DFA optLICM performLICMPass
       , DFA optCommonSubElim performCSEPass
       , DFA optCopyProp performCopyPropPass
-      , DFA optCondElim performCondElimPass
       -- doing constprop after flatten/cse does great good! see tests/codegen/fig18.6.dcf
       , DFA optConstProp performConstPropPass
       , DFA optDeadCode performDeadCodePass
+      , DFA optCondElim performCondElimPass
       , DFA optUnflat performUnflattenPass 
       , DFA optCopyProp performCopyPropPass
       , DFA optConstProp performConstPropPass
       , DFA optDeadCode performDeadCodePass
       , DFA optTailcall performTailcallPass 
-      , DFA optParallelize performParallelizePass
+      , DFA optParallelize (performParallelizePass copts)
+      , DFA optConstProp performConstPropPass
+      , DFA optCopyProp performCopyPropPass
       --, DFA optNZP performNZPPass
       , DFA optDeadCode performDeadCodePass 
       , DFA optBlockElim performBlockElimPass 
@@ -94,9 +96,10 @@ dataflows
       optParallelize = hasOptFlag "parallelize"
       optDeadCodeAsm = hasOptFlag "deadcodeasm"
 
-performDataflowAnalysis :: OptFlags -> MidIRRepr -> RM MidIRRepr 
-performDataflowAnalysis opts midir
-    = foldl (>>=) (return midir) (map (individualAnalysis opts) dataflows)
+performDataflowAnalysis :: CompilerOpts -> MidIRRepr -> RM MidIRRepr 
+performDataflowAnalysis copts midir
+    = foldl (>>=) (return midir)
+      (map (individualAnalysis (optMode copts)) (dataflows copts))
 
 performConstPropPass midir = performFwdPass constPropPass midir emptyFact
 performCopyPropPass midir = performFwdPass copyPropPass midir emptyCopyFact

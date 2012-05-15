@@ -61,11 +61,46 @@ After unflattening every block in the graph, the algorithm then concludes by per
 
 \subsection{Experimental Results of Expression Unflattener}
 
-The unflattener passes our entire test suite and appears to work correctly. The figures below show the unflattener operating on a simple program. The second figure shows how the unflattener maintains the benefits obtained from CSE. 
+The unflattener passes our entire test suite and appears to work
+correctly. The figures below show the unflattener operating on a
+simple program. The second figure shows how the unflattener maintains
+the benefits obtained from CSE. 
 
 % TODO: Put the before and after graphs right here for unflattentest1 and unflattentest2
 
+\section{Loop Parallelizer}
 
+The loop parallelizer splits the control flow into multiple threads
+for loops with expensive bodies with no inter-run dependencies.
+It should parallelize nearly every parallelizable loop, as it uses a
+fairly advanced method.
+
+\subsection{Design}
+
+\subsection{Implementation}
+
+% stuff about loop analysis
+
+The parallelizer makes use of a new instruction in our mid-ir,
+"Parallel". This instruction is inserted before the loop, and the
+loop's induction variable update instructions are modified in order to
+only execute some of the loop's executions in each run.
+
+% stuff about code generation
+
+\subsection{Results}
+
+% add some graphs
+
+\section{Loop Invariant Code Motion}
+
+Loop Invariant Code Motion (LICM) moves loop-invariant instructions
+out of loops so they execute less frequently. The optimization is
+important because some compiler-generated instructions are
+loop-invariant and get repeated over and over, which is clearly a
+waste of resources. The implementation consists of a dataflow analysis
+and a non-local rewrite function: the rewrite function uses the State
+monad to ensure that instructions only get moved once.
 
 \section{Conclusion}
 

@@ -50,30 +50,30 @@ liveness = mkBTransfer live
 liveness :: BwdTransfer MidIRInst Live 
 liveness = mkBTransfer3 liveCO liveOO liveOC  
     where liveCO :: MidIRInst C O -> Live -> Live
-          liveCO inst f = S.union (f S.\\ (S.fromList dead)) $ S.fromList alive
-              where (alive, dead) = getMidAliveDead inst 
+          liveCO inst f = handle (getMidAliveDead inst) f
 
           liveOO :: MidIRInst O O -> Live -> Live 
-          liveOO inst f = S.union (f S.\\ (S.fromList dead)) $ S.fromList alive 
-              where (alive, dead) = getMidAliveDead inst 
+          liveOO inst f = handle (getMidAliveDead inst) f
 
           liveOC :: MidIRInst O C -> FactBase Live -> Live 
-          liveOC inst@(Branch _ l) fb = S.union (f S.\\ (S.fromList dead)) $ S.fromList alive 
+          liveOC inst@(Branch _ l) fb = handle (getMidAliveDead inst) f
               where f = fact fb l 
-                    (alive, dead) = getMidAliveDead inst 
           liveOC inst@(ThreadReturn _ l) fb = S.empty
-          liveOC inst@(CondBranch _ _ tl fl) fb = S.union (f S.\\ (S.fromList dead)) $ S.fromList alive 
+          liveOC inst@(CondBranch _ _ tl fl) fb = handle (getMidAliveDead inst) f
               where f = fact fb tl `S.union` fact fb fl
-                    (alive, dead) = getMidAliveDead inst
           liveOC inst@(Parallel _ ll var _ el) fb
               = S.delete var (fact fb ll) `S.union` fact fb el
           liveOC inst@(Return _ _ _) _ = S.fromList alive 
-              where (alive, _) = getMidAliveDead inst 
+              where (alive, _) = fromJust $ getMidAliveDead inst 
           liveOC inst@(Fail _) _ = S.fromList alive 
-              where (alive, _) = getMidAliveDead inst 
+              where (alive, _) = fromJust $ getMidAliveDead inst 
 
           fact :: FactBase Live -> Label -> Live 
           fact f l = fromMaybe S.empty $ lookupFact l f 
+          
+          handle :: Maybe ([VarName], [VarName]) -> Live -> Live
+          handle Nothing _ = S.empty
+          handle (Just (alive, dead)) f = (f S.\\ (S.fromList dead)) `S.union` S.fromList alive
 
 
 deadAsstElim :: forall m . FuelMonad m => BwdRewrite m MidIRInst Live 
