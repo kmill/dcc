@@ -143,7 +143,7 @@ performLICMPass midir
         return $ midir { midIRGraph = doLICM loops factBase graph }
     where graph = midIRGraph midir
           mlabels = (map methodEntry $ midIRMethods midir)
-          loops = midirLoops midir
+          loops = midirBasicLoops midir
 
 performUnflattenPass :: MidIRRepr -> RM MidIRRepr 
 performUnflattenPass midir

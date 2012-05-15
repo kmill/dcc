@@ -5,7 +5,7 @@ import Dataflow.OptSupport
 import Dataflow.DeadCode
 import DataflowTypes
 import LoopAnalysis
-import Parallelize(compare', MidIRMap, headerPred, headerBlock, headerPredBlock, lastInst)
+import Parallelize(compare', MidIRMap, getBlock)
 import AST(SourcePos)
 import Compiler.Hoopl
 import IR
@@ -14,6 +14,11 @@ import qualified Data.List as L
 import Data.Maybe(catMaybes, fromMaybe, isJust)
 import Debug.Trace
 import Control.Monad.Trans.State.Lazy
+
+ts :: (Show a) => a -> b -> b
+ts = traceShow
+t :: (Show a) => a -> a
+t x = ts x x
 
 data (Ord v) => SInst v
     = SStore SourcePos v (Expr v)
@@ -100,14 +105,15 @@ isIndStore SIndStore{} = True
 isIndStore _ = False
 
 motionSetTransfer :: BwdTransfer MidIRInst MotionSet
-motionSetTransfer = mkBTransfer3 btCO btOO btOC
-    where btCO :: MidIRInst C O -> MotionSet -> MotionSet
+motionSetTransfer = mkBTransfer3 btCO' btOO btOC
+    where btCO' n f = ts (n, btCO n f) $ btCO n f
+          btCO :: MidIRInst C O -> MotionSet -> MotionSet
           btCO i@(Enter _ _ args) f = invalidateList args f
           btCO _ f = f
 
           btOO :: MidIRInst O O -> MotionSet -> MotionSet
           btOO i@(Store _ var expr) f
-             = invalidate var (S.insert (storeInst i) f)
+             = invalidate var (S.insert (storeInst (ts (i, f) i)) f)
              --  = (\res -> trace ("store " ++ (show i) ++ " with lattice " ++ (show f) ++ "\n" ++ (show res) ++ "\n") res) $ invalidate var (S.insert (storeInst i) f)
           btOO i@(DivStore _ var _ expr1 expr2) f
               = invalidate var (S.insert (storeInst i) f)
@@ -116,6 +122,7 @@ motionSetTransfer = mkBTransfer3 btCO btOO btOC
           btOO (Callout _ var _ _) f = invalidate var f
 
           btOC :: MidIRInst O C -> FactBase MotionSet -> MotionSet
+          btOC Parallel{} = error "LICM should come before parallelization!"
           btOC _ = S.unions . mapElems
 
           invalidate :: VarName -> S.Set MSInst -> S.Set MSInst
@@ -153,24 +160,52 @@ motionRewrite loops = trace (show loops) $ mkBRewrite3 idRewr idRewr r
           getInstrs = catMaybes . map unStoreInst . S.toList . S.unions . mapElems . mapMap fst
 -}
 
+compareBasic :: BasicLoop -> BasicLoop -> Ordering
+compareBasic loop1 loop2 =
+    case compareBodies of
+        EQ -> compare loop1 loop2
+        res -> res
+    where compareBodies = compare (S.size $ basicBody loop1) (S.size $ basicBody loop2)
+
 type SM a = State (S.Set MSInst) a
 -- should move loops in reverse order, state keeps track of which instructions have already been moved
-doLICM :: S.Set Loop -> FactBase MotionFact -> Graph MidIRInst C C -> Graph MidIRInst C C
+doLICM :: S.Set BasicLoop -> FactBase MotionFact -> Graph MidIRInst C C -> Graph MidIRInst C C
 doLICM loops facts graph = evalState monadic S.empty
-    where monadic = foldl (>>=) (return graph) $ map (motionLoop facts) $ reverse $ L.sortBy compare' $ S.toList loops
+    where monadic = foldl (>>=) (return graph) $ map (motionLoop facts) $ reverse $ L.sortBy compareBasic $ S.toList loops
 
-motionLoop :: FactBase MotionFact -> Loop -> Graph MidIRInst C C -> SM (Graph MidIRInst C C)
+motionLoop :: FactBase MotionFact -> BasicLoop -> Graph MidIRInst C C -> SM (Graph MidIRInst C C)
 motionLoop facts loop graph = do
     alreadyMoved <- get
     let toMove = naiveToMove S.\\ alreadyMoved
         toMoveList = instList toMove
         predBlock' = blockOfNodeList (entry, middle ++ toMoveList, exit)
-        blockMap' = mapInsert (headerPred loop blockMap) predBlock' blockMap
+        blockMap' = mapInsert (basicHeaderPred loop blockMap) predBlock' blockMap
+        -- remove blocks we've moved
+        filterBlock :: Label -> Block MidIRInst C C -> Block MidIRInst C C
+        filterBlock lbl block
+            | S.member lbl $ basicBody loop
+                = let (bentry, bnodes, bexit) = blockToNodeList block
+                      notToMove :: MidIRInst O O -> Bool
+                      notToMove n = not $ S.member (storeInst n) toMove
+                      bnodes' = filter notToMove bnodes
+                  in blockOfNodeList (bentry, bnodes', bexit)
+            | otherwise = block
+        blockMap'' = mapMapWithKey filterBlock blockMap'
     put $ S.union alreadyMoved toMove
-    return $ GMany NothingO blockMap' NothingO
+    return $ GMany NothingO blockMap'' NothingO
     where GMany _ blockMap _ = graph
-          naiveToMove = fst $ mapFindWithDefault (error "couldn't find label for licm") (loop_header loop) facts
-          predBlock = headerPredBlock loop blockMap
+          naiveToMove = t $ fst $ mapFindWithDefault (error "couldn't find label for licm") (basicHeader loop) (t facts)
+          predBlock = basicHeaderPredBlock (t loop) blockMap
           (entry, middle, exit) = blockToNodeList predBlock
           instList :: S.Set MSInst -> [MidIRInst O O]
           instList = catMaybes . map unStoreInst . S.toList
+
+basicHeaderPred :: BasicLoop -> MidIRMap -> Label
+basicHeaderPred bloop blockMap
+    = head $ map fst $ filter (elem lbl . successors . snd) bloopList
+    where lbl = basicHeader bloop
+          bloopList = filter (\(l, b) -> S.notMember l $ basicBody bloop) list
+          list = mapToList blockMap
+
+basicHeaderPredBlock :: BasicLoop -> MidIRMap -> Block MidIRInst C C
+basicHeaderPredBlock bloop blockMap = getBlock (basicHeaderPred bloop blockMap) blockMap

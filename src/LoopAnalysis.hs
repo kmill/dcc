@@ -143,6 +143,11 @@ dominatesNode domins (NodePtr l1 o1) (NodePtr l2 o2)
                           Just (PElem d) -> d 
                           _ -> S.empty
 
+midirBasicLoops :: MidIRRepr -> S.Set BasicLoop
+midirBasicLoops midir = findBasicLoops domins graph mlabels
+    where graph = midIRGraph midir
+          mlabels = map methodEntry $ midIRMethods midir
+          domins = findDominators graph mlabels
 
 findBasicLoops :: FactBase DominFact -> Graph MidIRInst C C -> [Label] -> S.Set BasicLoop 
 findBasicLoops dominators graph mlabels = S.fromList loops
@@ -158,18 +163,22 @@ findBackEdges dominators (x:xs) = case mapLookup (entryLabel x) dominators of
     where maybeBackEdges domin = [ (entryLabel x, y) | y <- successors x, S.member y domin]
 
 backEdgeToLoop :: FactBase DominFact -> Graph MidIRInst C C -> [Label] -> BackEdge -> BasicLoop 
-backEdgeToLoop dominators graph mlabels (loopBack, loopHeader) = (loopHeader, loopBack, loopBody) 
+backEdgeToLoop dominators graph mlabels (loopBack, loopHeader) = BasicLoop loopHeader loopBack loopBody 
     where loopBody = S.insert loopHeader $ findReaching loopBack loopHeader graph mlabels
           headerDomins = case mapLookup loopHeader dominators of 
                            Just (PElem domin) -> domin
                            _ -> S.empty
          
-type BasicLoop = (Label, Label, S.Set Label)
+data BasicLoop = BasicLoop
+                 { basicHeader :: Label
+                 , basicBack :: Label
+                 , basicBody :: S.Set Label }
+                 deriving (Eq, Ord, Show)
 data InductionLoc = Beginning | End deriving (Eq, Show)
 
 findInductionVariables :: Graph (PNode MidIRInst) C C -> [Label] -> FactBase DominFact -> Webs -> BasicLoop 
                        -> Maybe (IndVar, IndVar, S.Set IndVar)
-findInductionVariables pGraph mlabels domins webs (header, loopBack, body)
+findInductionVariables pGraph mlabels domins webs (BasicLoop header loopBack body)
     = case limitVar of 
         Nothing -> Nothing
         Just lv -> let bv = makeBaseVar lv 
@@ -418,7 +427,7 @@ analyzeParallelizationPass midir = parallelLoops
           -- Let's see if we can identify induction vars
           loops = S.fromList $ catMaybes [insertIndVars l | l <- S.toList basicLoops]
           insertIndVars :: BasicLoop -> Maybe Loop 
-          insertIndVars b@(header, back, body) 
+          insertIndVars b@(BasicLoop header back body) 
               = do (lv, bv, ivs) <- findInductionVariables pGraph mlabels domins webs b 
                    return $ Loop header body ivs lv bv
 
