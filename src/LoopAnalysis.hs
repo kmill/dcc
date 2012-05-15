@@ -351,7 +351,7 @@ findInductionVariables pGraph mlabels domins webs (header, loopBack, body)
           -- returns the limit variable if it is a base variable already
           makeBaseVar :: IndVar -> IndVar 
           makeBaseVar v@(_, ILit 0, _, 1) = v 
-          makeBaseVar (v, init, end, inc) = (MV $ (show v) ++ "_base", ILit 0, iEnd, 1) 
+          makeBaseVar (v, init, end, inc) = (MV $ "la_base_" ++ (show v) , ILit 0, iEnd, 1) 
               where iEnd
                         | inc == 1 = FBinOp OpSub end init
                         | otherwise = FBinOp OpMul (FLit incInv) (FBinOp OpSub end init)

@@ -349,6 +349,13 @@ expToR e = mcut $ msum rules
                                                (A.IRM_I $ A.Imm32 (1))
                                                dr)
                           , dr )
+              , do I.BinOp pos I.OpAdd lit@(I.Lit _ _) expb <- withNode e
+                   (ga, a) <- expToIRM lit
+                   (gb, b) <- expToIRM expb
+                   dr <- genTmpReg
+                   return ( gb <*> mkMiddle (A.MovIRMtoR pos b dr)
+                            <*> ga <*> mkMiddle (A.ALU_IRMtoR pos A.Add a dr)
+                          , dr )
               , do I.BinOp pos I.OpAdd expa expb <- withNode e
                    (ga, a) <- expToIRM expa
                    (gb, b) <- expToIRM expb
