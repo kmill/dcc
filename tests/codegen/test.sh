@@ -1,7 +1,9 @@
 #!/bin/bash
 
 domidirc=0
-opts="cse copyprop constprop nzp deadcode blockelim flat tailcall"
+opts="cse copyprop constprop nzp deadcode blockelim flat tailcall "
+
+main_dccopts="-r --opt=basic"
 
 base=`dirname $0`
 
@@ -175,7 +177,7 @@ testfile() {
 }
 
 for file in `find $base -iname '*.dcf'`; do
-  testfile $file "--opt=all"
+  testfile $file $main_dccopts
   if [ ! -z "$retest" ]; then
     echo "test $file failed, trying with all optimization levels"
     for opt in $opts; do
