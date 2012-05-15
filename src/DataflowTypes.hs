@@ -45,5 +45,9 @@ instance Monad m => FuelMonad (StupidFuelMonadT m) where
     setFuel f = StupidFuelMonadT (\fuel -> return (f, ()))
 
 instance FuelMonadT StupidFuelMonadT where
-  runWithFuel fuel m = evalStupidFuelMonad m fuel
-  liftFuel = lift
+    runWithFuel fuel m = evalStupidFuelMonad m fuel
+    liftFuel = lift
+
+genTmpVar :: RM VarName
+genTmpVar = do s' <- lift $ genUniqueName "p_thread_id"
+               return $ MV s'
