@@ -12,32 +12,110 @@ import Debug.Trace
 import IR
 
 import Control.Monad
-
+import qualified Control.Monad.LPMonad as LP
+import Data.LinearProgram.GLPK.Solver
+import Data.LinearProgram.Common
+import Data.Algebra
+import System.IO.Unsafe
 
 import Util.NodeLocate
+
+import Text.ParserCombinators.Parsec.Pos (newPos, SourcePos)
 
 import Data.Int
 import Data.Maybe
 import qualified Data.Set as S
 import qualified Data.Map as Map
 
+-- debug function for map find 
+mFDebug :: (Ord k, Show k) => k -> Map.Map k v -> v 
+mFDebug k map = case Map.lookup k map of 
+                  Just v -> v
+                  Nothing -> error $ "The problem was " ++ (show k)
+                          
 
+-- To be completely general for dependency analysis, we put expressions into 
+-- this form that can potentially include floating point numbers. 
+-- This allows us to more generally solve looping equations.
+data FloatExpr = ILit Int64
+               | FLit Double 
+               | FVar VarName 
+               | FUnOp UnOp FloatExpr 
+               | FBinOp BinOp FloatExpr FloatExpr 
+                 deriving (Eq, Ord)
 
+instance Show FloatExpr where 
+    showsPrec _ (ILit x) = shows x 
+    showsPrec _ (FLit x) = shows x
+    showsPrec _ (FVar v) = shows v 
+    showsPrec p (FUnOp op expr) = showParen (p>0) (shows op . showString " " . showsPrec 1 expr)
+    showsPrec p (FBinOp op ex1 ex2)
+        = showParen (p>0) (showsPrec 1 ex1 . showString " " . shows op . showString " " . showsPrec 1 ex2)
+
+exprToFloatExpr :: MidIRExpr -> Maybe FloatExpr 
+exprToFloatExpr (Lit _ i) = Just $ ILit i 
+exprToFloatExpr (Var _ v) = Just $ FVar v 
+exprToFloatExpr (UnOp _ op expr) 
+    | op == OpNeg = do expr' <- exprToFloatExpr expr 
+                       return $ (FUnOp op expr')
+exprToFloatExpr (BinOp _ op expr1 expr2) 
+    | op == OpAdd || op == OpSub || op == OpMul 
+        = do expr1' <- exprToFloatExpr expr1
+             expr2' <- exprToFloatExpr expr2
+             return $ FBinOp op expr1' expr2'
+exprToFloatExpr _ = Nothing
+
+fold_FEE :: (a -> FloatExpr -> a) -> a -> FloatExpr -> a 
+fold_FEE f z e@(ILit _) = f z e 
+fold_FEE f z e@(FLit _) = f z e 
+fold_FEE f z e@(FVar _) = f z e 
+fold_FEE f z e@(FUnOp _ expr) = f (fold_FEE f z expr) e 
+fold_FEE f z e@(FBinOp _ expr1 expr2) = f (fold_FEE f (fold_FEE f z expr2) expr1) e 
+
+mapFEE :: MaybeChange FloatExpr -> MaybeChange FloatExpr 
+mapFEE f e@(ILit _) = f e 
+mapFEE f e@(FLit _) = f e 
+mapFEE f e@(FVar _) = f e 
+mapFEE f e@(FUnOp op expr) 
+    = case mapFEE f expr of 
+        Nothing -> f e 
+        Just expr' -> Just $ fromMaybe e' (f e') 
+            where e' = FUnOp op expr'
+mapFEE f e@(FBinOp op e1 e2) 
+    = case (mapFEE f e1, mapFEE f e2) of 
+        (Nothing, Nothing) -> f e 
+        (e1', e2') -> Just $ fromMaybe e' (f e') 
+            where e' = FBinOp op (fromMaybe e1 e1') (fromMaybe e2 e2')
+
+-- required for using Int64s as coefficients in a LP 
+instance Group Int64 where 
+    zero = 0 
+    (^+^) = (+)
+    (^-^) = (-) 
+    neg x = (-x)
+
+instance Ring Int64 where 
+    one = 1 
+    (*#) = (*)
 
 
 data Loop = Loop { loop_header :: Label 
                  , loop_body :: S.Set Label
-                 , loop_variables :: [LoopVariable] }
+                 , loop_variables :: S.Set IndVar
+                 , loop_limit :: IndVar 
+                 , loop_base :: IndVar }
             deriving (Eq, Ord, Show)
 
 type BackEdge = (Label, Label)
 type LoopVariable = (VarName, MidIRExpr, MidIRExpr, Int64)
 
-midirLoops :: MidIRRepr -> S.Set Loop
+type IndVar = (VarName, FloatExpr, FloatExpr, Int64) 
+
+{-midirLoops :: MidIRRepr -> S.Set Loop
 midirLoops midir = findLoops domins graph mlabels
     where graph = midIRGraph midir
           mlabels = map methodEntry $ midIRMethods midir
-          domins = findDominators graph mlabels
+          domins = findDominators graph mlabels -}
 
 data LoopNest = LoopNest Loop LoopNest 
               | LeafLoop Loop 
@@ -53,12 +131,24 @@ loopNestToList (LeafLoop l) = [l]
 loopNestToList (LoopNest l n) = l:(loopNestToList n)
 
 
-findLoops :: FactBase DominFact -> Graph MidIRInst C C -> [Label] -> S.Set Loop 
-findLoops dominators graph mlabels = S.fromList loops
+dsp :: SourcePos 
+dsp = newPos "" (-1) (-1) 
+
+-- Returns whether a node dominates another node 
+dominatesNode :: FactBase DominFact -> NodePtr -> NodePtr -> Bool
+dominatesNode domins (NodePtr l1 o1) (NodePtr l2 o2) 
+    | l1 /= l2 = S.member l1 dominLabel2
+    | otherwise = o1 <= o2
+    where dominLabel2 = case mapLookup l2 domins of 
+                          Just (PElem d) -> d 
+                          _ -> S.empty
+
+
+findBasicLoops :: FactBase DominFact -> Graph MidIRInst C C -> [Label] -> S.Set BasicLoop 
+findBasicLoops dominators graph mlabels = S.fromList loops
     where GMany _ body _ = graph
           backEdges = findBackEdges dominators (mapElems body)
           loops = map (backEdgeToLoop dominators graph mlabels) backEdges
-
 
 findBackEdges :: NonLocal n => FactBase DominFact -> [Block n C C] -> [BackEdge]
 findBackEdges _ [] = []
@@ -67,17 +157,207 @@ findBackEdges dominators (x:xs) = case mapLookup (entryLabel x) dominators of
                                     _ -> findBackEdges dominators xs
     where maybeBackEdges domin = [ (entryLabel x, y) | y <- successors x, S.member y domin]
 
-backEdgeToLoop :: FactBase DominFact -> Graph MidIRInst C C -> [Label] -> BackEdge -> Loop 
-backEdgeToLoop dominators graph mlabels (loopBack, loopHeader) = Loop loopHeader loopBody loopVariables
+backEdgeToLoop :: FactBase DominFact -> Graph MidIRInst C C -> [Label] -> BackEdge -> BasicLoop 
+backEdgeToLoop dominators graph mlabels (loopBack, loopHeader) = (loopHeader, loopBack, loopBody) 
     where loopBody = S.insert loopHeader $ findReaching loopBack loopHeader graph mlabels
           headerDomins = case mapLookup loopHeader dominators of 
                            Just (PElem domin) -> domin
                            _ -> S.empty
-          BodyBlock loopBackBlock = lookupBlock graph loopBack
-          BodyBlock headerBlock = lookupBlock graph loopHeader
-          loopVariables = findLoopVariables graph headerDomins headerBlock loopBackBlock
          
-                    
+type BasicLoop = (Label, Label, S.Set Label)
+data InductionLoc = Beginning | End deriving (Eq, Show)
+
+findInductionVariables :: Graph (PNode MidIRInst) C C -> [Label] -> FactBase DominFact -> Webs -> BasicLoop 
+                       -> Maybe (IndVar, IndVar, S.Set IndVar)
+findInductionVariables pGraph mlabels domins webs (header, loopBack, body)
+    = case limitVar of 
+        Nothing -> Nothing
+        Just lv -> let bv = makeBaseVar lv 
+                   in Just (lv, bv, makeRestOfTheVariables lv (makeBaseVar lv))
+    where loopWebs = websIntersectingBlocks webs body 
+          varNameToWebID = Map.fromList [(webVar $ getWeb id webs, id) | id <- S.toList loopWebs]
+          -- Now that we have a list of the webs, look at each one and determine if it's an induction variable
+          basicInductionVars = S.fromList $ catMaybes [makeInductionVar $ getWeb x webs | x <- S.toList loopWebs]
+          varNameToInfo = Map.fromList [(v, a) | a@(v, _, _) <- S.toList basicInductionVars]
+          basicIndNames = S.map (\(a, _, _) -> a) basicInductionVars
+          BodyBlock headerBlock = lookupBlock pGraph header 
+          (_, _, mx') = blockToNodeList headerBlock 
+          mx :: MidIRInst O C 
+          mx = case mx' of 
+                 JustC (PNode _ x) -> x 
+
+          makeRestOfTheVariables lv bv = S.insert lv $ S.insert bv $ S.fromList $ otherVars
+              where otherVars = catMaybes [finishIndVar x lv bv | x <- S.toList $ basicInductionVars]
+          
+          finishIndVar (n, init, inc) (lv, _, _, _) (bv, _, _, _)
+              | n == lv || n == bv = Nothing
+          finishIndVar (n, init, inc) _ (_, _, iEnd, _) = Just (n, init, end, inc) 
+              where end = FBinOp OpAdd (FBinOp OpMul (ILit inc) iEnd) init
+
+          -- Let's see if we can find the loop limit induction variable which will help us determine our upper bounds
+          limitVar :: Maybe IndVar 
+          limitVar = case mx of 
+                       CondBranch _ expr tl fl
+                           | S.member fl body -> makeLimitVar expr
+                           | S.member tl body -> makeReverseLimitVar expr 
+                       _ -> Nothing 
+
+          makeLimitVar :: MidIRExpr -> Maybe IndVar
+          makeLimitVar (BinOp _ CmpGTE (Var _ v) expr)
+              = do fExpr <- exprToFloatExpr expr 
+                   (v, init, inc) <- Map.lookup v varNameToInfo
+                   guard $ inc > 0
+                   return (v, init, minOne fExpr, inc)
+          makeLimitVar (BinOp _ CmpGT (Var _ v) expr)
+              = do fExpr <- exprToFloatExpr expr 
+                   (v, init, inc) <- Map.lookup v varNameToInfo
+                   guard $ inc > 0 
+                   return (v, init, fExpr, inc) 
+          makeLimitVar (BinOp _ CmpLTE (Var _ v) expr) 
+              = do fExpr <- exprToFloatExpr expr 
+                   (v, init, inc) <- Map.lookup v varNameToInfo 
+                   guard $ inc < 0 
+                   return (v, init, plusOne fExpr, inc)
+          makeLimitVar (BinOp _ CmpLT (Var _ v) expr) 
+              = do fExpr <- exprToFloatExpr expr 
+                   (v, init, inc) <- Map.lookup v varNameToInfo 
+                   guard $ inc < 0 
+                   return (v, init, fExpr, inc)
+          makeLimitVar (BinOp _ CmpGTE expr (Var _ v)) 
+              = makeLimitVar (BinOp dsp CmpLTE (Var dsp v) expr)
+          makeLimitVar (BinOp _ CmpGT expr (Var _ v))
+              = makeLimitVar (BinOp dsp CmpLT (Var dsp v) expr) 
+          makeLimitVar (BinOp _ CmpLTE expr (Var _ v)) 
+              = makeLimitVar (BinOp dsp CmpGTE (Var dsp v) expr)
+          makeLimitVar (BinOp _ CmpLT expr (Var _ v)) 
+              = makeLimitVar (BinOp dsp CmpGT (Var dsp v) expr) 
+          makeLimitVar _ = Nothing
+
+          makeReverseLimitVar (BinOp s CmpGTE e1 e2) 
+              = makeLimitVar (BinOp s CmpLT e1 e2) 
+          makeReverseLimitVar (BinOp s CmpGT e1 e2) 
+              = makeLimitVar (BinOp s CmpLTE e1 e2) 
+          makeReverseLimitVar (BinOp s CmpLTE e1 e2) 
+              = makeLimitVar (BinOp s CmpGT e1 e2) 
+          makeReverseLimitVar (BinOp s CmpLT e1 e2) 
+              = makeLimitVar (BinOp s CmpGTE e1 e2)
+
+          headerDomins = case mapLookup header domins of 
+                           Just (PElem domin) -> domin
+                           _ -> S.empty 
+
+          backDomins = case mapLookup loopBack domins of 
+                         Just (PElem domin) -> domin 
+                         _ -> S.empty
+
+          makeInductionVar :: Web -> Maybe (VarName, FloatExpr, Int64)
+          makeInductionVar web 
+              | (S.size $ webDefs web) /= 2 = Nothing
+              | otherwise = let [def1, def2] = S.toList $ webDefs web
+                                varName = webVar web
+                            in case (inductionStart def1, inductionStep web def2) of 
+                                 (Just init, Just (inc, End)) -> Just (varName, init, inc)
+                                 (Just init, Just (inc, Beginning)) -> Just (varName, addF init (ILit inc), inc)
+                                 _ -> case (inductionStart def2, inductionStep web def1) of 
+                                        (Just init, Just (inc, End)) -> Just (varName, init, inc)
+                                        (Just init, Just (inc, Beginning)) -> Just (varName, addF init (ILit inc), inc)
+                                        _ -> Nothing 
+
+          addF :: FloatExpr -> FloatExpr -> FloatExpr 
+          addF f1 f2 = FBinOp OpAdd f1 f2
+
+          minOne :: FloatExpr -> FloatExpr 
+          minOne f = FBinOp OpSub f (ILit 1) 
+                     
+          plusOne :: FloatExpr -> FloatExpr 
+          plusOne f = FBinOp OpAdd f (ILit 1)
+
+          inductionStart :: NodePtr -> Maybe FloatExpr
+          inductionStart def 
+              = case getNodeInstOO def pGraph of 
+                  Just (Store _ _ (Lit _ i))
+                      | S.member (nodeLabel def) headerDomins -> Just $ ILit i 
+                  Just (Store _ _ (Var _ v))
+                      | S.member (nodeLabel def) headerDomins -> Just $ FVar v 
+                  _ -> Nothing 
+                                      
+          -- Induction step attempts to tell us both what the step value of this induction variable is
+          -- and whether the induction step is at the beginning or end of the loop (affects the "start" 
+          -- value of the variable
+          inductionStep :: Web -> NodePtr -> Maybe (Int64, InductionLoc) 
+          inductionStep web def 
+              = inductionInst web def inst
+                where inst :: Maybe (MidIRInst O O)
+                      inst = getNodeInstOO def pGraph
+                      
+
+          inductionInst :: Web -> NodePtr -> Maybe (MidIRInst O O) -> Maybe (Int64, InductionLoc)
+          inductionInst web def inst
+              = case inst of 
+                  Just (Store _ v (BinOp _ OpAdd (Var _ x) (Lit _ i)))
+                      | v == x -> indLoc i 
+                  Just (Store _ v (BinOp _ OpSub (Var _ x) (Lit _ i)))
+                      | v == x -> indLoc (-i)
+                  Just (Store _ v (BinOp _ OpAdd (Lit _ i) (Var _ x))) 
+                      | v == x -> indLoc i 
+                  Just (Store _ v (BinOp _ OpAdd (UnOp _ OpNeg (Lit _ i)) (Var _ x)))
+                      | v == x -> indLoc (-i)
+                  Just (Store _ v (Var _ x)) -> do expr <- tryReplaceVar x 
+                                                   let newInst = Just (Store dsp v expr)
+                                                   inductionInst web def newInst 
+                  _ -> Nothing 
+                where indLoc :: Int64 -> Maybe (Int64, InductionLoc)
+                      indLoc i = case inductionLoc of 
+                                   Nothing -> Nothing 
+                                   Just loc -> Just (i, loc) 
+                      inductionLoc
+                          | beginningOfLoop def web = Just Beginning 
+                          | endOfLoop def web = Just End 
+                          | otherwise = Nothing
+
+          tryReplaceVar :: VarName -> Maybe MidIRExpr 
+          tryReplaceVar v = let webID = varNameToWebID Map.! v 
+                                web = getWeb webID webs
+                                defs = webDefs web
+                                singleDef = head $ S.toList defs 
+                                replaceInst = getNodeInstOO singleDef pGraph 
+                            in if S.size defs /= 1 
+                               then Nothing 
+                               else case replaceInst of 
+                                      Just (Store _ _ new)
+                                          -> Just new 
+                                      _ -> Nothing
+
+          beginningOfLoop :: NodePtr -> Web -> Bool 
+          beginningOfLoop def web 
+              = all (\use -> dominatesNode domins def use ) loopUses
+                where loopUses = S.toList $ S.filter (\use -> S.member (nodeLabel use) body) $ webUses web 
+
+          endOfLoop :: NodePtr -> Web -> Bool 
+          endOfLoop def web 
+              = (S.member (nodeLabel def) backDomins) && all loopUseOkay loopUses 
+                where loopUses = S.toList $ S.filter (\u -> S.member (nodeLabel u) body) $ webUses web
+                      loopUseOkay use
+                          | use == def = True 
+                          | (nodeLabel def) == loopBack && (nodeLabel use) /= loopBack = True 
+                          | dominatesNode domins use def = True 
+                          | dominatesNode domins def use = False 
+                          | S.member (nodeLabel use) reaches = False 
+                          | otherwise = False
+                      reaches = findReaching loopBack (nodeLabel def) pGraph mlabels 
+
+
+          -- Makes the base variable, given a limit variable. 
+          -- returns the limit variable if it is a base variable already
+          makeBaseVar :: IndVar -> IndVar 
+          makeBaseVar v@(_, ILit 0, _, 1) = v 
+          makeBaseVar (v, init, end, inc) = (MV $ "la_base_" ++ (show v) , ILit 0, iEnd, 1) 
+              where iEnd
+                        | inc == 1 = FBinOp OpSub end init
+                        | otherwise = FBinOp OpMul (FLit incInv) (FBinOp OpSub end init)
+                    incInv :: Double 
+                    incInv = 1 / (fromIntegral inc) 
+
 
 findLoopVariables :: Graph MidIRInst C C -> S.Set Label -> Block MidIRInst C C -> Block MidIRInst C C -> [LoopVariable]
 findLoopVariables graph headerDomin headerBlock loopbackBlock 
@@ -134,7 +414,15 @@ findLoopVariables graph headerDomin headerBlock loopbackBlock
 
 analyzeParallelizationPass :: MidIRRepr -> S.Set Loop 
 analyzeParallelizationPass midir = parallelLoops
-    where loops = findLoops domins graph mlabels
+    where basicLoops = findBasicLoops domins graph mlabels
+          -- Let's see if we can identify induction vars
+          loops = S.fromList $ catMaybes [insertIndVars l | l <- S.toList basicLoops]
+          insertIndVars :: BasicLoop -> Maybe Loop 
+          insertIndVars b@(header, back, body) 
+              = do (lv, bv, ivs) <- findInductionVariables pGraph mlabels domins webs b 
+                   return $ Loop header body ivs lv bv
+
+          
           -- First pass, removes obviously non-parallel loops (such as loops that contain returns or callouts)
           noBreaksRetsCallsLoops = S.filter (\l -> noCalls l && noRets l && noBreaks l) loops 
           -- Second pass, removes loops that write to values that aren't loop invariant (i.e. for loops calculating a sum)
@@ -151,9 +439,6 @@ analyzeParallelizationPass midir = parallelLoops
           loopVarNames (variant, invariant) = (S.map webIDToVarName variant, S.map webIDToVarName invariant) 
               where webIDToVarName id = webVar $ getWeb id webs 
 
-
-
-
           graph = midIRGraph midir
           pGraph = toPGraph graph
           webs = getWebs mlabels pGraph
@@ -161,7 +446,7 @@ analyzeParallelizationPass midir = parallelLoops
           domins = findDominators graph mlabels
 
           noCalls :: Loop -> Bool 
-          noCalls (Loop header body _) = all noCall $ S.toList body 
+          noCalls (Loop header body _ _ _) = all noCall $ S.toList body 
               where noCall :: Label -> Bool 
                     noCall l = let BodyBlock block = lookupBlock graph l 
                                    (_, inner, mx) = blockToNodeList block
@@ -178,7 +463,7 @@ analyzeParallelizationPass midir = parallelLoops
           isAFail _ = False
 
           noRets :: Loop -> Bool 
-          noRets (Loop _ body _) = all noRet $ S.toList body 
+          noRets (Loop _ body _ _ _) = all noRet $ S.toList body 
               where noRet :: Label -> Bool 
                     noRet l = let BodyBlock block = lookupBlock graph l 
                                   (_, _, mx) = blockToNodeList block 
@@ -189,7 +474,7 @@ analyzeParallelizationPass midir = parallelLoops
           notARet _ = True 
           
           noBreaks :: Loop -> Bool 
-          noBreaks (Loop header body _) = all noBreak $ S.toList body  
+          noBreaks (Loop header body _ _ _) = all noBreak $ S.toList body  
               where noBreak :: Label -> Bool 
                     noBreak l 
                         | l == header = True 
@@ -237,73 +522,265 @@ analyzeParallelizationPass midir = parallelLoops
                       | otherwise -> case (linConstExpr loop expr1, linConstExpr loop expr2) of 
                                        (Nothing, _) -> False 
                                        (_, Nothing) -> False 
-                                       (Just linExpr1, Just linExpr2) -> solveLinExprs linExpr1 linExpr2 
-              where v@(variant, invariant) = loopVarInfos Map.! loop 
-                    (variantNames, invariantNames) = loopVarNames v 
+                                       (Just linExpr1, Just linExpr2) -> noLinSoln loop linExpr1 linExpr2 
+          
+          -- Tests for whether two separate iterations of a given loop 
+          -- can access the same data. Uses the glpk-hs package to solve 
+          -- an integer linear program. 
+
+          -- Given two expressions f(i, j) and g(i, j) for loop i. 
+          -- have equations:
+          -- f(i1, j1) = f(i2, j2) 
+          -- i1 /= i2 (i1 <= i2-1 or i1 >= i2+1)
+          -- i1, i2 >= imin and i1, i2 <= imax-1 
+          -- j1, j2 >= jmin and j1, j2 <= jmax-1
+          noLinSoln :: Loop -> FloatExpr -> FloatExpr -> Bool 
+          noLinSoln loop expr1 expr2 
+              = concreteBounds && noLessSoln && noGreaterSoln
+              where noLessSoln = case unsafePerformIO $ LP.evalLPT lessLP of 
+                                   Success -> False
+                                   v -> True
+                    noGreaterSoln = case unsafePerformIO $ LP.evalLPT greaterLP of 
+                                      Success -> False 
+                                      v -> True
+                    concreteBounds = isJust bounds && isJust indConstraints
+                    loopVarInfo = Map.union myVariables $ Map.union parentVars childVars 
+                    parentVars =  Map.fromList [(n, (i, p)) | p <- loopParents Map.! loop, i@(n, _, _, _) <- S.toList $ loop_variables p]
+                    childVars = Map.fromList [(n, (i, c)) | c <- (mFDebug loop loopChildren), i@(n, _, _, _) <- S.toList $ loop_variables c]
+                    myVariables = Map.fromList [(n, (i, loop)) | i@(n, _, _, _) <- S.toList $ loop_variables loop]
+
+                    usedVariables :: S.Set VarName
+                    usedVariables = S.insert base_loop_var $ S.union (fold_FEE addUsedVariables S.empty expr1) (fold_FEE addUsedVariables S.empty expr2)
+                    addUsedVariables :: S.Set VarName -> FloatExpr -> S.Set VarName 
+                    addUsedVariables set (FVar v) = S.insert v set 
+                    addUsedVariables set _ = set
+
+                    bounds :: Maybe (Map.Map VarName (FloatExpr, FloatExpr))
+                    bounds = foldM maybeAddBounds Map.empty $ S.toList usedVariables
+                    maybeAddBounds :: (Map.Map VarName (FloatExpr, FloatExpr)) -> VarName -> Maybe (Map.Map VarName (FloatExpr, FloatExpr))
+                    maybeAddBounds map var 
+                        = do ((_, init, end, inc), _) <- Map.lookup var loopVarInfo
+                             initExpr <- linConstFloatExpr loop init
+                             endExpr <- linConstFloatExpr loop end
+                             case inc > 0 of 
+                               True -> return $ Map.insert var (initExpr, endExpr) map 
+                               False -> return $ Map.insert var (endExpr, initExpr) map 
                     
-                    solveLinExprs :: MidIRExpr -> MidIRExpr -> Bool 
-                    solveLinExprs expr1 expr2 = trace ("Dep: " ++ (show expr1) ++ ", " ++ (show expr2)) True
+                    mBounds = fromJust bounds
+
+                    officialBounds :: Map.Map String (LinFunc String Double, LinFunc String Double) 
+                    officialBounds = Map.union expr1Bounds expr2Bounds 
+                    
+                    (base_loop_var, _, _, _) = loop_base loop
+                    base_1 = (show base_loop_var) ++ "_1"
+                    base_2 = (show base_loop_var) ++ "_2"
+                    
+                    expr1Bounds = Map.fromList [( (show k) ++ "_1", makeLinFuncs "_1" v) | (k, v) <- Map.toList mBounds]
+                    expr2Bounds = Map.fromList [( (show k) ++ "_2", makeLinFuncs "_2" v) | (k, v) <- Map.toList mBounds]
+                    
+                    makeLinFuncs suf (f1, f2) = (makeLinFunc suf f1, makeLinFunc suf f2)
+
+                    -- Now need to create the constraints on all of the non-base variables 
+                    -- So they're all a linear function of i
+                    indConstraints :: Maybe (Map.Map VarName FloatExpr)
+                    indConstraints = foldM maybeAddConstraint Map.empty $ S.toList usedVariables
+
+                    maybeAddConstraint map var 
+                        | var == base_loop_var = Just map 
+                        | otherwise = do ((_, init, end, inc), myLoop) <- Map.lookup var loopVarInfo 
+                                         let maybeConstraint 
+                                                 | myLoopVar /= var = Just $ FBinOp OpAdd (FBinOp OpMul (FLit dInc) (FVar myLoopVar)) init
+                                                 | otherwise = Nothing
+                                             dInc = fromIntegral inc 
+                                             (myLoopVar, _, _, _) = loop_base myLoop
+                                         constraint <- maybeConstraint
+                                         correct <- linConstFloatExpr loop constraint
+                                         return $ Map.insert var correct map
+                                                
+                    mCon = fromJust indConstraints
+                                  
+
+                    officialConstraints = Map.union expr1Con expr2Con
+                    expr1Con = Map.fromList [( (show k) ++ "_1", makeLinFunc "_1" v) | (k, v) <- Map.toList mCon]
+                    expr2Con = Map.fromList [( (show k) ++ "_2", makeLinFunc "_2" v) | (k, v) <- Map.toList mCon]
+
+                    linFunc1 :: LinFunc String Double
+                    linFunc1 = makeLinFunc "_1" expr1
+
+                    linFunc2 :: LinFunc String Double 
+                    linFunc2 = makeLinFunc "_2" expr2
+
+                    makeLinFunc :: String -> FloatExpr -> LinFunc String Double 
+                    makeLinFunc suf expr = fold_FEE (addCoeffs suf) Map.empty expr
+
+                    addCoeffs :: String -> LinFunc String Double -> FloatExpr -> LinFunc String Double
+                    addCoeffs suf fun (FBinOp OpAdd (FLit i) _) = addCoeff "parallel_const" i fun 
+                    addCoeffs suf fun (FBinOp OpAdd _ (FLit i)) = addCoeff "parallel_const" i fun 
+                    addCoeffs suf fun (FBinOp OpMul (FLit i) (FVar v)) = addCoeff ( (show v) ++ suf) i fun
+                    addCoeffs suf fun (FLit i) = addCoeff "parallel_const" i fun 
+                    addCoeffs suf fun (FVar v) = addCoeff ((show v) ++ suf) 1 fun
+                    addCoeffs suf fun _ = fun
+
+                    addCoeff :: String -> Double -> LinFunc String Double -> LinFunc String Double
+                    addCoeff v i fun = case Map.lookup v fun of 
+                                         Nothing -> Map.insert v i fun 
+                                         Just i2 -> Map.insert v (i+i2) fun
+                                                    
+                    createMin1 :: String -> LinFunc String Double
+                    createMin1 v = (var v) ^-^ (var "parallel_const")
+
+                    createPlus1 :: String -> LinFunc String Double
+                    createPlus1 v = (var v) ^+^ (var "parallel_const") 
+
+                    lessLP :: LP.LPT String Double IO ReturnCode 
+                    lessLP = do LP.setObjective Map.empty
+                                -- Make the dependencies equal
+                                LP.equal linFunc1 linFunc2
+                                -- Set bounds on all of our looping variables
+                                mapM (\(v, (l, u)) -> do LP.geq (var v) l 
+                                                         LP.leq (var v) u) $ Map.toList officialBounds
+                                -- Add the constraints to all of our looping variables
+                                mapM (\(v, c) -> LP.equal (var v) c) $ Map.toList officialConstraints
+                                LP.varEq "parallel_const" 1 -- and the "constant" variable should always be 1
+                                -- Make our main looping variables (the current loop) inequal 
+                                -- Specifically for this LP, make it < 
+                                LP.leq (var base_1) $ createMin1 base_2
+
+                                -- Set the kinds on all of our variables 
+                                mapM (\v -> LP.setVarKind v IntVar) $ Map.keys officialBounds
+                                LP.setVarKind "parallel_const" IntVar
+                                -- Finally, try to solve the integer linear program 
+                                (code, _) <- LP.glpSolve $ mipDefaults {msgLev=MsgOff}
+                                return code
+
+                    greaterLP :: LP.LPT String Double IO ReturnCode 
+                    greaterLP = do LP.setObjective Map.empty
+                                   -- Make the dependencies equal
+                                   LP.equal linFunc1 linFunc2
+                                   -- Set bounds on all of our looping variables
+                                   mapM (\(v, (l, u)) -> do LP.geq (var v) l 
+                                                            LP.leq (var v) u) $ Map.toList officialBounds
+                                   -- Add the constraints to all of our looping variables
+                                   mapM (\(v, c) -> LP.equal (var v) c) $ Map.toList officialConstraints
+                                   LP.varEq "parallel_const" 1 -- and the "constant" variable should always be 1
+                                   -- Make our main looping variables (the current loop) inequal 
+                                   -- Specifically for this LP, make it > 
+                                   LP.geq (var base_1) $ createPlus1 base_2
+
+                                   -- set the kinds on all of our variables 
+                                   mapM (\v -> LP.setVarKind v IntVar) $ Map.keys officialBounds
+                                   LP.setVarKind "parallel_const" IntVar
+                                   -- Finally, try to solve the integer linear program 
+                                   (code, _) <- LP.glpSolve $ mipDefaults {msgLev=MsgOff}
+                                   return code
+
+          linConstExpr :: Loop -> MidIRExpr -> Maybe FloatExpr
+          linConstExpr loop expr = do newExpr <- return $ eliminateLabels expr 
+                                      newExpr <- exprToFloatExpr newExpr
+                                      linConstFloatExpr loop newExpr
+          eliminateLabels :: MidIRExpr -> MidIRExpr 
+          eliminateLabels expr = fromMaybe expr $ (mapEE maybeEliminateLabel) expr 
+          maybeEliminateLabel (BinOp _ _ (LitLabel _ _) expr) = Just expr 
+          maybeEliminateLabel (BinOp _ _ expr (LitLabel _ _)) = Just expr 
+          maybeEliminateLabel _ = Nothing
+
+                
 
           -- Try to place the expression into linear constant form 
           -- where the expression represents a linear function of a number 
           -- of available loop induction variables. Returns Nothing if the 
           -- expression can't be placed in linear constant form
-          linConstExpr :: Loop -> MidIRExpr -> Maybe MidIRExpr 
-          linConstExpr loop expr = do newExpr <- return $ eliminateLabels expr 
-                                      newExpr <- rejectObviousProblems newExpr
-                                      case hasNonLoopVariables newExpr of 
-                                        True -> do newExpr <- tryRemoveNonLoops newExpr
-                                                   linConstExpr loop newExpr
-                                        False -> rejectNonLinear newExpr
-                                                 
+          linConstFloatExpr :: Loop -> FloatExpr -> Maybe FloatExpr 
+          linConstFloatExpr loop expr = do newExpr <- rejectObviousProblems expr
+                                           case hasNonLoopVariables newExpr of 
+                                             True -> do newExpr <- tryRemoveNonLoops newExpr
+                                                        linConstFloatExpr loop newExpr
+                                             False -> do newExpr <- makeLinear newExpr 
+                                                         rejectNonLinear newExpr
+                                                    
               where v@(variants, invariants) = loopVarInfos Map.! loop 
                     (variantNames, invariantNames) = loopVarNames v 
                     varNameToWebID :: Map.Map VarName WebID 
                     varNameToWebID = Map.fromList [(webVar $ getWeb id webs, id) | id <- S.toList $ S.union variants invariants]
                     availableLoopVars :: S.Set VarName 
                     availableLoopVars = S.union myVariables $ S.union parentVars childVars 
-                    parentVars = S.fromList [var | p <- loopParents Map.! loop, (var, _, _, _) <- loop_variables p] 
-                    childVars = S.fromList [var | c <- loopChildren Map.! loop, (var, _, _, _) <- loop_variables c]
-                    myVariables = S.fromList $ [var | (var, _, _, _) <- loop_variables loop]
+                    parentVars = S.fromList [var | p <- mFDebug loop loopParents, (var, _, _, _) <- S.toList $ loop_variables p] 
+                    childVars = S.fromList [var | c <- mFDebug loop loopChildren, (var, _, _, _) <- S.toList $ loop_variables c]
+                    myVariables = S.fromList [var | (var, _, _, _) <- S.toList $ loop_variables loop]
 
-                    rejectObviousProblems :: MidIRExpr -> Maybe MidIRExpr 
+                    rejectObviousProblems :: FloatExpr -> Maybe FloatExpr 
                     rejectObviousProblems expr
-                        | fold_EE isObviousProblem False expr = Nothing 
+                        | fold_FEE isObviousProblem False expr = Nothing 
                         | otherwise = Just expr
 
-                    isObviousProblem :: Bool -> MidIRExpr -> Bool 
-                    isObviousProblem b (LitLabel _ _) = True 
-                    isObviousProblem b (Load _ _) = True 
-                    isObviousProblem b (Cond _ _ _ _) = True
-                    isObviousProblem b (Var _ v)
+                    isObviousProblem :: Bool -> FloatExpr -> Bool 
+                    isObviousProblem b (FVar v)
                         | S.member v variantNames = True
                     isObviousProblem b _ = b 
 
-                    rejectNonLinear :: MidIRExpr -> Maybe MidIRExpr 
+                    rejectNonLinear :: FloatExpr -> Maybe FloatExpr 
                     rejectNonLinear expr 
-                        | fold_EE isNonLinear False expr = Nothing 
+                        | fold_FEE isNonLinear False expr = Nothing 
                         | otherwise = Just expr 
 
-                    isNonLinear :: Bool -> MidIRExpr -> Bool 
-                    isNonLinear b (BinOp _ OpMul (Var _ _) (Var _ _)) = True
-                    isNonLinear b _ = b 
+                    isNonLinear :: Bool -> FloatExpr -> Bool 
+                    isNonLinear b (FBinOp OpMul (FLit _) (FVar _)) = b || False
+                    isNonLinear b (FBinOp OpAdd _ _) = b || False 
+                    isNonLinear b (FLit _) = b || False 
+                    isNonLinear b (FVar _) = b || False 
+                    isNonLinear b _ = True 
 
-                    hasNonLoopVariables :: MidIRExpr -> Bool 
-                    hasNonLoopVariables expr = fold_EE isNonLoopVar False expr 
-                    isNonLoopVar :: Bool -> MidIRExpr -> Bool 
-                    isNonLoopVar b (Var _ v) 
+                    makeLinear :: FloatExpr -> Maybe FloatExpr 
+                    makeLinear expr = case lineared of 
+                                        Nothing -> Just expr 
+                                        Just expr' -> makeLinear expr'
+                        where lineared = mapFEE linearize expr
+
+                    linearize :: FloatExpr -> Maybe FloatExpr
+                    -- We're now in the land of floats 
+                    linearize (ILit i) = Just $ FLit $ fromIntegral i
+                    -- Coefficients should be distributed
+                    linearize (FBinOp OpMul expr (FBinOp op expr1 expr2))
+                        | op == OpAdd || op == OpSub 
+                            = Just $ (FBinOp op (FBinOp OpMul expr expr1) (FBinOp OpMul expr expr2))
+                    linearize (FBinOp OpMul (FBinOp op expr1 expr2) expr)
+                        | op == OpAdd || op == OpSub 
+                            = Just $ (FBinOp op (FBinOp OpMul expr expr1) (FBinOp OpMul expr expr2))
+                    -- Coefficients should be combined if they're multiplied
+                    linearize (FBinOp OpMul (FLit i1) (FLit i2)) = Just (FLit (i1*i2))
+                    -- Or added or subtracted 
+                    linearize (FBinOp OpMul expr (FLit i)) = Just $ FBinOp OpMul (FLit i) expr
+                    linearize (FBinOp OpMul (FLit i1) (FBinOp OpMul (FLit i2) expr)) 
+                        = Just (FBinOp OpMul (FLit (i1*i2)) expr)
+                    linearize (FBinOp OpSub expr1 expr2) = Just (FBinOp OpAdd expr1 (FUnOp OpNeg expr2))
+                    linearize (FUnOp OpNeg (FLit i)) = Just (FLit (-i))
+                    linearize (FUnOp OpNeg (FBinOp op expr1 expr2))
+                        | op == OpAdd || op == OpSub 
+                            = Just $ (FBinOp op (FUnOp OpNeg expr1) (FUnOp OpNeg expr2))
+                    linearize (FUnOp OpNeg (FBinOp OpMul (FLit i) expr) ) 
+                        =  Just $ FBinOp OpMul (FLit (-i)) expr
+                    linearize (FUnOp OpNeg (FUnOp OpNeg expr)) = Just expr
+                    linearize (FBinOp OpAdd (FLit i1) (FLit i2)) = Just (FLit (i1+i2))
+                    linearize _ = Nothing
+                              
+
+
+                    hasNonLoopVariables :: FloatExpr -> Bool 
+                    hasNonLoopVariables expr = fold_FEE isNonLoopVar False expr 
+                    isNonLoopVar :: Bool -> FloatExpr -> Bool 
+                    isNonLoopVar b (FVar v) 
                         | S.notMember v availableLoopVars = True 
                     isNonLoopVar b _ = b 
 
-                    tryRemoveNonLoops :: MidIRExpr -> Maybe MidIRExpr 
+                    tryRemoveNonLoops :: FloatExpr -> Maybe FloatExpr 
                     tryRemoveNonLoops expr = foldM removeNonLoop expr $ S.toList nonLoopVars
-                        where nonLoopVars = fold_EE addNonLoopVars S.empty expr 
-                              addNonLoopVars s (Var _ v) 
+                        where nonLoopVars = fold_FEE addNonLoopVars S.empty expr 
+                              addNonLoopVars s (FVar v) 
                                   | S.notMember v availableLoopVars = S.insert v s 
                               addNonLoopVars s _ = s
-                              removeNonLoop :: MidIRExpr -> VarName -> Maybe MidIRExpr 
+                              removeNonLoop :: FloatExpr -> VarName -> Maybe FloatExpr 
                               removeNonLoop expr v
-                                  = let webID = varNameToWebID Map.! v 
+                                  = let webID = mFDebug v varNameToWebID 
                                         web = getWeb webID webs
                                         defs = webDefs web
                                         singleDef = head $ S.toList defs
@@ -312,19 +789,17 @@ analyzeParallelizationPass midir = parallelLoops
                                        then Nothing 
                                        else case replaceInst of 
                                               Just (Store _ _ new) 
-                                                  -> Just $ fromMaybe expr $ mapEE (replaceVar v new) expr   
+                                                  -> case exprToFloatExpr new of 
+                                                       Just fNew -> Just $ fromMaybe expr $ mapFEE (replaceVar v fNew) expr   
+                                                       _ -> Nothing
                                               _ -> Nothing 
 
-                              replaceVar :: VarName -> MidIRExpr -> MidIRExpr -> Maybe MidIRExpr 
-                              replaceVar v expr (Var _ x) 
+                              replaceVar :: VarName -> FloatExpr -> FloatExpr -> Maybe FloatExpr 
+                              replaceVar v expr (FVar x) 
                                   | v == x = Just $ expr 
                               replaceVar _ _ _ = Nothing
 
-          eliminateLabels :: MidIRExpr -> MidIRExpr 
-          eliminateLabels expr = fromMaybe expr $ (mapEE maybeEliminateLabel) expr 
-          maybeEliminateLabel (BinOp _ _ (LitLabel _ _) expr) = Just expr 
-          maybeEliminateLabel (BinOp _ _ expr (LitLabel _ _)) = Just expr 
-          maybeEliminateLabel _ = Nothing
+          
 
 
           findLabel :: MidIRExpr -> Maybe String 
@@ -364,7 +839,7 @@ findLoopVarInfo webs loop = S.fold addVarWebs (S.empty, S.empty) loopWebs
 
           webIsCorrectLoopVariable :: Web -> Bool 
           webIsCorrectLoopVariable web
-              | not ( (webVar web) `elem` [x | (x, _, _, _) <- loopVars] ) = False
+              | not ( (webVar web) `elem` [x | (x, _, _, _) <- S.toList loopVars] ) = False
               | S.size (webDefs web) /= 2 = False 
               | otherwise = True
                     
@@ -488,7 +963,6 @@ findReaching loopBack loopHeader graph mlabels
                       noSuccessors = null $ successors currentBlock
                                       
 
---dominatorTransfer :: Label -> (Map.Map Label (S.Set Label), Bool) -> (Map.Map Label 
 
 type ReachingFact = Bool 
 reachingLattice :: DataflowLattice ReachingFact 

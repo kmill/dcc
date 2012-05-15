@@ -622,6 +622,7 @@ mapAsm fs fd n
         
         Call{} -> Nothing
         Callout{} -> Nothing
+        InternalFunc{} -> Nothing
         Ret{} -> Nothing
         RetPop{} -> Nothing
         ExitFail{} -> Nothing
