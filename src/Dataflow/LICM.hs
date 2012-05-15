@@ -3,13 +3,17 @@ module Dataflow.LICM where
 
 import Dataflow.OptSupport
 import Dataflow.DeadCode
+import DataflowTypes
 import LoopAnalysis
+import Parallelize(compare', MidIRMap, headerPred, headerBlock, headerPredBlock, lastInst)
 import AST(SourcePos)
 import Compiler.Hoopl
 import IR
 import qualified Data.Set as S
-import Data.Maybe(catMaybes)
+import qualified Data.List as L
+import Data.Maybe(catMaybes, fromMaybe, isJust)
 import Debug.Trace
+import Control.Monad.Trans.State.Lazy
 
 data (Ord v) => SInst v
     = SStore SourcePos v (Expr v)
@@ -149,5 +153,24 @@ motionRewrite loops = trace (show loops) $ mkBRewrite3 idRewr idRewr r
           getInstrs = catMaybes . map unStoreInst . S.toList . S.unions . mapElems . mapMap fst
 -}
 
-performLICMPass :: S.Set Loop -> MidIRRepr -> RM MidIRRepr
-performLICMPass = undefined
+type SM a = State (S.Set MSInst) a
+-- should move loops in reverse order, state keeps track of which instructions have already been moved
+doLICM :: S.Set Loop -> FactBase MotionFact -> Graph MidIRInst C C -> Graph MidIRInst C C
+doLICM loops facts graph = evalState monadic S.empty
+    where monadic = foldl (>>=) (return graph) $ map (motionLoop facts) $ reverse $ L.sortBy compare' $ S.toList loops
+
+motionLoop :: FactBase MotionFact -> Loop -> Graph MidIRInst C C -> SM (Graph MidIRInst C C)
+motionLoop facts loop graph = do
+    alreadyMoved <- get
+    let toMove = naiveToMove S.\\ alreadyMoved
+        toMoveList = instList toMove
+        predBlock' = blockOfNodeList (entry, middle ++ toMoveList, exit)
+        blockMap' = mapInsert (headerPred loop blockMap) predBlock' blockMap
+    put $ S.union alreadyMoved toMove
+    return $ GMany NothingO blockMap' NothingO
+    where GMany _ blockMap _ = graph
+          naiveToMove = fst $ mapFindWithDefault (error "couldn't find label for licm") (loop_header loop) facts
+          predBlock = headerPredBlock loop blockMap
+          (entry, middle, exit) = blockToNodeList predBlock
+          instList :: S.Set MSInst -> [MidIRInst O O]
+          instList = catMaybes . map unStoreInst . S.toList

@@ -58,7 +58,8 @@ Executable dcc
     filepath,
     array >= 0.3,
     regex-compat,
-    MissingH >= 1
+    MissingH >= 1,
+    transformers
 --    hoopl >= 3.8.7
   extensions:
     CPP

@@ -136,7 +136,7 @@ performLICMPass :: MidIRRepr -> RM MidIRRepr
 performLICMPass midir
     = do
         (_, factBase, _) <- analyzeAndRewriteBwd
-                                 (licmPass loops)
+                                 licmPass
                                  (JustC mlabels)
                                  graph
                                  (mapFromList (map (\l -> (l, emptyMotionFact) ) mlabels))
@@ -233,7 +233,7 @@ csePass nonTemps = FwdPass
 
 licmPass :: (CheckpointMonad m, FuelMonad m, UniqueNameMonad m)
             => BwdPass m MidIRInst MotionFact
-licmPass loops = BwdPass
+licmPass = BwdPass
            { bp_lattice = motionLattice
            , bp_transfer = motionTransfer
            , bp_rewrite = motionRewrite }
