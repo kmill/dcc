@@ -21,7 +21,8 @@ nullTransfer = mkFTransfer ft
       ft :: MidIRInst e x -> () -> Fact x ()
       ft (Branch _ l) f = mapSingleton l f
       ft (ThreadReturn _ l) f = mapSingleton l f
-      ft (Parallel _ l _ _ _) f = mapSingleton l f
+      ft (Parallel _ ll _ _ el) f = mkFactBase nullLattice
+                                    [(ll, ()), (el, ())]
       ft (CondBranch _ _ tl fl) f = mkFactBase nullLattice
                                     [(tl, ()), (fl, ())]
       ft (Return _ _ _) f = mapEmpty

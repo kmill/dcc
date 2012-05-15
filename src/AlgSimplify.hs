@@ -142,7 +142,7 @@ flattenOp op e@(BinOp _ op' e1 e2)
     | otherwise  = [e]
 flattenOp op e = [e]
 
-simpUnOp :: Ord v => SourcePos -> UnOp -> Expr v -> AM (Expr v)
+simpUnOp :: (Show v, Ord v) => SourcePos -> UnOp -> Expr v -> AM (Expr v)
 simpUnOp pos op sex = msum rules
     where
       rules =
@@ -153,6 +153,23 @@ simpUnOp pos op sex = msum rules
                Lit litpos i <- withExpr sex
                guard $ i /= minBound
                return $ Lit pos (unOp op i)
+          -- Negating a subtraction is the same as reversing the
+          -- subtraction
+          , do guard $ op == OpNeg
+               BinOp pos2 OpSub sex1 sex2 <- withExpr sex
+               simpES $ BinOp pos2 OpSub sex2 sex1
+          -- Negating an addition with a constant is the same as
+          -- subtracting from the negative constant
+          , do guard $ op == OpNeg
+               BinOp pos2 OpAdd (Lit litpos i) sex2 <- withExpr sex
+               guard $ i /= minBound
+               simpES $ BinOp pos2 OpSub (Lit litpos (negate i)) sex2
+          -- Negating a subtraction with a constant is the same as
+          -- adding to the negative constant
+          , do guard $ op == OpNeg
+               BinOp pos2 OpSub (Lit litpos i) sex2 <- withExpr sex
+               guard $ i /= minBound
+               simpES $ BinOp pos2 OpAdd (Lit litpos (negate i)) sex2
           -- Don't put in a default case.
           ]
 
@@ -170,20 +187,22 @@ simpBinOp pos op sex1 sex2 = traceM ("bin", op, sex1, sex2) $ msum rules
     where
       rules =
           [ -- This rule does constant folding if both sides are
-            -- constants. unless there is a divide by zero.
+            -- constants. (there is no division operation).
+            -- Muchnick R1,R3,R5
             do Lit _ i1 <- withExpr sex1
                Lit _ i2 <- withExpr sex2
---               guard $ (op /= OpDiv) || (i2 /= 0)
---               guard $ (op /= OpMod) || (i2 /= 0)
                return $ Lit pos (binOp op i1 i2)
           -- The following rule enforces the order that literals occur
           -- at the beginning of a sequence of
           -- additions or multiplications
+          -- Muchnick R2,R4
           , do guard $ op `elem` [OpAdd, OpMul]
                guard $ sex1 > sex2
                simpES $ BinOp pos op sex2 sex1
           -- Reassociates left-association to right-association for
-          -- addition and multiplication
+          -- addition and multiplication while reordering the three
+          -- expressions.
+          -- backwards Muchnick R7,R8
           , do guard $ op `elem` [OpAdd, OpMul]
                BinOp _ op' oper1 oper2 <- withExpr sex1
                guard $ op' == op
@@ -191,17 +210,72 @@ simpBinOp pos op sex1 sex2 = traceM ("bin", op, sex1, sex2) $ msum rules
                let [a, b, c] = sort [oper1, oper2, sex2]
                oper1' <- simpES $ BinOp pos op a b
                simpES $ BinOp pos op oper1' c
-          , do Lit _ i1 <- withExpr sex2
-               guard $ op `elem` [OpAdd, OpMul]
-               BinOp _ op' oper1 (Lit litpos i2) <- withExpr sex1
-               guard $ op' == op
-               simpES $ BinOp pos op oper1
-                          (Lit litpos (binOp op i1 i2))
+          -- Pulls a constant from the right branch into the left
+          -- branch if the left is a constant, too
+          -- Backwards muchnick R9, R10
+          , do guard $ op `elem` [OpAdd, OpMul]
+               Lit litpos i1 <- withExpr sex1
+               BinOp _ op' (Lit _ i2) sex2_2 <- withExpr sex2
+               guard $ op == op'
+               simpES $ BinOp pos op (Lit litpos (binOp op i1 i2)) sex2_2
+          -- Reorders the tree if the right-side's left branch is less
+          -- than the left branch
+          , do guard $ op `elem` [OpAdd, OpMul]
+               BinOp pos2 op' sex2_1 sex2_2 <- withExpr sex2
+               guard $ op == op'
+               guard $ sex1 > sex2_1
+               simpES $ BinOp pos op sex2_1 (BinOp pos2 op sex1 sex2_2)
+          -- Adding a negation is the same as just subtracting
+          , do guard $ op == OpAdd
+               UnOp pos1 OpNeg nsex1 <- withExpr sex1
+               simpES $ BinOp pos1 OpSub sex2 nsex1
+          , do guard $ op == OpAdd
+               UnOp pos1 OpNeg nsex2 <- withExpr sex2
+               simpES $ BinOp pos1 OpSub sex1 nsex2
+          -- pulls a constant from the right subtraction branch for an
+          -- addition.
+          , do guard $ op == OpAdd
+               BinOp pos2 OpSub (Lit litpos i) sex2_2 <- withExpr sex2
+               simpES $ BinOp pos OpSub
+                          (BinOp pos2 OpAdd
+                           (Lit litpos i) sex1)
+                          sex2_2
+          -- Subtracting from a negation is the same as negating the
+          -- addition
+          , do guard $ op == OpSub
+               UnOp pos1 OpNeg nsex1 <- withExpr sex1
+               simpES $ UnOp pos1 OpNeg $ BinOp pos OpAdd nsex1 sex2
+          -- Subtracting a negation is the same as addition
+          , do guard $ op == OpSub
+               UnOp _ OpNeg nsex2 <- withExpr sex2
+               simpES $ BinOp pos OpAdd sex1 nsex2
+          -- Pulls a constant from the right of a subtraction if it
+          -- isn't the most negative number.
+          , do guard $ op == OpSub
+               BinOp pos2 OpAdd (Lit posi i2) sex2_2 <- withExpr sex2
+               guard $ i2 /= minBound
+               simpES $ BinOp pos OpSub
+                          (BinOp pos2 OpAdd (Lit posi (negate i2)) sex1)
+                          sex2_2
+          -- Pulls a constant from the left of a subtraction into
+          -- being an addition.
+          , do guard $ op == OpSub
+               BinOp pos1 OpAdd (Lit posi i) sex1_2 <- withExpr sex1
+               simpES $ BinOp pos OpAdd
+                          (Lit posi i)
+                          (BinOp pos OpSub sex1_2 sex2)
+          -- If subtracting a number, we can just add the negative of
+          -- the number if it isn't the most negative number
+          , do guard $ op == OpSub
+               Lit pos2 i2 <- withExpr sex2
+               guard $ i2 /= minBound
+               simpES $ BinOp pos OpAdd sex1 (Lit pos2 (negate i2))
           -- If we are adding zero, we can safely not add the zero
           , do guard $ op == OpAdd
                Lit _ 0 <- withExpr sex1
                return $ sex2
           -- If we are subtracting from zero, we can do a negation.
+          -- Muchnick R6
           , do guard $ op == OpSub
                Lit _ 0 <- withExpr sex1
                simpES $ UnOp pos OpNeg sex2
@@ -238,6 +312,13 @@ simpBinOp pos op sex1 sex2 = traceM ("bin", op, sex1, sex2) $ msum rules
           , do guard $ op == OpMul
                Lit _ 0 <- withExpr sex1
                return sex1
+          -- Muchick R11
+          , do guard $ op == OpMul
+               Lit posl1 i1 <- withExpr sex1
+               BinOp pos2 OpAdd (Lit posl2 i2) sex2_2 <- withExpr sex2
+               simpES $ BinOp pos OpAdd
+                          (Lit posl1 (binOp op i1 i2))
+                          (BinOp pos2 OpMul (Lit posl1 i1) sex2_2)
           -- If we are multiplying a literal by the negation of
           -- something, we can move the negation to the literal as
           -- long as the literal isn't the most negative number.

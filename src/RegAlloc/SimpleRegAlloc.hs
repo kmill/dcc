@@ -21,8 +21,8 @@ import qualified RegAlloc.Allocator as Allocator
 import AliveDead
 
 regAlloc :: LowIRRepr -> I.GM LowIRRepr
-regAlloc (LowIRRepr fields strs meths graph)
-    = return $ LowIRRepr fields strs meths graph'
+regAlloc (LowIRRepr fields strs ipc meths graph)
+    = return $ LowIRRepr fields strs ipc meths graph'
       where GMany _ body _ = graph
             graph' = foldl (|*><*|) emptyClosedGraph bodies
             bodies = map f (mapElems body)

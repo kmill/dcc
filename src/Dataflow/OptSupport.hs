@@ -193,8 +193,8 @@ getMidAliveDead inst
         n@(IndStore _ _ _) -> (S.toList $ getUses S.empty n, [])
         n@(Call _ x _ _) -> (S.toList $ getUses S.empty n, [x])
         n@(Callout _ x _ _) -> (S.toList $ getUses S.empty n, [x])
-        Parallel _ _ _ _ _ -> emptyMAD
-        ThreadReturn _ _ -> emptyMAD
+        n@(Parallel _ _ x _ _) -> ([], [x])
+        ThreadReturn _ _ -> error "tried to getMidAliveDead ThreadReturn"
         Branch _ _ -> emptyMAD
         n@(CondBranch _ _ _ _) -> (S.toList $ getUses S.empty n, [])
         n@(Return _ _ _) -> (S.toList $ getUses S.empty n, [])

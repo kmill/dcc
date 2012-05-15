@@ -29,20 +29,20 @@ import RegAlloc.InterfGraph
 import qualified Dataflow.GenWebs as GenWebs
 import Dataflow.OptSupport (joinProd, joinSets, setLattice, (><))
 
-dotrace = False
+dotrace = True
 
 trace' a b = if dotrace then trace a b else b 
 
 -- | Main entry point to allocating registers for the IR
 regAlloc :: LowIRRepr -> I.GM LowIRRepr
 regAlloc lir
-    = do LowIRRepr fields strs meths graph <- evalStupidFuelMonad (performDeadAsmPass lir) maxBound
+    = do LowIRRepr fields strs ipc meths graph <- evalStupidFuelMonad (performDeadAsmPass lir) maxBound
          let GMany _ body _ = graph
              mlabels = map I.methodEntry meths
          massgraph <- evalStupidFuelMonad (massageGraph mlabels graph) maxBound
          let graph' = foldl1 (|*><*|) $ map (\mlabel -> doRegAlloc freeSpillLocs mlabel (subgraph massgraph mlabel)) mlabels
 --         graph'' <- evalStupidFuelMonad (simplifySpillsAndBetterify mlabels graph') maxBound
-         return $ LowIRRepr fields strs meths graph'
+         return $ LowIRRepr fields strs ipc meths graph'
     where
       subgraph :: Graph A.Asm C C -> Label -> Graph A.Asm C C
       subgraph (GMany _ body _) label = let blocks = postorder_dfs_from body label

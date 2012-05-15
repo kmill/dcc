@@ -135,6 +135,8 @@ duTransfer = mkBTransfer3 fe fm fx
               = handle l False S.empty (getAliveDead n) (getPinned n) (getFixed n) f
                 
           fx :: (PNode Asm) O C -> FactBase DUBuildFact -> DUBuildFact
+          fx (PNode l (InternalFunc _ _ (Imm32BlockLabel lab 0))) fb
+              = fromMaybe (S.empty, S.empty) $ lookupFact lab fb
           fx (PNode l n) fb
               = handle l False S.empty (getAliveDead n) (getPinned n) (getFixed n)
                 (joinOutFacts duLattice n fb)
@@ -305,6 +307,8 @@ buildAdjLists mlabels graph usedef
                           in handle (alive, dead) (live S.\\ alive, adj)
                     fm (PNode l n) f = handle (M.findWithDefault (S.empty, S.empty) l usedef) f
                     fx :: PNode Asm O C -> FactBase AdjListFact -> AdjListFact
+                    fx (PNode l (InternalFunc _ _ (Imm32BlockLabel lab 0))) f
+                        = fromMaybe (S.empty, M.empty) $ lookupFact lab f
                     fx (PNode l n) fs = handle (M.findWithDefault (S.empty, S.empty) l usedef) (joinOutFacts alLattice n fs)
                     
                     handle :: (S.Set WebID, S.Set WebID) -> AdjListFact -> AdjListFact
@@ -409,6 +413,7 @@ getPinned expr
         Leave{} -> [MReg RSP]
         Call p nargs i -> [MReg RSP]
         Callout p nargs i -> [MReg RSP]
+        InternalFunc{} -> []
         Ret p rets -> []
         RetPop p rets num -> []
         ExitFail{} -> []
@@ -459,6 +464,7 @@ getFixed expr
         Callout p nargs i -> ([MReg RAX] ++ x, x ++ [MReg RAX])
                              <+> ([MReg RSP], map MReg callerSaved ++ [MReg RSP])
             where x = map MReg (catMaybes $ take nargs argOrder)
+        InternalFunc{} -> emptyAD
         Ret p rets -> (if rets then [MReg RAX] else [], []) <+> ([MReg RSP], [])
         RetPop p rets num -> (if rets then [MReg RAX] else [], []) <+> ([MReg RSP], [])
         ExitFail{} -> noFixed

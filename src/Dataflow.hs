@@ -60,7 +60,7 @@ dataflows
       , DFA optLICM performLICMPass
       , DFA optCommonSubElim performCSEPass
       , DFA optCopyProp performCopyPropPass
-      --, DFA optCondElim performCondElimPass
+      , DFA optCondElim performCondElimPass
       -- doing constprop after flatten/cse does great good! see tests/codegen/fig18.6.dcf
       --, DFA optConstProp performConstPropPass
       , DFA optDeadCode performDeadCodePass
@@ -69,7 +69,7 @@ dataflows
       , DFA optConstProp performConstPropPass
       , DFA optDeadCode performDeadCodePass
       , DFA optTailcall performTailcallPass 
-      --, DFA optParallelize performParallelizePass
+      , DFA optParallelize performParallelizePass
       --, DFA optNZP performNZPPass
       , DFA optDeadCode performDeadCodePass 
       , DFA optBlockElim performBlockElimPass 
@@ -191,8 +191,10 @@ copyPropPass = FwdPass
                , fp_rewrite = copyProp }
 
 condElimPass :: (CheckpointMonad m, FuelMonad m) => BwdPass m MidIRInst AssignMap 
-condElimPass = debugBwdTransfers trace show (const $ const True) $ debugBwdJoins trace (const True) $ BwdPass 
-               { bp_lattice = condAssignLattice
+--condElimPass = debugBwdJoins trace (const True) $ BwdPass 
+--condElimPass = debugBwdTransfers trace show (const $ const True) $ debugBwdJoins trace (const True) $ BwdPass 
+condElimPass = BwdPass
+                { bp_lattice = condAssignLattice
                , bp_transfer = condAssignness
                , bp_rewrite = condElim }
 
@@ -290,6 +292,24 @@ getVariablesPass = BwdPass
             fact :: FactBase (S.Set VarName) -> Label -> S.Set VarName
             fact f l = fromMaybe S.empty $ lookupFact l f 
 
+getLiveVariables :: MidIRRepr -> FactBase Live
+getLiveVariables midir = runGM $ evalStupidFuelMonad fb maxBound
+    where
+      fb :: (CheckpointMonad m, FuelMonad m) => m (FactBase Live)
+      fb = do (_, factBase, _) <- analyzeAndRewriteBwd 
+                                  getLiveVariablesPass
+                                  (JustC mlabels)
+                                  graph
+                                  mapEmpty
+              return factBase
+      graph = midIRGraph midir 
+      mlabels = (map methodEntry $ midIRMethods midir)
+      
+      getLiveVariablesPass :: (CheckpointMonad m, FuelMonad m) => BwdPass m MidIRInst Live
+      getLiveVariablesPass = BwdPass
+                             { bp_lattice = liveLattice
+                             , bp_transfer = liveness
+                             , bp_rewrite = noBwdRewrite }
 
 getLitLabels :: MidIRRepr -> RM (FactBase (S.Set String))
 getLitLabels midir 

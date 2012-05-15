@@ -17,14 +17,15 @@ import Compiler.Hoopl
 performBakeSpills :: (CheckpointMonad m, FuelMonad m)
                      => CompilerOpts -> LowIRRepr -> m LowIRRepr
 performBakeSpills opts asm
-    = do graph' <- collectSpills opts mlabels graph
-         return $ asm { lowIRGraph = graph' }
+    = do (graph', ipcs) <- collectSpills opts mlabels graph
+         return $ asm { lowIRGraph = graph' 
+                      , lowIRIPCSize = 8*ipcs }
       where graph = lowIRGraph asm
             mlabels = (map I.methodEntry $ lowIRMethods asm)
 
 -- | Collects and rewrites the spills in the graph to moves.
 collectSpills :: (CheckpointMonad m, FuelMonad m)
-                 => CompilerOpts -> [Label] -> Graph Asm C C -> m (Graph Asm C C)
+                 => CompilerOpts -> [Label] -> Graph Asm C C -> m (Graph Asm C C, Int)
 collectSpills opts mlabels graph
     = do (_, f, _) <- analyzeAndRewriteBwd
                       collectSpillPass
@@ -36,7 +37,12 @@ collectSpills opts mlabels graph
                       (JustC mlabels)
                       graph
                       f
-         return g
+         let spills = S.unions $ map (\l -> fromJust $ lookupFact l f) mlabels
+             ipcSpills = filter isIPC $ S.toList spills
+         return (g, length ipcSpills)
+
+isIPC (SpillIPC _) = True
+isIPC _ = False
  
  -- | Gets the list of spills for each entry point. TODO: make it also
 -- find live ranges for spills so we can reuse stack space.
@@ -59,6 +65,9 @@ collectSpillPass = BwdPass
             usedOO _ f = f
 
             usedOC :: Asm O C -> FactBase (S.Set SpillLoc) -> (S.Set SpillLoc)
+            usedOC (InternalFunc _ fl (Imm32BlockLabel el 0)) f
+                = S.unions [ S.filter (not . isIPC) (fromMaybe S.empty $ lookupFact fl f)
+                           , fromMaybe S.empty $ lookupFact el f ] 
             usedOC x f = S.unions $ map
                          ((fromMaybe S.empty) . (flip lookupFact f))
                          (successors x)
@@ -109,11 +118,16 @@ rewriteSpillPass opts fb = FwdPass
                                  8 * (length $ normalSpills f)
                 normalSpills f = S.toList $ S.filter (\s -> case s of
                                                               SpillArg _ -> False
-                                                              _ -> True) f
+                                                              SpillID _ -> True
+                                                              SpillSID _ -> True
+                                                              SpillIPC _ -> False) f
 
                 toMem :: SpillLoc -> S.Set SpillLoc -> MemAddr
                 toMem (SpillArg r) f = MemAddr (Just $ MReg RSP)
                                        (Imm32 $ 8*(fromIntegral r) + 8 + countSpillID f)
+                                       Nothing SOne
+                toMem (SpillIPC i) f = MemAddr Nothing
+                                       (Imm32Label "main_ipc" $ 8 * (fromIntegral i))
                                        Nothing SOne
                 toMem sl f = MemAddr (Just $ MReg RSP)
                              (Imm32 $ fromIntegral (8 * fromJust (findIndex (==sl) $ normalSpills f)))

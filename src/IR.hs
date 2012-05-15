@@ -222,8 +222,8 @@ data Inst v e x where
     IndStore      :: SourcePos -> Expr v -> Expr v                -> Inst v O O
     Call          :: SourcePos -> v -> String -> [Expr v]         -> Inst v O O
     Callout       :: SourcePos -> v -> String -> [Expr v]         -> Inst v O O
-    -- run label with variable ranging from first int to second int - 1
-    Parallel      :: SourcePos -> Label -> v -> Int64 -> Int64    -> Inst v O C
+    -- run label with variable numthreads times, then do second label
+    Parallel      :: SourcePos -> Label -> v -> Int -> Label      -> Inst v O C
     -- next two should have identical semantics for optimization
     ThreadReturn  :: SourcePos -> Label                           -> Inst v O C
     Branch        :: SourcePos -> Label                           -> Inst v O C
@@ -239,7 +239,7 @@ instance NonLocal (Inst v) where
     entryLabel (Label _ lbl) = lbl
     entryLabel (PostEnter _ lbl) = lbl
     entryLabel (Enter _ lbl _) = lbl
-    successors (Parallel _ plbl _  _ elbl) = [plbl]
+    successors (Parallel _ plbl _  _ elbl) = [plbl, elbl]
     successors (ThreadReturn _ lbl) = [lbl]
     successors (Branch _ lbl) = [lbl]
     successors (CondBranch _ exp tlbl flbl) = [tlbl, flbl]
@@ -331,9 +331,9 @@ instance Show v => Show (Inst v e x) where
     show (Callout pos dest name args)
         = printf "%s := callout %s (%s)  {%s};"
           (show dest) (show name) (intercalate ", " $ map show args) (showPos pos)
-    show (Parallel pos lbl ivar lower upper)
-        = printf "parallel (%s <- [%u,..%u]) { goto %s; }  {%s};"
-          (show ivar) lower (upper - 1) (show lbl) (show pos)
+    show (Parallel pos plbl ivar count elbl)
+        = printf "parallel (call %s (%s) * %s) { goto %s; }  {%s};"
+          (show plbl) (show ivar) (show count) (show elbl) (showPos pos)
     show (ThreadReturn pos lbl)
         = printf "end thread to %s  {%s};"
           (show lbl) (showPos pos)
