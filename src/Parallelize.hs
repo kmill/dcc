@@ -63,6 +63,9 @@ loopData loop blockMap = (var, lower, upper, elbl)
           CondBranch _ (BinOp _ CmpGTE (Var _ var) (Lit _ upper)) elbl _
               = lastInst $ headerBlock loop blockMap
 
+parallelVar :: Loop -> VarName
+parallelVar loop = MV $ "idx_" ++ (show $ loop_header loop)
+
 parallelHeader :: Loop -> MidIRMap -> MidIRMap
 parallelHeader loop blockMap
     = mapInsert headerPredLabel headerPredBlock' $ mapDelete headerPredLabel blockMap
@@ -72,7 +75,7 @@ parallelHeader loop blockMap
           processHeader :: forall e x. MidIRInst e x -> MidIRInst e x
           processHeader inst@(Branch pos lbl)
               | lbl == headerLabel
-                  = Parallel pos headerLabel (MV $ "idx_" ++ (show $ loop_header loop)) lower upper 
+                  = Parallel pos headerLabel (parallelVar loop) lower upper 
               | otherwise = error "Branch not to loop header"
           processHeader inst = inst
           (_, lower, upper, _) = t $ loopData loop blockMap
