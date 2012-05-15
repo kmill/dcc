@@ -117,6 +117,7 @@ duTransfer = mkBTransfer3 fe fm fx
               = handle l (getMidAliveDead n) f
                 
           fx :: (PNode MidIRInst) O C -> FactBase DUBuildFact -> DUBuildFact
+          fx (PNode l (ThreadReturn{})) f = fact_bot duLattice
           fx (PNode l n) fb
               = handle l (getMidAliveDead n) (joinOutFacts duLattice n fb)
           
@@ -158,7 +159,7 @@ duPass = BwdPass
 
 collectDU :: [Label] -> Graph (PNode MidIRInst) C C -> M.Map Label (S.Set DU)
 collectDU mlabels graph
-    = M.fromList $ map (\l -> (l, getDUs $ fromJust $ lookupFact l f)) mlabels
+    = M.fromList $ map (\l -> (l, getDUs $ fromMaybe (error "IRWebs") $ lookupFact l f)) mlabels
       where f :: FactBase DUBuildFact
             f = runGM $ evalStupidFuelMonad getf 2222222
             getf :: RM (FactBase DUBuildFact)

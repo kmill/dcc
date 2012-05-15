@@ -42,11 +42,11 @@ exprAvailable nonTemps = mkFTransfer ft
       ft (IndStore _ _ _) f = destroyLoads f
       ft (Call _ x _ _) f = invalidateExprsWith x f
       ft (Callout _ x _ _) f = invalidateExprsWith x f 
-      ft (Parallel _ ll _ _ el) f 
-          = mkFactBase exprLattice [ (el, f) 
-                                   , (ll, f) ]
+      ft (Parallel _ ll _ _ el) f
+          = mkFactBase exprLattice [ (ll, Bot)
+                                   , (el, f) ]
       ft (Branch _ l) f = mapSingleton l f
-      ft (ThreadReturn _ l) f = mapSingleton l f
+      ft (ThreadReturn _ l) f = mapSingleton l (destroyLoads f)
       ft (CondBranch _ _ tl fl) f 
           = mkFactBase exprLattice [ (tl, f) 
                                    , (fl, f) ]

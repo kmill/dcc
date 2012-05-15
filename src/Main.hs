@@ -2,6 +2,7 @@
 
 module Main where
 
+import IO
 import System.Environment
 import System.Exit
 import System.FilePath
@@ -17,7 +18,6 @@ import SemanticCheck
 import SymbolTable
 import Text.Printf
 import Control.Unify
-import Dataflow
 import Compiler.Hoopl.Fuel
 import Data.List
 import AST
@@ -26,9 +26,12 @@ import Debug.Trace
 
 import qualified IR
 import qualified MidIR
+import Dataflow
+import AsmDataflow
+import qualified CodeGenerate
 import qualified RegAlloc.Allocator as RegisterAllocator
 import qualified RegAlloc.SimpleRegAlloc as SimpleRegAlloc
-import qualified CodeGenerate
+import RegAlloc.BakeSpills
 import Assembly
 
 -- | The main entry point to @dcc@.  See 'CLI' for command line
@@ -36,19 +39,24 @@ import Assembly
 main :: IO ()
 main = do args <- getArgs
           opts <- compilerOpts args
+          when (debugMode opts) $ do
+            hPutStrLn stderr $ "Compiler options:\n" ++ show opts
           let ifname = fromMaybe "<stdin>" $ inputFile opts
           input <- case inputFile opts of
                      Just fname -> readFile fname
                      Nothing -> getContents -- of stdin
-          tokens <- return $ doScanFile opts ifname input
-          dprogram <- return $ doParseFile opts ifname input tokens
-          ast <- return $ doCheckFile opts ifname input dprogram
-          midir <- return $ doMidIRFile opts ifname input ast
-          midirc <- return $ doMidIRFile opts ifname input ast
-          lowir <- return $ doLowIRFile opts ifname input midir
+          let tokens = doScanFile opts ifname input
+              dprogram = doParseFile opts ifname input tokens
+              ast = doCheckFile opts ifname input dprogram
+              midir = doMidIRFile opts ifname input ast
+              midirc = doMidIRFile opts ifname input ast
+              lowir = do midir' <- midir
+                         doLowIRFile opts ifname input midir'
           outFile <- return $ case outputFile opts of
             Just fn -> fn
-            Nothing -> replaceExtension ifname ".s"
+            Nothing -> case inputFile opts of
+                         Just ifname -> replaceExtension ifname ".s"
+                         Nothing -> "a.out.s"
           let tgt = case target opts of
                       TargetDefault -> TargetCodeGen
                       x -> x
@@ -65,20 +73,20 @@ main = do args <- getArgs
               Left err -> do (putStrLn err)
                              exitWith $ ExitFailure 1
               Right x -> do if debugMode opts then print x else return ()
-            TargetMidIR -> case midir of
+            TargetMidIR -> case IR.runGM midir of
               Left err -> do (putStrLn err)
                              exitWith $ ExitFailure 1
               Right midir -> putStrLn $ IR.midIRToGraphViz midir
-            TargetMidIRC -> case midir of
+            TargetMidIRC -> case IR.runGM midir of
               Left err -> do (putStrLn err)
                              exitWith $ ExitFailure 1
               Right midir -> putStrLn $ CodeGenerate.midIRToC midir
-            TargetLowIR -> case lowir of
+            TargetLowIR -> case IR.runGM lowir of
               Left err -> do (putStrLn err)
                              exitWith $ ExitFailure 1
               Right lir -> putStrLn $ CodeGenerate.lowIRToGraphViz lir 
             TargetCodeGen ->
-                case lowir of
+                case IR.runGM lowir of
                   Left err -> do
                              putStrLn err
                              exitWith $ ExitFailure 1
@@ -111,7 +119,8 @@ doParseFile opts ifname input toks
           isTokenError _ = False
       
 -- | Performs the actions for the @inter@ target. 
-doCheckFile :: CompilerOpts -> String -> String -> Either String DProgram -> Either String (HDProgram Int)
+doCheckFile :: CompilerOpts -> String -> String -> Either String DProgram
+            -> Either String (HDProgram Int)
 doCheckFile opts ifname input r
   = case r of
     Left err -> Left err
@@ -122,22 +131,27 @@ doCheckFile opts ifname input r
         Right x -> Right (makeHybridAST v)
         
 -- | Performs the actions for the @midir@ and @c@ target.
-doMidIRFile :: CompilerOpts -> String -> String -> Either String (HDProgram Int) -> Either String (IR.MidIRRepr)
+doMidIRFile :: CompilerOpts -> String -> String -> Either String (HDProgram Int)
+               -> IR.GM (Either String (IR.MidIRRepr))
 doMidIRFile opts ifname input ast
   = case ast of
-    Left err -> Left err
-    Right hast -> let mmidir = do mir <- MidIR.generateMidIR hast
-                                  mir <- runWithFuel 2222222 $ (performDataflowAnalysis (optMode opts) mir)
-                                  return mir
-                  in Right (IR.runGM mmidir)
+    Left err -> return $ Left err
+    Right hast -> do mir <- MidIR.generateMidIR hast
+                     mir <- runWithFuel maxBound $ (performDataflowAnalysis (optMode opts) mir)
+                     return $ Right mir
                     
-doLowIRFile :: CompilerOpts -> String -> String -> Either String IR.MidIRRepr -> Either String LowIRRepr
+doLowIRFile :: CompilerOpts -> String -> String -> Either String IR.MidIRRepr 
+               -> IR.GM (Either String LowIRRepr)
 doLowIRFile opts ifname input midir
-    = case midir of                      
-        Left err -> Left err
-        Right m -> let assem = do a <- CodeGenerate.toAss m
-                                  (if debugMode opts then return else allocator) a
-                   in Right (IR.runGM assem)
+    = case midir of        
+        Left err -> return $ Left err
+        Right m -> do lowir <- CodeGenerate.toAss opts m
+                      lowir <- (if debugMode opts then return else allocator) lowir
+                      lowir <- runWithFuel maxBound $ do
+                                 lowir <- performAsmDataflowAnalysis (optMode opts) lowir
+                                 lowir <- (if debugMode opts then return else performBakeSpills opts) lowir
+                                 return lowir
+                      return $ Right lowir
       where allocator = case regAllocMode opts of
                           True -> RegisterAllocator.regAlloc
                           False -> SimpleRegAlloc.regAlloc
@@ -205,6 +219,9 @@ showSemError ls ud (SemNotScalarError t pos)
       (showDUTerm t)
 showSemError ls ud (SemArraySizeError pos)
     = printf "%s\nArray must have positive length.\n"
+      (posToLineView ls pos)
+showSemError ls ud (SemRangeCheckError pos)
+    = printf "%s\nOut of bounds for a 64-bit integer.\n"
       (posToLineView ls pos)
           
 posToLineView :: [String] -> SourcePos -> String

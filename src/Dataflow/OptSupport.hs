@@ -7,12 +7,44 @@ import Compiler.Hoopl.Fuel
 import Control.Monad
 import Control.Monad.Trans
 import Data.Maybe
+import Data.Function
 
 import qualified Data.Set as S
 
 
--- Useful functions 
+-- Useful functions
 
+-- | Performs the cartesian product of two join functions
+joinProd :: JoinFun a -> JoinFun b -> JoinFun (a, b)
+joinProd fun1 fun2 l (OldFact (a1, b1)) (NewFact (a2, b2)) = (ch, (a', b'))
+    where (ch1, a') = fun1 l (OldFact a1) (NewFact a2)
+          (ch2, b') = fun2 l (OldFact b1) (NewFact b2)
+          ch = changeIf $ SomeChange `elem` [ch1, ch2]
+
+joinSets :: Ord a => JoinFun (S.Set a)
+joinSets l (OldFact s1) (NewFact s2) = (ch, s')
+    where s' = s1 `S.union` s2
+          ch = changeIf $ s' `bigger` s1
+          bigger = (>) `on` S.size
+
+noLattice :: DataflowLattice ()
+noLattice = DataflowLattice
+            { fact_name = "no lattice"
+            , fact_bot = ()
+            , fact_join = const $ const $ const (NoChange, ()) }
+
+setLattice :: Ord a => DataflowLattice (S.Set a)
+setLattice = DataflowLattice
+             { fact_name = "set lattice"
+             , fact_bot = S.empty
+             , fact_join = joinSets }
+
+infixl 5 ><
+(><) :: (a -> b -> c) -> (d -> e -> f) -> (a, d) -> (b, e) -> (c, f)
+(f >< g) (a, d) (b, e) = (f a b, g d e)
+
+          
+-- see also joinMaps :: Ord k => JoinFun v -> JoinFun (Map k v)
 
 type MaybeChange a = a -> Maybe a 
 mapVE :: (VarName -> Maybe MidIRExpr) -> MaybeChange MidIRExpr
@@ -161,8 +193,8 @@ getMidAliveDead inst
         n@(IndStore _ _ _) -> (S.toList $ getUses S.empty n, [])
         n@(Call _ x _ _) -> (S.toList $ getUses S.empty n, [x])
         n@(Callout _ x _ _) -> (S.toList $ getUses S.empty n, [x])
-        Parallel _ _ _ _ _ -> emptyMAD
-        ThreadReturn _ _ -> emptyMAD
+        n@(Parallel _ _ x _ _) -> ([], [x])
+        ThreadReturn _ _ -> error "tried to getMidAliveDead ThreadReturn"
         Branch _ _ -> emptyMAD
         n@(CondBranch _ _ _ _) -> (S.toList $ getUses S.empty n, [])
         n@(Return _ _ _) -> (S.toList $ getUses S.empty n, [])

@@ -17,15 +17,16 @@ import Data.List
 import Data.Int
 import qualified Data.Set as S
 import Dataflow
+import Dataflow.DeadCode (Live)
 import Debug.Trace
 import Text.Printf
 
 type GM = I.GM
 
-toAss :: I.MidIRRepr -> GM LowIRRepr
-toAss (I.MidIRRepr fields strs meths graph)
+toAss :: CompilerOpts -> I.MidIRRepr -> GM LowIRRepr
+toAss opts midir@(I.MidIRRepr fields strs meths graph)
     = do graph' <- mgraph'
-         return $ LowIRRepr (map toLowField fields) strs meths graph'
+         return $ LowIRRepr (map toLowField fields) strs 0 meths graph'
     where GMany _ body _ = graph
           mgraph' = do graphs' <- mapM f (mapElems body)
                        return $ foldl (|*><*|) emptyClosedGraph graphs'
@@ -49,20 +50,25 @@ toAss (I.MidIRRepr fields strs meths graph)
           mlabels = map I.methodEntry meths
 
           toAsm :: forall e x. I.MidIRInst e x -> GM (Graph A.Asm e x)
-          toAsm e = do as <- rCGM $ instToAsm e
+          toAsm e = do as <- (rCGM $ instToAsm e) (CGMData opts live)
                        case as of
                          [] -> error $ "No output for " ++ show e
                          a:_ -> return a
+          live = getLiveVariables midir
 
+
+data CGMData = CGMData
+    { cgmCompilerOpts :: CompilerOpts
+    , cgmLive :: FactBase Live }
 
 -- | CGM is "Code Gen Monad"
-data CGM a = CGM { rCGM :: GM [a] }
+data CGM a = CGM { rCGM :: CGMData -> GM [a] }
 
 instance Monad CGM where
-    return x = CGM $ return [x]
-    ma >>= f = CGM $ do as <- rCGM ma
-                        as' <- sequence (map (rCGM . f) as)
-                        return $ concat as'
+    return x = CGM $ \opts -> return [x]
+    ma >>= f = CGM $ \opts -> do as <- rCGM ma opts
+                                 as' <- sequence (map (\a -> (rCGM $ f a) opts) as)
+                                 return $ concat as'
     fail msg = mzero
 
 instance Functor CGM where
@@ -70,27 +76,37 @@ instance Functor CGM where
                    return $ f a
 
 instance MonadPlus CGM where
-    mzero = CGM $ return []
+    mzero = CGM $ \opts -> return []
     mplus (CGM mas) (CGM mbs)
-        = CGM $ do as <- mas
-                   bs <- mbs
-                   return $ as ++ bs
+        = CGM $ \opts -> do as <- mas opts
+                            bs <- mbs opts
+                            return $ as ++ bs
+
+instance UniqueMonad CGM where
+    freshUnique = CGM $ \opts -> do u <- freshUnique
+                                    return [u]
 
 -- | cuts the computation down to one branch
 mcut :: CGM a -> CGM a
-mcut (CGM mas) = CGM $ do as <- mas
-                          case as of
-                            [] -> return []
-                            a:_ -> return [a]
+mcut (CGM mas) = CGM $ \opts -> do as <- mas opts
+                                   case as of
+                                     [] -> return []
+                                     a:_ -> return [a]
 
--- | just take the first!
-runCGM :: CGM a -> GM a
-runCGM (CGM mxs) = do xs <- mxs
-                      return $ head xs
+getOpts :: CGM CompilerOpts
+getOpts = CGM $ \opts -> return [cgmCompilerOpts opts]
+
+getLive :: CGM (FactBase Live)
+getLive = CGM $ \opts -> return [cgmLive opts]
 
 genTmpReg :: CGM A.Reg
-genTmpReg = CGM $ do s <- I.genUniqueName "s"
-                     return [A.SReg s]
+genTmpReg = CGM $ \opts -> do s <- I.genUniqueName "s"
+                              return [A.SReg s]
+
+genCallout :: SourcePos -> Int -> String -> CGM (A.Asm O O)
+genCallout pos nargs name = do opts <- getOpts
+                               let name' = if macMode opts then '_':name else name
+                               return $ A.Callout pos nargs (A.Imm32Label name' 0)
 
 --genSpill :: Reg -> CGM (Graph A.Asm O O)
 --genReload :: String -> CGM
@@ -147,28 +163,27 @@ instToAsm (I.IndStore pos dexp sexp)
       ]
 instToAsm (I.Call pos d name args)
     = do gargs <- genSetArgs pos args
+         opts <- getOpts
          return $ gargs
-                    <*> genSetSP pos args
+                    <*> genSetSP opts pos args
                     <*> mkMiddle (A.Call pos (length args) (A.Imm32Label name 0))
-                    <*> genResetSP pos args
+                    <*> genResetSP opts pos args
                     <*> mkMiddle (A.mov pos (A.MReg A.RAX) (A.SReg $ show d))
 instToAsm (I.Callout pos d name args)
     = do gargs <- genSetArgs pos args
+         callout <- genCallout pos (length args) name
+         opts <- getOpts
          return $ gargs
                     <*> mkMiddle (A.mov pos (A.Imm32 0) (A.MReg A.RAX))
-                    <*> genSetSP pos args
-                    <*> mkMiddle (A.Callout pos (length args) (A.Imm32Label name 0))
-                    <*> genResetSP pos args
+                    <*> genSetSP opts pos args
+                    <*> mkMiddle callout
+                    <*> genResetSP opts pos args
                     <*> mkMiddle (A.mov pos (A.MReg A.RAX) (A.SReg $ show d))
 instToAsm (I.Branch pos l)
     = return $ mkLast $ A.Jmp pos (A.Imm32BlockLabel l 0)
-instToAsm (I.ThreadReturn pos l)
-    = error "ThreadReturn codegen not yet implemented :-{"
 instToAsm (I.CondBranch pos cexp tl fl)
     = do (g, flag) <- expToFlag cexp
          return $ g <*> (mkLast $ A.JCond pos flag (A.Imm32BlockLabel tl 0) fl)
-instToAsm (I.Parallel pos ll var count el)
-    = error "Parallel codegen not yet implemented :-{"
 instToAsm (I.Return pos fname Nothing)
     = return $ (mkLast $ A.Leave pos False 0)
 instToAsm (I.Return pos fname (Just exp))
@@ -176,40 +191,69 @@ instToAsm (I.Return pos fname (Just exp))
          return $ g <*> mkMiddle (A.MovIRMtoR pos irm (A.MReg A.RAX))
                     <*> (mkLast $ A.Leave pos True 0)
 instToAsm (I.Fail pos)
-    = return $ mkMiddles [ A.mov pos (A.Imm32 1) (A.MReg A.RDI)
-                         , A.mov pos (A.Imm32 0) (A.MReg A.RAX)
-                         , A.Callout pos 1 (A.Imm32Label "exit" 0) ]
-               <*> mkLast (A.ExitFail pos)
+    = do exit <- genCallout pos 1 "exit"
+         return $ mkMiddles [ A.mov pos (A.Imm32 1) (A.MReg A.RDI)
+                            , A.mov pos (A.Imm32 0) (A.MReg A.RAX)
+                            , exit ]
+                    <*> mkLast (A.ExitFail pos)
+
+instToAsm (I.Parallel pos ll var count el)
+    = do liveMap <- getLive
+         func <- freshLabel
+         set_num_threads <- genCallout pos 1 "set_num_threads"
+         create_and_run_threads <- genCallout pos 1 "create_and_run_threads"
+         let live = mapFindWithDefault (error "getLive failed in parallel") ll liveMap
+             live' = S.toList $ S.delete var live
+             spilllocs = zip (map A.SpillIPC [0..]) live'
+             mkSpill (loc, v) = A.Spill pos (A.SReg $ show v) loc
+             mkReload (loc, v) = A.Reload pos loc (A.SReg $ show v)
+             mem = A.MemAddr Nothing (A.Imm32BlockLabel func 0) Nothing A.SOne
+         return $ (mkMiddles (map mkSpill spilllocs)
+                   <*> mkMiddle (A.mov pos (fromIntegral count :: Int64) (A.MReg A.RDI))
+                   <*> mkMiddle set_num_threads
+                   <*> mkMiddle (A.Lea pos mem (A.MReg A.RDI))
+                   <*> mkMiddle create_and_run_threads
+                   <*> mkLast (A.InternalFunc pos func (A.Imm32BlockLabel el 0)))
+             |*><*| (mkFirst (A.Enter pos func 1 0)
+                     <*> (genLoadArgs pos [var])
+                     <*> (mkMiddles (map mkReload spilllocs))
+                     <*> mkLast (A.Jmp pos (A.Imm32BlockLabel ll 0)))
+instToAsm (I.ThreadReturn pos l)
+    = return $ mkLast $ A.Leave pos False 0
+
 
 genSetArgs :: SourcePos -> [MidIRExpr] -> CGM (Graph A.Asm O O)
-genSetArgs pos args = do gs <- mapM genset $ reverse (zip args locs)
+genSetArgs pos args = do opts <- getOpts
+                         gs <- mapM genset $ reverse (zip args $ locs opts)
                          return $ catGraphs gs
     where genset (arg, Left m) = do (gs, a) <- expToIR arg
                                     return $ gs <*> (mkMiddle $ A.MovIRtoM pos a m)
           genset (arg, Right r) = do (gs, a) <- expToIRM arg
                                      return $ gs <*> (mkMiddle $ A.MovIRMtoR pos a r)
           nargs' = max 0 (length args - 6)
-          locs = A.argStoreLocations $ (negate $ toNearestSafeSP (length args)) -- + (fromIntegral $ 8*nargs')
+          locs opts = A.argStoreLocations $ (negate $ toNearestSafeSP opts (length args))
 
-genSetSP :: SourcePos -> [MidIRExpr] -> Graph A.Asm O O
-genSetSP pos args = if sp == 0
-                    then emptyGraph
-                    else mkMiddle $
-                         A.ALU_IRMtoR pos A.Sub
-                              (A.IRM_I $ A.Imm32 sp)
-                              (A.MReg A.RSP)
-    where sp = toNearestSafeSP $ length args
-genResetSP :: SourcePos -> [MidIRExpr] -> Graph A.Asm O O
-genResetSP pos args = if sp == 0
-                      then emptyGraph
-                      else mkMiddle $
-                           A.ALU_IRMtoR pos A.Add
-                                (A.IRM_I $ A.Imm32 sp)
-                                (A.MReg A.RSP)
-    where sp = toNearestSafeSP $ length args
+genSetSP :: CompilerOpts -> SourcePos -> [MidIRExpr] -> Graph A.Asm O O
+genSetSP opts pos args = if sp == 0
+                         then emptyGraph
+                         else mkMiddle $
+                              A.ALU_IRMtoR pos A.Sub
+                                   (A.IRM_I $ A.Imm32 sp)
+                                   (A.MReg A.RSP)
+    where sp = toNearestSafeSP opts $ length args
+genResetSP :: CompilerOpts -> SourcePos -> [MidIRExpr] -> Graph A.Asm O O
+genResetSP opts pos args = if sp == 0
+                           then emptyGraph
+                           else mkMiddle $
+                                A.ALU_IRMtoR pos A.Add
+                                     (A.IRM_I $ A.Imm32 sp)
+                                     (A.MReg A.RSP)
+    where sp = toNearestSafeSP opts $ length args
 
-toNearestSafeSP :: Int -> Int32
-toNearestSafeSP nargs = fromIntegral $ i + (i `rem` (8*2))
+toNearestSafeSP :: CompilerOpts -> Int -> Int32
+toNearestSafeSP opts nargs = if macMode opts
+                             then fromIntegral $ i + (i `rem` (8*2))
+                             else fromIntegral i
     where i = 8 * max 0 (nargs - 6)
 
 genLoadArgs :: SourcePos -> [VarName] -> Graph A.Asm O O
@@ -218,13 +262,6 @@ genLoadArgs pos args = catGraphs $ map genload $ zip args A.argLocation
               = mkMiddle $ A.MovIRMtoR pos (A.IRM_R reg) (A.SReg $ show a)
           genload (a, Left spillLoc)
               = mkMiddle $ A.Reload pos spillLoc (A.SReg $ show a)
-
-genPushRegs :: SourcePos -> [A.X86Reg] -> Graph A.Asm O O
-genPushRegs pos regs = catGraphs $ map genpush regs
-    where genpush reg = mkMiddle $ A.Push pos $ A.IRM_R (A.MReg reg)
-genPopRegs :: SourcePos -> [A.X86Reg] -> Graph A.Asm O O
-genPopRegs pos regs = catGraphs $ map genpop $ reverse regs
-    where genpop reg = mkMiddle $ A.Pop pos $ A.RM_R (A.MReg reg)
 
 expTo' :: (a -> b) -> CGM (Graph A.Asm O O, a) -> CGM (Graph A.Asm O O, b)
 expTo' f m = do (g, a) <- m
@@ -407,9 +444,20 @@ expToMem e = mcut $ do let exp = flattenOp I.OpAdd e
                        return (gind <*> gbase, mem)
     where
       disp exp = msum
-                 [ -- do not deal with labels here.  They should be leaq'd to work on macs.
+                 [
+                 -- [label] (non-mac only)
+                  do opts <- getOpts
+                     guard $ not $ macMode opts
+                     (I.LitLabel _ s):xs <- return exp
+                     return (xs, A.Imm32Label s 0)
+                 -- [disp+label] (non-mac only)
+                 ,do opts <- getOpts
+                     guard $ not $ macMode opts
+                     (I.Lit _ i):(I.LitLabel _ s):xs <- return exp
+                     guard $ checkIf32Bit i
+                     return (xs, A.Imm32Label s (fromIntegral i))
                  -- [disp]
-                  do (I.Lit _ i):xs <- return exp
+                 ,do (I.Lit _ i):xs <- return exp
                      guard $ checkIf32Bit i
                      return (xs, A.Imm32 $ fromIntegral i)
                  -- nothing
@@ -520,10 +568,10 @@ lookupLabel (GMany _ g_blocks _) lbl = case mapLookup lbl g_blocks of
   Just x -> x
   Nothing -> error "ERROR"
 
-labelToAsmOut :: Bool -> Graph A.Asm C C -> (Label, Maybe Label) -> [String]
-labelToAsmOut macmode graph (lbl, mnlabel)
+labelToAsmOut :: Graph A.Asm C C -> (Label, Maybe Label) -> [String]
+labelToAsmOut graph (lbl, mnlabel)
     = [show a]
-      ++ (map (show') bs)
+      ++ (map (ind . show) bs)
       ++ mjmp
       ++ (if not (null children) && not fallthrough
           then nextJmp else [])
@@ -534,13 +582,6 @@ labelToAsmOut macmode graph (lbl, mnlabel)
         block = lookupLabel graph lbl
         children = successors block
         ind = ("   " ++)
-        show' :: A.Asm O O -> String
-        show' x = if macmode
-                  then case x of
-                         A.Callout pos args (A.Imm32Label s 0)
-                             -> ind $ show $ A.Callout pos args (A.Imm32Label ("_" ++ s) 0)
-                         _ -> ind $ show x
-                  else ind $ show x
         fallthrough = case mnlabel of
                         Just l -> l == head (reverse children)
                         Nothing -> False
@@ -564,21 +605,25 @@ lowIRToAsm m opts
       ++ newline
       ++ ["# strings"]
       ++ (concatMap showString (lowIRStrings m))
+      ++ (if lowIRIPCSize m > 0
+          then [ "", "# IPC space"
+               , "main_ipc: .space " ++ show (lowIRIPCSize m) ++ ", 0"]
+          else [])
       ++ newline
       ++  [ ".text"
           , ""
           , ".globl main" 
           , ".globl _main" 
           , "main:"
-          , "_main:"
-          , ind "subq $8, %rsp"
-          , ind "call method_main"
-          , ind "movq $0, %rax"
-          , ind "addq $8, %rsp"
-          , ind "ret" ]
+          , "_main:" ]
+      ++  (if macMode opts then [ ind "subq $8, %rsp" ] else [])
+      ++  [ ind "call method_main"
+          , ind "movq $0, %rax" ]
+      ++  (if macMode opts then [ ind "addq $8, %rsp" ] else [])
+      ++  [ ind "ret" ]
       ++ newline
       ++ ["# methods"]
-      ++ (concatMap (showMethod (macMode opts) (lowIRGraph m)) (lowIRMethods m))
+      ++ (concatMap (showMethod (lowIRGraph m)) (lowIRMethods m))
   where
     ind = ("   " ++)
     newline = [""]
@@ -586,12 +631,12 @@ lowIRToAsm m opts
         = [ name ++ ": .space " ++ (show size) ++ ", 0\t\t# " ++ showPos pos ]
     showString (name, pos, str) = [ name ++ ":\t\t# " ++ showPos pos
                                 , "   .asciz " ++ (show str) ]
-    showMethod macmode graph (I.Method pos name entry postenter)
-        = ["", name ++ ":"] ++ graphToAsm macmode graph entry
+    showMethod graph (I.Method pos name entry postenter)
+        = ["", name ++ ":"] ++ graphToAsm graph entry
 
-graphToAsm :: Bool -> Graph A.Asm C C -> Label -> [String]
-graphToAsm macmode graph entry
-    = concatMap (labelToAsmOut macmode graph) (zip visited nvisited)
+graphToAsm :: Graph A.Asm C C -> Label -> [String]
+graphToAsm graph entry
+    = concatMap (labelToAsmOut graph) (zip visited nvisited)
       where visited = dfsSearch graph entry [entry]
             nvisited = case visited of
                          [] -> []

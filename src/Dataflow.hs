@@ -11,6 +11,7 @@ import Dataflow.Tailcall
 import Dataflow.LICM
 import Dataflow.Dominator
 import Dataflow.OptSupport
+import Dataflow.CondElim
 --import Dataflow.NZP
 
 import LoopAnalysis
@@ -28,7 +29,6 @@ import Compiler.Hoopl
 import Compiler.Hoopl.Fuel
 import IR
 import Debug.Trace
-import Data.Maybe
 import CLI
 
 import Dataflow.IRWebs
@@ -56,26 +56,43 @@ dataflows
       , DFA optTailcall performTailcallPass
       , DFA optDeadCode performDeadCodePass
       , DFA optBlockElim performBlockElimPass
-      , DFA (\opts -> optCommonSubElim opts || optFlat opts) performFlattenPass
+      , DFA optFlat performFlattenPass
       --, DFA optLICM performLICMPass
       , DFA optCommonSubElim performCSEPass
       , DFA optCopyProp performCopyPropPass
+      , DFA optCondElim performCondElimPass
       -- doing constprop after flatten/cse does great good! see tests/codegen/fig18.6.dcf
       , DFA optConstProp performConstPropPass
       , DFA optDeadCode performDeadCodePass
-      , DFA (\opts -> optCommonSubElim opts || optFlat opts || optUnflat opts ) performUnflattenPass 
+      , DFA optUnflat performUnflattenPass 
       , DFA optCopyProp performCopyPropPass
       , DFA optConstProp performConstPropPass
       , DFA optDeadCode performDeadCodePass
       , DFA optTailcall performTailcallPass 
-      --, DFA optParallelize performParallelizePass
+      , DFA optParallelize performParallelizePass
       --, DFA optNZP performNZPPass
       , DFA optDeadCode performDeadCodePass 
       , DFA optBlockElim performBlockElimPass 
       -- It's good to end with this for good measure (and removes dead blocks)
       , DFA optDeadCode performDeadCodePass
       --, DFA optDeadCode testDominatorPass
+      , DFA (hasOptFlag "winnowstr") removeUnusedStrings
       ]
+      
+    where
+      optCommonSubElim = hasOptFlag "cse"
+      optCopyProp = hasOptFlag "copyprop"
+      optConstProp opts = hasOptFlag "constprop" opts || optParallelize opts
+      optCondElim = hasOptFlag "condelim"
+      optNZP = hasOptFlag "nzp"
+      optDeadCode = hasOptFlag "deadcode"
+      optBlockElim = hasOptFlag "blockelim"
+      optFlat opts = hasOptFlag "flat" opts || optCommonSubElim opts
+      optUnflat opts = hasOptFlag "unflat" opts || optFlat opts
+      optTailcall = hasOptFlag "tailcall"
+      optLICM = hasOptFlag "licm"
+      optParallelize = hasOptFlag "parallelize"
+      optDeadCodeAsm = hasOptFlag "deadcodeasm"
 
 performDataflowAnalysis :: OptFlags -> MidIRRepr -> RM MidIRRepr 
 performDataflowAnalysis opts midir
@@ -84,6 +101,7 @@ performDataflowAnalysis opts midir
 performConstPropPass midir = performFwdPass constPropPass midir emptyFact
 performCopyPropPass midir = performFwdPass copyPropPass midir emptyCopyFact
 performDeadCodePass midir = performBwdPass deadCodePass midir S.empty
+performCondElimPass midir = performBwdPass condElimPass midir emptyCEFact
 performBlockElimPass midir = performBwdPass blockElimPass midir Nothing
 performFlattenPass midir = performFwdPass flattenPass midir ()
 --performNZPPass midir = performFwdPass nzpPass midir emptyNZPFact
@@ -162,6 +180,14 @@ copyPropPass = FwdPass
                , fp_transfer = varIsCopy
                , fp_rewrite = copyProp }
 
+condElimPass :: (CheckpointMonad m, FuelMonad m) => BwdPass m MidIRInst AssignMap 
+--condElimPass = debugBwdJoins trace (const True) $ BwdPass 
+--condElimPass = debugBwdTransfers trace show (const $ const True) $ debugBwdJoins trace (const True) $ BwdPass 
+condElimPass = BwdPass
+                { bp_lattice = condAssignLattice
+               , bp_transfer = condAssignness
+               , bp_rewrite = condElim }
+
 deadCodePass :: (CheckpointMonad m, FuelMonad m) => BwdPass m MidIRInst Live
 deadCodePass = BwdPass 
                { bp_lattice = liveLattice
@@ -230,20 +256,10 @@ getVariables midir
 getVariablesPass :: (CheckpointMonad m, FuelMonad m)
                     => BwdPass m MidIRInst (S.Set VarName)
 getVariablesPass = BwdPass
-                   { bp_lattice = getVarsLattice
+                   { bp_lattice = setLattice
                    , bp_transfer = getVarsTransfer
                    , bp_rewrite = noBwdRewrite }
     where
-      getVarsLattice :: DataflowLattice (S.Set VarName)
-      getVarsLattice = DataflowLattice
-                       { fact_name = "used variables"
-                       , fact_bot = S.empty
-                       , fact_join = add
-                       }
-          where add _ (OldFact old) (NewFact new) = (ch, j)
-                    where j = new `S.union` old
-                          ch = changeIf $ S.size j > S.size old
-
       getVarsTransfer :: BwdTransfer MidIRInst (S.Set VarName)
       getVarsTransfer = mkBTransfer used
           where
@@ -256,16 +272,88 @@ getVariablesPass = BwdPass
             used IndStore{} f = f
             used (Call _ x _ _) f = S.insert x f
             used (Callout _ x _ _) f = S.insert x f
-            used (Parallel _ ll x _ el) f = S.insert x $ S.union (fact f el) (fact f ll)
+            used (Parallel _ l x _ _) f = S.insert x $ fact f l
             used (Branch _ l) f = fact f l
             used (ThreadReturn _ l) f = fact f l
             used (CondBranch _ _ tl fl) f = fact f tl `S.union` fact f fl
-            used Return{} f = fact_bot getVarsLattice
-            used Fail{} f = fact_bot getVarsLattice
+            used Return{} f = fact_bot setLattice
+            used Fail{} f = fact_bot setLattice
 
             fact :: FactBase (S.Set VarName) -> Label -> S.Set VarName
             fact f l = fromMaybe S.empty $ lookupFact l f 
 
+getLiveVariables :: MidIRRepr -> FactBase Live
+getLiveVariables midir = runGM $ evalStupidFuelMonad fb maxBound
+    where
+      fb :: (CheckpointMonad m, FuelMonad m) => m (FactBase Live)
+      fb = do (_, factBase, _) <- analyzeAndRewriteBwd 
+                                  getLiveVariablesPass
+                                  (JustC mlabels)
+                                  graph
+                                  mapEmpty
+              return factBase
+      graph = midIRGraph midir 
+      mlabels = (map methodEntry $ midIRMethods midir)
+      
+      getLiveVariablesPass :: (CheckpointMonad m, FuelMonad m) => BwdPass m MidIRInst Live
+      getLiveVariablesPass = BwdPass
+                             { bp_lattice = liveLattice
+                             , bp_transfer = liveness
+                             , bp_rewrite = noBwdRewrite }
+
+getLitLabels :: MidIRRepr -> RM (FactBase (S.Set String))
+getLitLabels midir 
+    = do (_, factBase, _) <- analyzeAndRewriteBwd 
+                             getLitLabelsPass
+                             (JustC mlabels)
+                             graph
+                             mapEmpty
+         return $ factBase
+    where graph = midIRGraph midir 
+          mlabels = (map methodEntry $ midIRMethods midir)
+
+
+getLitLabelsPass :: (CheckpointMonad m, FuelMonad m)
+                    => BwdPass m MidIRInst (S.Set String)
+getLitLabelsPass = BwdPass
+                   { bp_lattice = setLattice
+                   , bp_transfer = getLabsTransfer
+                   , bp_rewrite = noBwdRewrite }
+    where
+      getLabsTransfer :: BwdTransfer MidIRInst (S.Set String)
+      getLabsTransfer = mkBTransfer used
+          where
+            used :: MidIRInst e x -> Fact x (S.Set String) -> S.Set String
+            used Label{} f = f
+            used PostEnter{} f = f
+            used (Enter _ _ _) f = f
+            used (Store _ _ expr) f = S.union (getLabs expr) f
+            used (DivStore _ _ _ e1 e2) f = S.unions [getLabs e1, getLabs e2, f]
+            used (IndStore _ e1 e2) f = S.unions [getLabs e1, getLabs e2, f]
+            used (Call _ _ _ es) f = f `S.union` S.unions [getLabs e | e <- es]
+            used (Callout _ _ _ es) f = f `S.union` S.unions [getLabs e | e <- es]
+            used (Parallel _ l x _ _) fs = fact fs l
+            used (Branch _ l) f = fact f l
+            used (ThreadReturn _ l) f = fact f l
+            used (CondBranch _ e tl fl) f = getLabs e `S.union` fact f tl `S.union` fact f fl
+            used Return{} f = fact_bot setLattice
+            used Fail{} f = fact_bot setLattice
+
+            fact :: FactBase (S.Set String) -> Label -> S.Set String
+            fact f l = fromMaybe S.empty $ lookupFact l f 
+            
+            getLabs :: MidIRExpr -> S.Set String
+            getLabs = fold_EE f S.empty
+                where f a (LitLabel _ s) = S.insert s a
+                      f a _ = a
+
+removeUnusedStrings :: MidIRRepr -> RM MidIRRepr
+removeUnusedStrings midir@(MidIRRepr fields strs meths graph)
+    = do labelBase <- getLitLabels midir
+         let mlabels = map methodEntry meths
+             labels = S.unions $ map (\l -> fromMaybe (error "blargh") $ lookupFact l labelBase) mlabels
+             strs' = filter (\(s, _, _) -> s `S.member` labels) strs
+         return $ midir { midIRStrings = strs' }
 
 unFlatten :: FactBase Live -> MidIRRepr -> RM MidIRRepr 
 unFlatten factbase (MidIRRepr fields strs meths graph)

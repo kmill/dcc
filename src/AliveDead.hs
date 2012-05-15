@@ -65,12 +65,13 @@ getAliveDead expr
         Enter _ _ nargs _ -> ([], x) <+> ([], map MReg calleeSaved ++ [MReg RSP])
                 where x = map MReg (catMaybes $ take nargs argOrder)
         Leave _ rets _ -> (map MReg calleeSaved ++ [MReg RSP], []) <+> (if rets then [MReg RAX] else [], [])
-        Call p nargs fl -> (x, x ++ [MReg RAX])
+        Call p nargs fl -> (x, [MReg RAX])
                            <+> ([MReg RSP], map MReg callerSaved ++ [MReg RSP])
                 where x = map MReg (catMaybes $ take nargs argOrder)
-        Callout p nargs fl -> (x ++ [MReg RAX], x ++ [MReg RAX])
+        Callout p nargs fl -> (x ++ [MReg RAX], [MReg RAX])
                               <+> ([MReg RSP], map MReg callerSaved ++ [MReg RSP])
                 where x = map MReg (catMaybes $ take nargs argOrder)
+        InternalFunc{} -> emptyAD
         Ret p rets -> (if rets then [MReg RAX] else [], []) <+> ([MReg RSP], [])
         RetPop p rets num -> (if rets then [MReg RAX] else [], []) <+> ([MReg RSP], [])
         ExitFail{} -> emptyAD

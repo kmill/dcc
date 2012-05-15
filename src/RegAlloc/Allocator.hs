@@ -22,9 +22,12 @@ import Data.Maybe
 import AST (SourcePos, noPosition)
 import Debug.Trace
 import Data.Function
+import Data.Either (lefts, rights)
 import Util.NodeLocate
 import qualified LoopAnalysis as L
 import RegAlloc.InterfGraph
+import qualified Dataflow.GenWebs as GenWebs
+import Dataflow.OptSupport (joinProd, joinSets, setLattice, (><))
 
 dotrace = False
 
@@ -33,132 +36,17 @@ trace' a b = if dotrace then trace a b else b
 -- | Main entry point to allocating registers for the IR
 regAlloc :: LowIRRepr -> I.GM LowIRRepr
 regAlloc lir
-    = do LowIRRepr fields strs meths graph <- evalStupidFuelMonad (performDeadAsmPass lir) 2222222
+    = do LowIRRepr fields strs ipc meths graph <- evalStupidFuelMonad (performDeadAsmPass lir) maxBound
          let GMany _ body _ = graph
              mlabels = map I.methodEntry meths
-         massgraph <- evalStupidFuelMonad (massageGraph mlabels graph) 22222222
-         --graph' <- error $ I.graphToGraphViz show massgraph
+         massgraph <- evalStupidFuelMonad (massageGraph mlabels graph) maxBound
          let graph' = foldl1 (|*><*|) $ map (\mlabel -> doRegAlloc freeSpillLocs mlabel (subgraph massgraph mlabel)) mlabels
-         graph'' <- evalStupidFuelMonad (collectSpill mlabels graph') 22222222
-         return $ LowIRRepr fields strs meths graph''
+--         graph'' <- evalStupidFuelMonad (simplifySpillsAndBetterify mlabels graph') maxBound
+         return $ LowIRRepr fields strs ipc meths graph'
     where
       subgraph :: Graph A.Asm C C -> Label -> Graph A.Asm C C
       subgraph (GMany _ body _) label = let blocks = postorder_dfs_from body label
                                         in foldl1 (|*><*|) (map blockGraph blocks)
-
-
--- | Collects and rewrites the spills in the graph to moves.
-collectSpill :: [Label] -> Graph A.Asm C C -> RM (Graph A.Asm C C)
-collectSpill mlabels graph
-    = do (_, f, _) <- analyzeAndRewriteBwd
-                      collectSpillPass
-                      (JustC mlabels)
-                      graph
-                      mapEmpty
-         (g, _, _) <- analyzeAndRewriteFwd
-                      (rewriteSpillPass f)
-                      (JustC mlabels)
-                      graph
-                      f
-         return g
-
-
--- | Gets the list of spills for each entry point. TODO: make it also
--- find live ranges for spills so we can reuse stack space.
-collectSpillPass :: (CheckpointMonad m, FuelMonad m)
-                    => BwdPass m A.Asm (S.Set SpillLoc)
-collectSpillPass = BwdPass
-                   { bp_lattice = getSpillLattice
-                   , bp_transfer = getSpillTransfer
-                   , bp_rewrite = noBwdRewrite }
-    where
-      getSpillLattice :: DataflowLattice (S.Set SpillLoc)
-      getSpillLattice = DataflowLattice
-                        { fact_name = "spill lattice"
-                        , fact_bot = S.empty
-                        , fact_join = add
-                        }
-          where add _ (OldFact old) (NewFact new) = (ch, j)
-                    where j = S.union new old
-                          ch = changeIf $ S.size j > S.size old
-
-      getSpillTransfer :: BwdTransfer A.Asm (S.Set SpillLoc)
-      getSpillTransfer = mkBTransfer3 usedCO usedOO usedOC
-          where
-            usedCO :: A.Asm C O -> (S.Set SpillLoc) -> (S.Set SpillLoc)
-            usedCO _ f = f
-
-            usedOO :: A.Asm O O -> (S.Set SpillLoc) -> (S.Set SpillLoc)
-            usedOO (A.Spill _ _ s) f = S.insert s f
-            usedOO (A.Reload _ s _) f = S.insert s f
-            usedOO _ f = f
-
-            usedOC :: A.Asm O C -> FactBase (S.Set SpillLoc) -> (S.Set SpillLoc)
-            usedOC x f = S.unions $ map
-                         ((fromMaybe S.empty) . (flip lookupFact f))
-                         (successors x)
-
--- | Rewrites the spills to moves.
-rewriteSpillPass :: (CheckpointMonad m, FuelMonad m) =>
-                    FactBase (S.Set SpillLoc) -> FwdPass m Asm (S.Set SpillLoc)
-rewriteSpillPass fb = FwdPass 
-                      { fp_lattice = noLattice
-                      , fp_transfer = sTransfer
-                      , fp_rewrite = rewriteSpill }
-    where noLattice :: DataflowLattice (S.Set SpillLoc)
-          noLattice = DataflowLattice
-                      { fact_name = "simple replicate"
-                      , fact_bot = S.empty
-                      , fact_join = add }
-              where add _ (OldFact old) (NewFact new) = (ch, j)
-                        where j = S.union new old
-                              ch = changeIf $ S.size j > S.size old
-          sTransfer :: FwdTransfer Asm (S.Set SpillLoc)
-          sTransfer = mkFTransfer3 g g' g''
-              where 
-                g :: Asm C O -> S.Set SpillLoc -> S.Set SpillLoc
-                g (Enter p l _ _) _ = fromMaybe S.empty (lookupFact l fb)
-                g e f = f
-                g' e f = f
-                g'' e f = mkFactBase noLattice $ zip (successors e) (repeat f)
-
-          rewriteSpill :: forall m. FuelMonad m => FwdRewrite m Asm (S.Set SpillLoc)
-          rewriteSpill = mkFRewrite d
-              where 
-                d :: Asm e x -> S.Set SpillLoc -> m (Maybe (Graph Asm e x))
-                d (A.Spill pos reg s) f
-                    = return $ Just $ mkMiddle $ A.mov pos reg (toMem s f)
-                d (A.Reload pos s reg) f
-                    = return $ Just $ mkMiddle $ A.mov pos (toMem s f) reg
-                d (A.Enter pos l n x) f = if x' == x
-                                          then return Nothing
-                                          else return $ Just $ mkFirst $
-                                               A.Enter pos l n x'
-                    where x' = countSpillID f
-                d (A.Leave pos rets x) f = if x' == x
-                                           then return Nothing
-                                           else return $ Just $ mkLast $
-                                                A.Leave pos rets x'
-                    where x' = countSpillID f
-
-                d _ f = return Nothing
-                
-                countSpillID f = toNearestSafeSP $ fromIntegral $ 8 * (length $ normalSpills f)
-                normalSpills f = S.toList $ S.filter (\s -> case s of
-                                                              SpillArg _ -> False
-                                                              _ -> True) f
-
-                toMem :: SpillLoc -> S.Set SpillLoc -> MemAddr
-                toMem (SpillArg r) f = A.MemAddr (Just $ A.MReg A.RSP)
-                                       (A.Imm32 $ 8*(fromIntegral r) + 8 + countSpillID f)
-                                       Nothing A.SOne
-                toMem sl f = A.MemAddr (Just $ A.MReg A.RSP)
-                             (A.Imm32 $ fromIntegral (8 * fromJust (findIndex (==sl) $ normalSpills f)))
-                             Nothing A.SOne
-                
-                toNearestSafeSP :: Int32 -> Int32
-                toNearestSafeSP i = i + ((i+8) `rem` (8*2))
-
 
           
 data RWorklists = RWorklists
@@ -433,15 +321,15 @@ doRegAlloc spillLocs mlabel graph
                     spilledWebs <- wSpilledWebs `fmap` get
                     wl <- get
                     if trace' ("endState:\n" ++ displayWL wl) $ not $ null spilledWebs
-                       then let (spillLocs', graph') = insertSpills spillLocs pg wl
-                            in trace' ("spilledCode:\n" ++ unlines (graphToAsm False graph' mlabel)) $ return $ doRegAlloc spillLocs' mlabel graph'
-                       else let graph' = rewriteGraph pg wl
-                            in trace' ("endCode:\n" ++ unlines (graphToAsm False graph' mlabel)++"\n****\n****\n") $ return graph'
-      in evalState main (trace' ("initCode:\n" ++ unlines (graphToAsm False graph mlabel) ++ "\ninitState:\n" ++ displayWL initState) initState)
+                       then let (spillLocs', graph') = insertSpills spillLocs pg wl interfgraph
+                            in trace' ("spilledCode:\n" ++ unlines (graphToAsm graph' mlabel)) $ return $ doRegAlloc spillLocs' mlabel graph'
+                       else let graph' = rewriteGraph pg wl interfgraph
+                            in trace' ("endCode:\n" ++ unlines (graphToAsm graph' mlabel)++"\n****\n****\n") $ return graph'
+      in evalState main (trace' ("initCode:\n" ++ unlines (graphToAsm graph mlabel) ++ "\ninitState:\n" ++ displayWL initState) initState)
 
-insertSpills :: SpillLocSupply -> Graph (PNode Asm) C C -> RWorklists 
+insertSpills :: SpillLocSupply -> Graph (PNode Asm) C C -> RWorklists -> InterfGraph
              -> (SpillLocSupply, Graph Asm C C)
-insertSpills spillLocs pg wl = (spillLocs', graph')
+insertSpills spillLocs pg wl igraph = (spillLocs', graph')
     where GMany _ body _ = pg
           graph' = foldl (|*><*|) emptyClosedGraph bodies
           bodies = map f (mapElems body)
@@ -483,16 +371,16 @@ insertSpills spillLocs pg wl = (spillLocs', graph')
                     genReload reg = Reload noPosition (toReload M.! (l, reg)) reg
           
           rewriteCoal :: forall e x. NodePtr -> Asm e x -> Asm e x
-          rewriteCoal l n = mapAsm (ms l) (md l) n
-          ms l r = fromMaybe r $ M.lookup (l, r) usesMap
-          md l r = fromMaybe r $ M.lookup (l, r) defsMap
+          rewriteCoal l n = fromMaybe n $ mapAsm (ms l) (md l) n
+          ms l r = Just $ fromMaybe r $ M.lookup (l, r) usesMap
+          md l r = Just $ fromMaybe r $ M.lookup (l, r) defsMap
           
           idToWeb :: [(WebID, Web)]
-          idToWeb = M.toList $ igIDToWeb (wInterfGraph wl)
+          idToWeb = M.toList $ igIDToWeb igraph
 
           newWebReg :: WebID -> Reg
           newWebReg i = let i' = getPreAlias' i wl
-                            web = igIDToWeb (wInterfGraph wl) M.! i'
+                            web = igIDToWeb igraph M.! i'
                         in case webPrecolored web of
                              True -> webReg web
                              False -> SReg $ "web_" ++ show i'
@@ -527,8 +415,8 @@ insertSpills spillLocs pg wl = (spillLocs', graph')
                                     d <- S.toList $ webDefs w
                                     return $ ((d, newWebReg i'), sl)
 
-rewriteGraph :: Graph (PNode Asm) C C -> RWorklists -> Graph Asm C C
-rewriteGraph pg wl = graph'
+rewriteGraph :: Graph (PNode Asm) C C -> RWorklists -> InterfGraph -> Graph Asm C C
+rewriteGraph pg wl igraph = graph'
     where GMany _ body _ = pg
           graph' = foldl (|*><*|) emptyClosedGraph bodies
           bodies = map f (mapElems body)
@@ -548,27 +436,30 @@ rewriteGraph pg wl = graph'
           fe (PNode l n) = mkFirst n
           
           fm :: PNode Asm O O -> Graph Asm O O
-          fm (PNode l n) = case mapAsm fs fd n of
+          fm (PNode l n) = case fromMaybe n $ mapAsm fs fd n of
                              MovIRMtoR _ (IRM_R rs) rd
                                  | rs == rd -> emptyGraph
                              n -> mkMiddle n
-              where fs r = fromMaybe r $ M.lookup (l, r) usesColorMap
-                    fd r = fromMaybe r $ M.lookup (l, r) defsColorMap
+              where fs r = Just $ fromMaybe r $ M.lookup (l, r) usesColorMap
+                    fd r = Just $ fromMaybe r $ M.lookup (l, r) defsColorMap
           
           fx :: PNode Asm O C -> Graph Asm O C
           fx (PNode l n) = mkLast n
           
-          idToWeb = M.toList $ igIDToWeb (wInterfGraph wl)
+          idToWeb :: [(WebID, Web)]
+          idToWeb = M.toList $ igIDToWeb igraph
+          
+          usesColorMap, defsColorMap :: M.Map (NodePtr, Reg) Reg
           usesColorMap = M.fromList $ do (i, w) <- idToWeb
                                          u <- S.toList $ webUses w
                                          case M.lookup i (wColoredWebs wl) of
                                            Just r -> return ((u, webReg w), MReg r)
-                                           Nothing -> mzero
+                                           Nothing -> error "shouldn't be! allocator.hs"
           defsColorMap = M.fromList $ do (i, w) <- idToWeb
                                          d <- S.toList $ webDefs w
                                          case M.lookup i (wColoredWebs wl) of
                                            Just r -> return ((d, webReg w), MReg r)
-                                           Nothing -> mzero
+                                           Nothing -> error "shouldn't be! allocator.hs"
 
 
 -- | "Simplify"
@@ -646,7 +537,7 @@ coalesce = do m <- selectMove
                       addWorklist u
                       addWorklist v
                  )
-                ,( (webPrecolored uweb && (okadjv)) -- || isShortWeb vweb))
+                ,( (webPrecolored uweb && (okadjv))
                     || (not (webPrecolored uweb) && conserv)
                  , do modify $ \wl -> wl { wCoalescedMoves = m:(wCoalescedMoves wl)
                                          , wPreSpillCoalescedMoves = (if wHaveSpilled wl
@@ -731,6 +622,7 @@ combine u v =
        forM_ adjv' $ \t -> do
          trace' ("  addToAdjList " ++ show t ++ " " ++ show u) $ addToAdjList t u
          decrementDegree t
+       modify $ \wl -> wl { wInterfGraph = igMergeAdjs u v $ wInterfGraph wl }
        wl <- get
        let d = wDegrees wl M.! u
        when (d >= numUsableRegisters
@@ -788,9 +680,8 @@ spillCost wl i = let web = igGetWeb i $ wInterfGraph wl
                      deg = wDegrees wl M.! i
                      loopDepth l = M.findWithDefault 0 (nodeLabel l) (wLoops wl)
                      loadCost = sum $ map (\l -> 10 ^ (loopDepth l)) (S.toList (webUses web) ++ S.toList (webDefs web))
-                     size = S.size (webExtent web) --sum (map len dus)
-                     score = 1000 * loadCost `div` (max 1 deg) --S.size (webExtent web))
-                 in if isShortWeb web then maxBound else score
+                     score = 1000 * loadCost `div` (max 1 deg)
+                 in if webSpilled web then 2*score else score
 
 -- | "SelectSpill"
 selectSpill :: AM ()
@@ -860,12 +751,11 @@ outputWebGraph ig
                      mkEdges i web
           labels = do (i, web) <- webs
                       show i ++ " [label=\"" ++ show i ++ ": " ++ show (webReg web) ++ "\"];\n"
-          showWeb (i, web) = "{" ++ intercalate "|" [show i, wr, wmr, wf, wd, we, wu] ++ "}"
+          showWeb (i, web) = "{" ++ intercalate "|" [show i, wr, wmr, wf, wd, wu] ++ "}"
               where wr = show $ webReg web
                     wmr = "moves: " ++ show (S.toList $ webMoveNodes web)
                     wf = if webPrecolored web then "precolored" else "free"
                     wd = show $ webDefs web
-                    we = show $ webExtent web
                     wu = show $ webUses web
           webs = M.toList $ igIDToWeb ig
           g = igAdjLists ig
