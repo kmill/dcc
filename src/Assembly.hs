@@ -17,6 +17,7 @@ import Debug.Trace
 data LowIRRepr = LowIRRepr
     { lowIRFields :: [LowIRField]
     , lowIRStrings :: [(String, SourcePos, String)]
+    , lowIRIPCSize :: Int
     , lowIRMethods :: [I.Method]
     , lowIRGraph :: Graph Asm C C }
 data LowIRField = LowIRField SourcePos String Int64
@@ -78,12 +79,14 @@ instance Show OperRM where
 data SpillLoc = SpillID Int
               | SpillSID String
               | SpillArg Int
+              | SpillIPC Int
                 deriving (Eq, Ord, Show)
 
 fixedSpill :: SpillLoc -> Bool
 fixedSpill (SpillArg _) = True
 fixedSpill (SpillID _) = False
 fixedSpill (SpillSID _) = False
+fixedSpill (SpillIPC _) = True
 
 type SpillLocSupply = [SpillLoc]
 
@@ -290,6 +293,10 @@ data Asm e x where
   -- expected that the code has called "exit" before reaching this.
   ExitFail :: SourcePos -> Asm O C
   
+  -- | Takes a label to a function along with what to actually jump
+  -- to.
+  InternalFunc :: SourcePos -> Label -> Imm32 -> Asm O C
+  
   -- | For Mac OS X compatibility mode
 --  Realign :: SourcePos -> Int -> Asm O O
 --  Unrealign :: SourcePos -> Asm O O
@@ -339,6 +346,8 @@ instance NonLocal Asm where
   successors (Ret _ _) = []
   successors (RetPop _ _ _) = []
   successors (ExitFail _) = []
+  successors (InternalFunc _ fl (Imm32BlockLabel al 0)) = [al, fl]
+  successors (InternalFunc _ fl _) = [fl]
 
 showNullOp :: String -> SourcePos -> String
 showNullOp opcode pos = printf "%s        # %s"
@@ -368,8 +377,9 @@ instance Show (Asm e x) where
   show (CMovRMtoR pos flag a b) = showBinOp opcode pos a b
             where opcode = "cmov" ++ show flag ++ "q"
 
-  show (Enter pos lbl nargs st) = printf "%s: %s  # %d args  %s"
-                                  (show lbl) adjSP nargs (showPos pos)
+  show (Enter pos lbl nargs st)
+      = printf "%s: %s  # %d args  %s"
+        (show lbl) adjSP nargs (showPos pos)
       where adjSP = case st of
                       0 -> ""
                       _ -> printf "subq $%d, %s" st (show (MReg RSP))
@@ -384,6 +394,8 @@ instance Show (Asm e x) where
 
   show (Call pos nargs func) = showUnOp "call" pos func
   show (Callout pos nargs func) = showUnOp "call" pos func
+  show (InternalFunc pos flab alab)
+      = showUnOp "jmp" pos alab ++ " (InternalFunc)"
   show (Ret pos returns)
       = showNullOp "ret" pos
         ++ (if not returns then " (void method)" else "")
@@ -610,6 +622,7 @@ mapAsm fs fd n
         
         Call{} -> Nothing
         Callout{} -> Nothing
+        InternalFunc{} -> Nothing
         Ret{} -> Nothing
         RetPop{} -> Nothing
         ExitFail{} -> Nothing

@@ -265,8 +265,9 @@ makeInterfGraph mlabels graph webs = InterfGraph idToWebMap adjs moves fixedRegs
           addDef w d usedef = M.insertWith combineUsedef d (S.empty, S.singleton w) usedef
           
           -- | A map from nodes to (alive, dead) sets of WebIDs
-          usedef = foldl (flip id) M.empty ([addDef w d | (w, web) <- idToWeb, d <- S.toList $ webDefs web]
-                                            ++ [addUse w u | (w, web) <- idToWeb, u <- S.toList $ webUses web])
+          usedef = foldl (flip id) M.empty
+                   ([addDef w d | (w, web) <- idToWeb, d <- S.toList $ webDefs web]
+                    ++ [addUse w u | (w, web) <- idToWeb, u <- S.toList $ webUses web])
           
           -- | The adjacency lists!
           adjs = let adjm = buildAdjLists mlabels graph usedef
@@ -300,8 +301,9 @@ buildAdjLists mlabels graph usedef
               where fe :: PNode Asm C O -> AdjListFact -> AdjListFact
                     fe (PNode l n) f = handle (M.findWithDefault (S.empty, S.empty) l usedef) f
                     fm :: PNode Asm O O -> AdjListFact -> AdjListFact
-                    fm (PNode l (MovIRMtoR _ (IRM_R _) _)) (live, adj)
-                        = let (alive, dead) = usedef M.! l
+                    fm pn@(PNode l (MovIRMtoR _ (IRM_R _) _)) (live, adj)
+                        = let (alive, dead) = fromMaybe (error $ "oaeu " ++ show pn ++ "\n" ++ show usedef) $
+                                              M.lookup l usedef
                           in handle (alive, dead) (live S.\\ alive, adj)
                     fm (PNode l n) f = handle (M.findWithDefault (S.empty, S.empty) l usedef) f
                     fx :: PNode Asm O C -> FactBase AdjListFact -> AdjListFact
@@ -409,6 +411,7 @@ getPinned expr
         Leave{} -> [MReg RSP]
         Call p nargs i -> [MReg RSP]
         Callout p nargs i -> [MReg RSP]
+        InternalFunc{} -> []
         Ret p rets -> []
         RetPop p rets num -> []
         ExitFail{} -> []
@@ -459,6 +462,7 @@ getFixed expr
         Callout p nargs i -> ([MReg RAX] ++ x, x ++ [MReg RAX])
                              <+> ([MReg RSP], map MReg callerSaved ++ [MReg RSP])
             where x = map MReg (catMaybes $ take nargs argOrder)
+        InternalFunc{} -> emptyAD
         Ret p rets -> (if rets then [MReg RAX] else [], []) <+> ([MReg RSP], [])
         RetPop p rets num -> (if rets then [MReg RAX] else [], []) <+> ([MReg RSP], [])
         ExitFail{} -> noFixed

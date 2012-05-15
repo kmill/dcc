@@ -17,15 +17,16 @@ import Data.List
 import Data.Int
 import qualified Data.Set as S
 import Dataflow
+import Dataflow.DeadCode (Live)
 import Debug.Trace
 import Text.Printf
 
 type GM = I.GM
 
 toAss :: CompilerOpts -> I.MidIRRepr -> GM LowIRRepr
-toAss opts (I.MidIRRepr fields strs meths graph)
+toAss opts midir@(I.MidIRRepr fields strs meths graph)
     = do graph' <- mgraph'
-         return $ LowIRRepr (map toLowField fields) strs meths graph'
+         return $ LowIRRepr (map toLowField fields) strs 0 meths graph'
     where GMany _ body _ = graph
           mgraph' = do graphs' <- mapM f (mapElems body)
                        return $ foldl (|*><*|) emptyClosedGraph graphs'
@@ -49,14 +50,19 @@ toAss opts (I.MidIRRepr fields strs meths graph)
           mlabels = map I.methodEntry meths
 
           toAsm :: forall e x. I.MidIRInst e x -> GM (Graph A.Asm e x)
-          toAsm e = do as <- (rCGM $ instToAsm e) opts
+          toAsm e = do as <- (rCGM $ instToAsm e) (CGMData opts live)
                        case as of
                          [] -> error $ "No output for " ++ show e
                          a:_ -> return a
+          live = getLiveVariables midir
 
+
+data CGMData = CGMData
+    { cgmCompilerOpts :: CompilerOpts
+    , cgmLive :: FactBase Live }
 
 -- | CGM is "Code Gen Monad"
-data CGM a = CGM { rCGM :: CompilerOpts -> GM [a] }
+data CGM a = CGM { rCGM :: CGMData -> GM [a] }
 
 instance Monad CGM where
     return x = CGM $ \opts -> return [x]
@@ -76,6 +82,10 @@ instance MonadPlus CGM where
                             bs <- mbs opts
                             return $ as ++ bs
 
+instance UniqueMonad CGM where
+    freshUnique = CGM $ \opts -> do u <- freshUnique
+                                    return [u]
+
 -- | cuts the computation down to one branch
 mcut :: CGM a -> CGM a
 mcut (CGM mas) = CGM $ \opts -> do as <- mas opts
@@ -84,8 +94,10 @@ mcut (CGM mas) = CGM $ \opts -> do as <- mas opts
                                      a:_ -> return [a]
 
 getOpts :: CGM CompilerOpts
-getOpts = CGM $ \opts -> return [opts]
+getOpts = CGM $ \opts -> return [cgmCompilerOpts opts]
 
+getLive :: CGM (FactBase Live)
+getLive = CGM $ \opts -> return [cgmLive opts]
 
 genTmpReg :: CGM A.Reg
 genTmpReg = CGM $ \opts -> do s <- I.genUniqueName "s"
@@ -169,13 +181,9 @@ instToAsm (I.Callout pos d name args)
                     <*> mkMiddle (A.mov pos (A.MReg A.RAX) (A.SReg $ show d))
 instToAsm (I.Branch pos l)
     = return $ mkLast $ A.Jmp pos (A.Imm32BlockLabel l 0)
-instToAsm (I.ThreadReturn pos l)
-    = error "ThreadReturn codegen not yet implemented :-{"
 instToAsm (I.CondBranch pos cexp tl fl)
     = do (g, flag) <- expToFlag cexp
          return $ g <*> (mkLast $ A.JCond pos flag (A.Imm32BlockLabel tl 0) fl)
-instToAsm (I.Parallel pos ll var count el)
-    = error "Parallel codegen not yet implemented :-{"
 instToAsm (I.Return pos fname Nothing)
     = return $ (mkLast $ A.Leave pos False 0)
 instToAsm (I.Return pos fname (Just exp))
@@ -188,6 +196,31 @@ instToAsm (I.Fail pos)
                             , A.mov pos (A.Imm32 0) (A.MReg A.RAX)
                             , exit ]
                     <*> mkLast (A.ExitFail pos)
+
+instToAsm (I.Parallel pos ll var count el)
+    = do liveMap <- getLive
+         func <- freshLabel
+         set_num_threads <- genCallout pos 1 "set_num_threads"
+         create_and_run_threads <- genCallout pos 1 "create_and_run_threads"
+         let live = mapFindWithDefault (error "getLive failed in parallel") ll liveMap
+             live' = S.toList $ S.delete var live
+             spilllocs = zip (map A.SpillIPC [0..]) live'
+             mkSpill (loc, v) = A.Spill pos (A.SReg $ show v) loc
+             mkReload (loc, v) = A.Reload pos loc (A.SReg $ show v)
+             mem = A.MemAddr Nothing (A.Imm32BlockLabel func 0) Nothing A.SOne
+         return $ (mkMiddles (map mkSpill spilllocs)
+                   <*> mkMiddle (A.mov pos (fromIntegral count :: Int64) (A.MReg A.RDI))
+                   <*> mkMiddle set_num_threads
+                   <*> mkMiddle (A.Lea pos mem (A.MReg A.RDI))
+                   <*> mkMiddle create_and_run_threads
+                   <*> mkLast (A.InternalFunc pos func (A.Imm32BlockLabel el 0)))
+             |*><*| (mkFirst (A.Enter pos func 1 0)
+                     <*> (genLoadArgs pos [var])
+                     <*> (mkMiddles (map mkReload spilllocs))
+                     <*> mkLast (A.Jmp pos (A.Imm32BlockLabel ll 0)))
+instToAsm (I.ThreadReturn pos l)
+    = return $ mkLast $ A.Leave pos False 0
+
 
 genSetArgs :: SourcePos -> [MidIRExpr] -> CGM (Graph A.Asm O O)
 genSetArgs pos args = do opts <- getOpts
@@ -572,6 +605,10 @@ lowIRToAsm m opts
       ++ newline
       ++ ["# strings"]
       ++ (concatMap showString (lowIRStrings m))
+      ++ (if lowIRIPCSize m > 0
+          then [ "", "# IPC space"
+               , "main_ipc: .space " ++ show (lowIRIPCSize m) ++ ", 0"]
+          else [])
       ++ newline
       ++  [ ".text"
           , ""

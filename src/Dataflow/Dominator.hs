@@ -35,7 +35,9 @@ dominatorAnalysis = mkFTransfer ft
           ft (IndStore _ _ _) f = f
           ft (Call _ _ _ _) f = f
           ft (Callout _ _ _ _) f = f
-          ft (Parallel _ l _ _ _) f = mapSingleton l $ insertLabel l f 
+          ft (Parallel _ ll _ _ el) f
+              = mkFactBase dominatorLattice [ (ll, insertLabel ll f) 
+                                            , (el, insertLabel el f) ]
           ft (Branch _ l) f = mapSingleton l $ insertLabel l f 
           ft (ThreadReturn _ l) f = mapSingleton l $ insertLabel l f 
           ft (CondBranch _ _ tl fl) f 
