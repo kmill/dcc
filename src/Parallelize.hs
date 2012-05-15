@@ -32,7 +32,7 @@ performParallelizePass :: MidIRRepr -> RM MidIRRepr
 performParallelizePass midir = foldl (>>=) (return midir) $ map forLoop $ t $ L.sortBy compare' $ S.toList goodLoops
     where goodLoops = midirLoops midir -- analyzeParallelizationPass midir
 
-defaultThreadMax :: Int64
+defaultThreadMax :: Int
 defaultThreadMax = 10
 
 -- Need to do some things here:
@@ -47,7 +47,7 @@ forLoop loop midir = do
     return $ midir { midIRGraph = graph' }
     where graph = midIRGraph midir
           GMany _ blockMap _ = graph
-          blockMap' = parallelHeader (t loop) $ fixInc defaultThreadMax loop blockMap
+          blockMap' = parallelHeader defaultThreadMax (t loop) $ fixInc defaultThreadMax loop blockMap
 
 -- returns looping variable, lower bound, upper bound, end label
 loopData :: Loop -> MidIRMap -> (VarName, Int64, Int64, Label)
@@ -63,11 +63,8 @@ loopData loop blockMap = (var, lower, upper, elbl)
           CondBranch _ (BinOp _ CmpGTE (Var _ var) (Lit _ upper)) elbl _
               = lastInst $ headerBlock loop blockMap
 
-parallelVar :: Loop -> VarName
-parallelVar loop = MV $ "idx_" ++ (show $ loop_header loop)
-
-parallelHeader :: Loop -> MidIRMap -> MidIRMap
-parallelHeader loop blockMap
+parallelHeader :: Int -> Loop -> MidIRMap -> MidIRMap
+parallelHeader threadMax loop blockMap
     = mapInsert headerPredLabel headerPredBlock' $ mapDelete headerPredLabel blockMap
     where headerLabel = loop_header loop
           headerPredLabel = headerPred loop blockMap
@@ -75,10 +72,10 @@ parallelHeader loop blockMap
           processHeader :: forall e x. MidIRInst e x -> MidIRInst e x
           processHeader inst@(Branch pos lbl)
               | lbl == headerLabel
-                  = Parallel pos headerLabel (parallelVar loop) lower upper 
+                  = Parallel pos headerLabel var threadMax elbl
               | otherwise = error "Branch not to loop header"
           processHeader inst = inst
-          (_, lower, upper, _) = t $ loopData loop blockMap
+          (var, _, _, elbl) = t $ loopData loop blockMap
 
 getBlock :: Label -> MidIRMap -> Block MidIRInst C C
 getBlock label
@@ -107,7 +104,7 @@ loopPred loop blockMap lbl
           loopList = filter (\(l, b) -> S.member l $ loop_body loop) list
 
 -- takes maximum number of threads
-fixInc :: Int64 -> Loop -> MidIRMap -> MidIRMap
+fixInc :: Int -> Loop -> MidIRMap -> MidIRMap
 fixInc threadMax loop blockMap
     = mapInsert incLabel incBlock' $ mapDelete incLabel blockMap
     where headerLabel = loop_header loop
@@ -117,7 +114,7 @@ fixInc threadMax loop blockMap
           processInc :: forall e x. MidIRInst e x -> MidIRInst e x
           processInc (Store posS var' (BinOp posO OpAdd (Lit posL lit') (Var posV var'') ))
               | (var' == var) && (lit' == 1) && (var'' == var)
-                  = (Store posS var (BinOp posO OpAdd (Var posV var) (Lit posL threadMax)))
+                  = (Store posS var (BinOp posO OpAdd (Var posV var) (Lit posL $ fromIntegral threadMax)))
               | otherwise = error "Error in loop processing :-("
           processInc inst = inst
           (var, _, _, _) = loopData loop blockMap

@@ -331,9 +331,9 @@ instance Show v => Show (Inst v e x) where
     show (Callout pos dest name args)
         = printf "%s := callout %s (%s)  {%s};"
           (show dest) (show name) (intercalate ", " $ map show args) (showPos pos)
-    show (Parallel pos lbl ivar lower upper)
-        = printf "parallel (%s <- [%u,..%u]) { goto %s; }  {%s};"
-          (show ivar) lower (upper - 1) (show lbl) (show pos)
+    show (Parallel pos llbl ivar count elbl)
+        = printf "parallel (%s <- [0,..%u]) { goto %s; } goto %s;  {%s};"
+          (show ivar) (count - 1) (show llbl) (show elbl) (show pos)
     show (ThreadReturn pos lbl)
         = printf "end thread to %s  {%s};"
           (show lbl) (showPos pos)
