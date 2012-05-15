@@ -53,8 +53,8 @@ webInBlocks :: Web a -> S.Set Label -> Bool
 webInBlocks web labels = all (\n -> S.member (nodeLabel n) labels) $
                          S.toList (webDefs web `S.union` webUses web)
 
-websIntersectingBlocks :: Ord a => Webs a -> S.Set Label -> S.Set (Web a)
-websIntersectingBlocks webs labels = S.fromList [x | x <- M.elems webs, webIntersectingBlocks x labels]
+websIntersectingBlocks :: Ord a => Webs a -> S.Set Label -> S.Set (WebID)
+websIntersectingBlocks webs labels = S.fromList [k | (k, x) <- M.toList webs, webIntersectingBlocks x labels]
 
 -- | Checks whether a web intersets a list of blocks (as in whether there are any defs or uses of the web in the blocks)
 webIntersectingBlocks :: Ord a => Web a -> S.Set Label -> Bool
