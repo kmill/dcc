@@ -59,7 +59,7 @@ websIntersectingBlocks webs labels = S.fromList [k | (k, x) <- M.toList webs, we
 -- | Checks whether a web intersets a list of blocks (as in whether there are any defs or uses of the web in the blocks)
 webIntersectingBlocks :: Ord a => Web a -> S.Set Label -> Bool
 webIntersectingBlocks web labels = not $ S.null $ S.intersection labels defUseLabels 
-    where defUseLabels = S.union (S.map nodeLabel $ webDefs web) (S.map nodeLabel $ webDefs web)
+    where defUseLabels = S.union (S.map nodeLabel $ webDefs web) (S.map nodeLabel $ webUses web)
 
 
 ---

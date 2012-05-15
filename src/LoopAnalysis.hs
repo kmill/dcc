@@ -27,6 +27,11 @@ import Data.Maybe
 import qualified Data.Set as S
 import qualified Data.Map as Map
 
+-- The threshhold for when we think it's worth parallelizing a loop 
+loopCostThreshold :: Double 
+loopCostThreshold = 0
+
+
 -- debug function for map find 
 mFDebug :: (Ord k, Show k) => k -> Map.Map k v -> v 
 mFDebug k map = case Map.lookup k map of 
@@ -69,7 +74,7 @@ floorFloatExpr :: FloatExpr -> FloatExpr
 floorFloatExpr expr = case floored of 
                         Nothing -> expr 
                         Just expr' -> floorFloatExpr expr'
-    where floored = mapFEE floorIt (makeLinear expr)
+    where floored = mapFEE floorIt expr
           floorIt (FLit d) = Just $ ILit $ floor d
           floorIt _ = Nothing
 
@@ -451,7 +456,7 @@ findLoopVariables graph headerDomin headerBlock loopbackBlock
           findIncValue v (BinOp _ OpAdd (Lit _ i) (Var _ x)) =  Just i 
           findIncValue v _ = Nothing
 
-calculateLoopCosts :: NonLocal n => Graph n C C -> S.Set BasicLoop -> S.Set Loop -> Map.Map Loop Int
+calculateLoopCosts :: NonLocal n => Graph n C C -> S.Set BasicLoop -> S.Set Loop -> Map.Map Loop Double
 calculateLoopCosts graph basicLoops loops = concreteLoopCosts
     where headerToBasicLoop = Map.fromList [(h, l) | l@(h, _, _) <- S.toList basicLoops]
           headerToConcreteLoop = Map.fromList [(loop_header l, l) | l <- S.toList loops] 
@@ -477,7 +482,7 @@ calculateLoopCosts graph basicLoops loops = concreteLoopCosts
                     grandChildren = [fromMaybe S.empty $ Map.lookup c looseChildren | c <- S.toList children]
                     isStrictChild child = all (S.notMember child) grandChildren
 
-          findLoopCost :: BasicLoop -> Int 
+          findLoopCost :: BasicLoop -> Double
           findLoopCost loop@(h, _, body) = iterations * (childCosts + blockCosts)
               where iterations = findNumIterations loop
                     childCosts = sum [findLoopCost c | c <- S.toList myStrictChilds]
@@ -489,26 +494,27 @@ calculateLoopCosts graph basicLoops loops = concreteLoopCosts
                         | S.member bLabel allChildBlocks = 0 
                         | otherwise = let BodyBlock block = lookupBlock graph bLabel
                                           (_, inner, _) = blockToNodeList block
-                                          in length inner
+                                          in fromIntegral $ length inner
 
           defaultIterations = 50
-          findNumIterations :: BasicLoop -> Int
+          findNumIterations :: BasicLoop -> Double
           findNumIterations (h, _, b) 
               = case Map.lookup h headerToConcreteLoop of 
                   Nothing -> defaultIterations
                   Just loop -> let (_, _, end, _) = loop_base loop 
-                               in case floorFloatExpr end of 
+                               in case floorFloatExpr (makeLinear end) of 
                                     ILit i
                                           | (fromIntegral i) > defaultIterations -> fromIntegral i
                                     _ -> defaultIterations
                     
 
 analyzeParallelizationPass :: MidIRRepr -> S.Set Loop 
-analyzeParallelizationPass midir = parallelLoops
+analyzeParallelizationPass midir = trace (" Parallel: " ++ (show $ S.map loop_header parallelLoops)) worthIt
     where basicLoops = findBasicLoops domins graph mlabels
           -- Let's see if we can identify induction vars
           loops = S.fromList $ catMaybes [insertIndVars l | l <- S.toList basicLoops]
           loopCosts = calculateLoopCosts graph basicLoops loops
+          niceLoopCosts = Map.fromList [(loop_header l, v) | (l, v) <- Map.toList loopCosts]
           insertIndVars :: BasicLoop -> Maybe Loop 
           insertIndVars b@(header, back, body) 
               = do (lv, bv, ivs) <- findInductionVariables pGraph mlabels domins webs b 
@@ -523,7 +529,15 @@ analyzeParallelizationPass midir = parallelLoops
           -- Third pass, removes all loops with cross-loop dependencies. This is the big one that involves solving some 
           -- equations. This should effectively return all of the parallelizable loops.
           parallelLoops = S.filter noCrossDependencies noVariantWritesLoops
+          -- Finally, remove any loops that are children of other loops in the parallel group since we only want to parallelize
+          -- the outer most loops 
+          noChildren = S.filter notChild parallelLoops 
+          notChild loop = all (\p -> S.notMember p parallelLoops) parents
+              where parents = fromMaybe [] $ Map.lookup loop loopParents
           
+          -- Only parallelize loops that meet a certain cost criteria
+          worthIt = S.filter (\l -> fromMaybe 0 (Map.lookup l loopCosts) > loopCostThreshold) noChildren
+
 
           loopVarInfos = Map.fromList [(loop, findLoopVarInfo webs loop) | loop <- S.toList noBreaksRetsCallsLoops]
 
@@ -791,7 +805,7 @@ analyzeParallelizationPass midir = parallelLoops
                                              False -> do newExpr <- return $ makeLinear newExpr 
                                                          rejectNonLinear newExpr
                                                     
-              where v@(variants, invariants) = trace (show $ loopVarInfos Map.! loop) $ loopVarInfos Map.! loop
+              where v@(variants, invariants) = loopVarInfos Map.! loop
                     (variantNames, invariantNames) = loopVarNames v 
                     varNameToWebID :: Map.Map VarName WebID 
                     varNameToWebID = Map.fromList [(webVar $ getWeb id webs, id) | id <- S.toList $ S.union variants invariants]
@@ -838,7 +852,7 @@ analyzeParallelizationPass midir = parallelLoops
                               addNonLoopVars s _ = s
                               removeNonLoop :: FloatExpr -> VarName -> Maybe FloatExpr 
                               removeNonLoop expr v
-                                  = let webID = trace (show varNameToWebID) $ mFDebug v varNameToWebID 
+                                  = let webID =  mFDebug v varNameToWebID 
                                         web = getWeb webID webs
                                         defs = webDefs web
                                         singleDef = head $ S.toList defs
@@ -881,7 +895,7 @@ analyzeParallelizationPass midir = parallelLoops
 type LoopVarInfo = (S.Set WebID, S.Set WebID) 
 
 findLoopVarInfo :: Webs -> Loop -> LoopVarInfo 
-findLoopVarInfo webs loop = trace ("WEBS FOR: " ++ show (loop_header loop)) $ S.fold addVarWebs (S.empty, S.empty) loopWebs
+findLoopVarInfo webs loop = S.fold addVarWebs (S.empty, S.empty) loopWebs
     where body = loop_body loop 
           loopVars = loop_variables loop 
           loopWebs = websIntersectingBlocks webs body 
