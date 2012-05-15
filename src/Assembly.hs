@@ -293,6 +293,10 @@ data Asm e x where
   -- expected that the code has called "exit" before reaching this.
   ExitFail :: SourcePos -> Asm O C
   
+  -- | Takes a label to a function along with what to actually jump
+  -- to.
+  InternalFunc :: SourcePos -> Label -> Imm32 -> Asm O C
+  
   -- | For Mac OS X compatibility mode
 --  Realign :: SourcePos -> Int -> Asm O O
 --  Unrealign :: SourcePos -> Asm O O
@@ -342,6 +346,8 @@ instance NonLocal Asm where
   successors (Ret _ _) = []
   successors (RetPop _ _ _) = []
   successors (ExitFail _) = []
+  successors (InternalFunc _ fl (Imm32BlockLabel al 0)) = [al, fl]
+  successors (InternalFunc _ fl _) = [fl]
 
 showNullOp :: String -> SourcePos -> String
 showNullOp opcode pos = printf "%s        # %s"
@@ -388,6 +394,8 @@ instance Show (Asm e x) where
 
   show (Call pos nargs func) = showUnOp "call" pos func
   show (Callout pos nargs func) = showUnOp "call" pos func
+  show (InternalFunc pos flab alab)
+      = showUnOp "jmp" pos alab ++ " (InternalFunc)"
   show (Ret pos returns)
       = showNullOp "ret" pos
         ++ (if not returns then " (void method)" else "")
