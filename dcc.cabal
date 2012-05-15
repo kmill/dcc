@@ -58,7 +58,9 @@ Executable dcc
     filepath,
     array >= 0.3,
     regex-compat,
+    glpk-hs >= 0.3.1,
     MissingH >= 1
+
 --    hoopl >= 3.8.7
   extensions:
     CPP
