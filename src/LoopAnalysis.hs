@@ -504,7 +504,7 @@ calculateLoopCosts graph basicLoops loops = concreteLoopCosts
                     
 
 analyzeParallelizationPass :: MidIRRepr -> S.Set Loop 
-analyzeParallelizationPass midir = trace (show loopCosts) parallelLoops
+analyzeParallelizationPass midir = parallelLoops
     where basicLoops = findBasicLoops domins graph mlabels
           -- Let's see if we can identify induction vars
           loops = S.fromList $ catMaybes [insertIndVars l | l <- S.toList basicLoops]
@@ -687,7 +687,7 @@ analyzeParallelizationPass midir = trace (show loopCosts) parallelLoops
                                              dInc = fromIntegral inc 
                                              (myLoopVar, _, _, _) = loop_base myLoop
                                          constraint <- maybeConstraint
-                                         correct <- linConstFloatExpr loop constraint
+                                         correct <- linConstFloatExpr myLoop constraint
                                          return $ Map.insert var correct map
                                                 
                     mCon = fromJust indConstraints
@@ -791,7 +791,7 @@ analyzeParallelizationPass midir = trace (show loopCosts) parallelLoops
                                              False -> do newExpr <- return $ makeLinear newExpr 
                                                          rejectNonLinear newExpr
                                                     
-              where v@(variants, invariants) = loopVarInfos Map.! loop 
+              where v@(variants, invariants) = trace (show $ loopVarInfos Map.! loop) $ loopVarInfos Map.! loop
                     (variantNames, invariantNames) = loopVarNames v 
                     varNameToWebID :: Map.Map VarName WebID 
                     varNameToWebID = Map.fromList [(webVar $ getWeb id webs, id) | id <- S.toList $ S.union variants invariants]
@@ -838,7 +838,7 @@ analyzeParallelizationPass midir = trace (show loopCosts) parallelLoops
                               addNonLoopVars s _ = s
                               removeNonLoop :: FloatExpr -> VarName -> Maybe FloatExpr 
                               removeNonLoop expr v
-                                  = let webID = mFDebug v varNameToWebID 
+                                  = let webID = trace (show varNameToWebID) $ mFDebug v varNameToWebID 
                                         web = getWeb webID webs
                                         defs = webDefs web
                                         singleDef = head $ S.toList defs
@@ -881,7 +881,7 @@ analyzeParallelizationPass midir = trace (show loopCosts) parallelLoops
 type LoopVarInfo = (S.Set WebID, S.Set WebID) 
 
 findLoopVarInfo :: Webs -> Loop -> LoopVarInfo 
-findLoopVarInfo webs loop = S.fold addVarWebs (S.empty, S.empty) loopWebs
+findLoopVarInfo webs loop = trace ("WEBS FOR: " ++ show (loop_header loop)) $ S.fold addVarWebs (S.empty, S.empty) loopWebs
     where body = loop_body loop 
           loopVars = loop_variables loop 
           loopWebs = websIntersectingBlocks webs body 
