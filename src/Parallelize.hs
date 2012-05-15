@@ -80,9 +80,8 @@ mkInitBlock lab pos loop i
                       , JustC (Branch pos (loop_header loop)))
     where mkInits = map mkInit $ S.toList $ loop_variables loop
           mkInit (var, start, _, step)
-              = Store pos var (BinOp pos OpAdd
-                               (evalFloatExpr pos start)
-                               (BinOp pos OpMul (Lit pos step) (Var pos i)))
+              = Store pos var (evalFloatExpr pos start)
+
 
 mkDoneBlock :: SourcePos -> Label -> Label -> VarName -> Loop
             -> Block MidIRInst C C
@@ -97,14 +96,16 @@ mkDoneBlock pos donel contl endv loop
           mkFin (var, _, _, step)
               = Store pos var (BinOp pos OpMul (Lit pos step) (Var pos endv))
 
-evalFloatExpr :: SourcePos -> FloatExpr -> Expr VarName
-evalFloatExpr pos (ILit i) = Lit pos i
-evalFloatExpr pos (FLit d) = Lit pos (floor d)
-evalFloatExpr pos (FVar vn) = Var pos vn
-evalFloatExpr pos (FUnOp op exp) = UnOp pos op (evalFloatExpr pos exp)
-evalFloatExpr pos (FBinOp op exp1 exp2) = BinOp pos op
+convertFloatExpr :: SourcePos -> FloatExpr -> Expr VarName
+convertFloatExpr pos (ILit i) = Lit pos i
+convertFloatExpr pos (FLit d) = Lit pos (floor d)
+convertFloatExpr pos (FVar vn) = Var pos vn
+convertFloatExpr pos (FUnOp op exp) = UnOp pos op (evalFloatExpr pos exp)
+convertFloatExpr pos (FBinOp op exp1 exp2) = BinOp pos op
                                           (evalFloatExpr pos exp1)
                                           (evalFloatExpr pos exp2)
+
+evalFloatExpr pos expr = convertFloatExpr pos $ floorFloatExpr (makeLinear expr)
 
 updateParBlock :: SourcePos -> Loop -> VarName -> Int -> Label -> Label
                -> Block MidIRInst C C
