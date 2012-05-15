@@ -25,7 +25,7 @@ compare' loop1 loop2 =
 
 performParallelizePass :: MidIRRepr -> RM MidIRRepr
 performParallelizePass midir = foldl (>>=) (return midir) $ map forLoop $ t $ L.sortBy compare' $ S.toList goodLoops
-    where goodLoops = midirLoops midir -- analyzeParallelizationPass midir
+    where goodLoops = analyzeParallelizationPass midir
 
 -- Need to do some things here:
 -- 1. Change loop header to instance of Parallel

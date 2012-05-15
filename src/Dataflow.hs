@@ -74,7 +74,7 @@ dataflows
       , DFA optBlockElim performBlockElimPass 
       -- It's good to end with this for good measure (and removes dead blocks)
       , DFA optDeadCode performDeadCodePass
-      , DFA optDeadCode testDominatorPass
+      --, DFA optDeadCode testDominatorPass
       ]
 
 performDataflowAnalysis :: OptFlags -> MidIRRepr -> RM MidIRRepr 
@@ -115,7 +115,7 @@ performCSEPass midir
          performFwdPass (csePass nonTemps') midir emptyExprFact
 
 performLICMPass midir = performBwdPass (licmPass loops) midir emptyMotionFact
-    where loops = midirLoops midir
+    where loops = error "Can't use midir loops to get loops anymore"
 
 performUnflattenPass :: MidIRRepr -> RM MidIRRepr 
 performUnflattenPass midir
@@ -135,9 +135,9 @@ testDominatorPass midir
                              (JustC mlabels)
                              graph
                              (mapFromList (map (\l -> (l, fact_bot dominatorLattice) ) mlabels))
-         let loops = findLoops factBase graph mlabels
-             parallelLoops = analyzeParallelizationPass midir 
-         return $ trace (show parallelLoops) midir 
+         let parallelLoops = analyzeParallelizationPass midir
+             parallelHeaders = S.map (loop_header) parallelLoops
+         return $ trace (show parallelHeaders) midir 
     where graph = midIRGraph midir
           mlabels = (map methodEntry $ midIRMethods midir)
 
