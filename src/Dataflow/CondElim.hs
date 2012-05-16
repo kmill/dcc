@@ -52,6 +52,8 @@ condAssignness = mkBTransfer f
         
 addFacts o@(AssignMap (Just ol) (Just or) fl') n@(AssignMap (Just nl) (Just nr) ll') = n'
   where n'
+          | M.null or && M.null nr && M.null nl = AssignMap (Just ol) (Just nl) lbl
+          | M.null or && M.null nr && M.null ol = AssignMap (Just nl) (Just ol) lbl
           | M.null or && M.null nr = AssignMap (Just ol) (Just nl) lbl
           | otherwise = AssignMap Nothing Nothing Nothing
         lbl = matchesMaybe fl' ll'
@@ -77,16 +79,30 @@ condElim = deepBwdRw ll
     ll _ _ = return Nothing
 
 ll' :: MidIRInst e x -> AssignMap -> Maybe (Graph MidIRInst e x)
-ll' n'@(CondBranch p ce tl fl) f@(AssignMap (Just a) (Just b) lbl')
-  | M.size (M.intersection a b) == 1 && M.size a == 1 && M.size b == 1 = 
-    case head (M.keys $ M.intersection a b) of 
-      InRet r -> Just $ mkLast $ Return p r (Just (Cond p ce (assignment (head $ M.elems a)) (assignment (head $ M.elems b))))
-      InVar v -> case lbl' of
-        Just lbl -> Just $ (mkMiddle $ Store p v (Cond p ce (assignment (head $ M.elems a)) (assignment (head $ M.elems b)))) <*> (mkLast $ Branch p lbl)
-        _ -> Nothing
-  | otherwise = Nothing
+ll' n'@(CondBranch p ce tl fl) f@(AssignMap (Just a) (Just b) lbl') = case (createLast p ce a b lbl') of
+  Nothing -> Nothing
+  Just endInst -> Just $ (foldr (<*>) endInst (map (mkMInstr p ce a b) (filter (isNotRet) (M.keys $ M.union a a)))) --b))))
+--  | M.size (M.intersection a b) == 1 && M.size a == 1 && M.size b == 1 = 
+--    case head (M.keys $ M.intersection a b) of 
+--      InRet r -> Just $ mkLast $ Return p r (Just (Cond p ce (assignment (head $ M.elems a)) (assignment (head $ M.elems b))))
+--      InVar v -> case lbl' of
+--        Just lbl -> Just $ (mkMiddle $ Store p v (Cond p ce (assignment (head $ M.elems a)) (assignment (head $ M.elems b)))) <*> (mkLast $ Branch p lbl)
+--        _ -> Nothing
+--  | otherwise = Nothing
 ll' _ _ = Nothing
     
+isNotRet (InRet _) = False
+isNotRet _ = True
+
+createLast p ce a b lbl = case (filter (not . isNotRet) (M.keys $ M.intersection a b)) of
+  [] -> case lbl of
+    Nothing -> Nothing 
+    Just lbl' -> Just $ mkLast $ Branch p lbl'
+  x -> Just $ mkLInstr p ce a b (head x)
+
+mkLInstr p ce a b n@(InRet v) = mkLast $ Return p v (Just (Cond p ce (assignment (fromJust $ M.lookup n a)) (assignment (fromJust $ M.lookup n b))))
+mkMInstr p ce a b n@(InVar v) = mkMiddle $ Store p v (Cond p ce (assignment (fromMaybe (AssignVar p v) (M.lookup n a))) (assignment (fromMaybe (AssignVar p v) (M.lookup n b))))
+
 assignment :: Assignable -> Expr VarName
 assignment (AssignVar p x) = Var p x
 assignment (AssignCon p x) = Lit p x
