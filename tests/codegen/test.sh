@@ -3,7 +3,7 @@
 domidirc=0
 opts="cse copyprop constprop nzp deadcode blockelim flat tailcall "
 
-main_dccopts="-r --opt=basic"
+main_dccopts="-r --opt=all,-betterifyasm"
 
 base=`dirname $0`
 
