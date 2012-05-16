@@ -1,7 +1,7 @@
 class Program{
-  int A[1000000];
+  int A[10000000];
   int B[10000];
-  int C[10000];
+  int C[100000];
   void main() {
     
     for(i = 0; 200) {
@@ -11,7 +11,7 @@ class Program{
       B[i] = 22*i-i*i;
     }
     callout("start_caliper");
-    for(i = 0;3000) {
+    for(i = 0;600) {
       int w;
       w = 0;
       for(j = 0;200) {

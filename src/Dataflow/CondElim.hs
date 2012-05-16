@@ -40,7 +40,7 @@ condAssignness = mkBTransfer f
   where f :: MidIRInst e x -> Fact x AssignMap -> AssignMap
         f n'@(Label p _) k = k
         f n'@(Store p v (Lit _ v')) k@(AssignMap (Just kr) kl lbl) = AssignMap (combineMaps (M.singleton (InVar v) (AssignCon p v')) kr) kl lbl
---        f n'@(Store p v (Var _ v')) k@(AssignMap (Just kr) kl lbl) = AssignMap (combineMaps (M.singleton (InVar v) (AssignVar p v')) kr) kl lbl
+        f n'@(Store p v (Var _ v')) k@(AssignMap (Just kr) kl lbl) = AssignMap (combineMaps (M.singleton (InVar v) (AssignVar p v')) kr) kl lbl
         f n'@(Return _ rx (Just (Lit p v'))) fb = AssignMap (Just (M.singleton (InRet rx) (AssignCon p v'))) (Just M.empty) Nothing
 --        f n'@(Return _ rx (Just (Lit p v'))) fb = AssignMap (combineMaps (M.singleton (InRet rx) (AssignCon p v')) kr) kl lbl
 --          where
@@ -81,7 +81,10 @@ condElim = deepBwdRw ll
 ll' :: MidIRInst e x -> AssignMap -> Maybe (Graph MidIRInst e x)
 ll' n'@(CondBranch p ce tl fl) f@(AssignMap (Just a) (Just b) lbl') = case (createLast p ce a b lbl') of
   Nothing -> Nothing
-  Just endInst -> Just $ (foldr (<*>) endInst (map (mkMInstr p ce a b) (filter (isNotRet) (M.keys $ M.union a a)))) --b))))
+  Just endInst -> case (filter (isNotRet) (M.keys $ M.union a a)) of
+    [] -> Just $ endInst
+    x:xs -> Just $ mkMInstr p ce a b x <*> endInst
+--  Just endInst -> Just $ (foldr (<*>) endInst (map (mkMInstr p ce a b) (filter (isNotRet) (M.keys $ M.union a a)))) --b))))
 ll' _ _ = Nothing
     
 isNotRet (InRet _) = False

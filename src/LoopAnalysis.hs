@@ -29,7 +29,7 @@ import qualified Data.Map as Map
 
 -- The threshhold for when we think it's worth parallelizing a loop 
 loopCostThreshold :: Double 
-loopCostThreshold = 0
+loopCostThreshold = 1000000
 
 trace' a x = x
 
