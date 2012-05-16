@@ -65,7 +65,7 @@ betterifySpills = FwdPass
                   , fp_rewrite = rewrite }
     where 
           ftCO :: Asm C O -> BetterifyFact -> BetterifyFact
-          ftCO (Enter _ _ numargs _) (spills, regs)
+          ftCO (Enter _ _ numargs _) (_, _)
               = (spills'', regs')
                 where spills' = M.fromList $ map (\a -> (a, Top)) $ 
                                 lefts $ drop 6 $ take numargs argLocation

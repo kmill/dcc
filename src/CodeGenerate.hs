@@ -556,20 +556,14 @@ expToFlag e = mcut $ msum rules
     where
       rules = [ cmpBinOpToFlag e
               , do I.UnOp pos I.OpNot ne <- withNode e
-                   (g, r) <- expToRM ne
+                   (g, r) <- expToR ne
                    return ( g
-                            <*> mkMiddle (A.Test noPosition
-                                               (A.IR_I $ A.Imm32 $
-                                                 fromIntegral I.bTrue)
-                                               r)
+                            <*> mkMiddle (A.Test noPosition (A.IR_R r) (A.RM_R r))
                           , A.FlagZ )
                 --- Use testq to see if it's bTrue (which should be non-zero).
-              , do (g, r) <- expToRM e
+              , do (g, r) <- expToR e
                    return ( g
-                            <*> mkMiddle (A.Test noPosition
-                                               (A.IR_I $ A.Imm32 $
-                                                 fromIntegral I.bTrue)
-                                               r)
+                            <*> mkMiddle (A.Test noPosition (A.IR_R r) (A.RM_R r))
                           , A.FlagNZ )
               ]
 
@@ -579,17 +573,28 @@ cmpBinOpToFlag e = mcut $ msum rules
       rules = [ --- make equality to zero be testq
                 do I.BinOp pos I.CmpEQ expa expb <- withNode e
                    I.Lit _ 0 <- withNode expa
-                   (gb, b) <- expToRM expb
+                   (gb, b) <- expToM expb
                    return ( gb <*> mkMiddle(A.Test pos
-                                            (A.IR_I $ A.Imm32 (-1)) b)
+                                            (A.IR_I $ A.Imm32 (-1)) (A.RM_M b))
+                          , A.FlagZ )
+              , do I.BinOp pos I.CmpEQ expa expb <- withNode e
+                   I.Lit _ 0 <- withNode expa
+                   (gb, b) <- expToR expb
+                   return ( gb <*> mkMiddle(A.Test pos (A.IR_R b) (A.RM_R b))
                           , A.FlagZ )
                 --- make inequality to zero be testq
               , do I.BinOp pos I.CmpNEQ expa expb <- withNode e
                    I.Lit _ 0 <- withNode expa
-                   (gb, b) <- expToRM expb
+                   (gb, b) <- expToM expb
                    return ( gb <*> mkMiddle(A.Test pos
-                                            (A.IR_I $ A.Imm32 (-1)) b)
-                          , A.FlagNZ )--- by for binop comparisons, just use cmp
+                                            (A.IR_I $ A.Imm32 (-1)) (A.RM_M b))
+                          , A.FlagNZ )
+              , do I.BinOp pos I.CmpNEQ expa expb <- withNode e
+                   I.Lit _ 0 <- withNode expa
+                   (gb, b) <- expToR expb
+                   return ( gb <*> mkMiddle(A.Test pos (A.IR_R b) (A.RM_R b))
+                          , A.FlagNZ )
+              --- by for binop comparisons, just use cmp
               , do I.BinOp pos op lit@(I.Lit{}) expb <- withNode e
                    a <- expToI lit
                    (gb, b) <- expToRM expb

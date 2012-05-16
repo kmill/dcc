@@ -33,6 +33,7 @@ import qualified RegAlloc.Allocator as RegisterAllocator
 import qualified RegAlloc.SimpleRegAlloc as SimpleRegAlloc
 import RegAlloc.BakeSpills
 import Assembly
+import qualified LoopAnalysis
 
 -- | The main entry point to @dcc@.  See 'CLI' for command line
 -- arguments.
@@ -145,16 +146,18 @@ doLowIRFile :: CompilerOpts -> String -> String -> Either String IR.MidIRRepr
 doLowIRFile opts ifname input midir
     = case midir of        
         Left err -> return $ Left err
-        Right m -> do lowir <- CodeGenerate.toAss opts m
-                      lowir <- (if debugMode opts then return else allocator) lowir
+        Right m -> do let itermap = LoopAnalysis.findIterationMap m
+                      lowir <- CodeGenerate.toAss opts m
+                      lowir <- (if debugMode opts then return else allocator itermap) lowir
                       lowir <- runWithFuel maxBound $ do
                                  lowir <- performAsmDataflowAnalysis opts lowir
                                  lowir <- (if debugMode opts then return else performBakeSpills opts) lowir
                                  return lowir
                       return $ Right lowir
-      where allocator = case regAllocMode opts || (hasOptFlag "regalloc" (optMode opts)) of
-                          True -> RegisterAllocator.regAlloc
-                          False -> SimpleRegAlloc.regAlloc
+      where allocator itermap
+              = case regAllocMode opts || (hasOptFlag "regalloc" (optMode opts)) of
+                  True -> RegisterAllocator.regAlloc itermap
+                  False -> SimpleRegAlloc.regAlloc
                  
 -- | This function formats an error so it has a nifty carat under
 -- where the error occured.
