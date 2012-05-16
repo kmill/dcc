@@ -13,6 +13,7 @@ import Dataflow.OptSupport
 import qualified IR as I
 import Assembly
 import Compiler.Hoopl
+import Debug.Trace
 
 performBakeSpills :: (CheckpointMonad m, FuelMonad m)
                      => CompilerOpts -> LowIRRepr -> m LowIRRepr
@@ -88,9 +89,13 @@ rewriteSpillPass opts fb = FwdPass
           sTransfer = mkFTransfer3 g g' g''
               where 
                 g :: Asm C O -> S.Set SpillLoc -> S.Set SpillLoc
-                g (Enter p l _ _) _ = fromMaybe S.empty (lookupFact l fb)
+                g (Enter p l _ _) _ = let f = fromMaybe S.empty (lookupFact l fb)
+                                      in f
                 g e f = f
                 g' e f = f
+                g'' :: Asm O C -> S.Set SpillLoc -> FactBase (S.Set SpillLoc)
+                g'' (InternalFunc _ fl (Imm32BlockLabel el 0)) f
+                  = mkFactBase rwLattice $ [(el, f), (fl, S.empty)]
                 g'' e f = mkFactBase rwLattice $ zip (successors e) (repeat f)
 
           rewriteSpill :: forall m. FuelMonad m => FwdRewrite m Asm (S.Set SpillLoc)
@@ -108,8 +113,8 @@ rewriteSpillPass opts fb = FwdPass
                     where x' = countSpillID f
                 d (Leave pos rets x) f = if x' == x
                                          then return Nothing
-                                         else return $ Just $ mkLast $
-                                              Leave pos rets x'
+                                         else (let inst = Leave pos rets x'
+                                               in return $ Just $ mkLast inst)
                     where x' = countSpillID f
 
                 d _ f = return Nothing
