@@ -210,22 +210,26 @@ findBackEdges dominators (x:xs) = case mapLookup (entryLabel x) dominators of
     where maybeBackEdges domin = [ (entryLabel x, y) | y <- successors x, S.member y domin]
 
 backEdgeToLoop :: FactBase DominFact -> Graph MidIRInst C C -> [Label] -> BackEdge -> BasicLoop 
-backEdgeToLoop dominators graph mlabels (loopBack, loopHeader) = BasicLoop loopHeader loopBack loopBody 
+backEdgeToLoop dominators graph mlabels (loopBack, loopHeader) = basicLoop loopHeader loopBack loopBody 
     where loopBody = S.insert loopHeader $ findReaching loopBack loopHeader graph mlabels
           headerDomins = case mapLookup loopHeader dominators of 
                            Just (PElem domin) -> domin
                            _ -> S.empty
-         
-data BasicLoop = BasicLoop
-                 { basicHeader :: Label
-                 , basicBack :: Label
-                 , basicBody :: S.Set Label }
-                 deriving (Eq, Ord, Show)
+
+type BasicLoop = (Label, Label, S.Set Label) 
+basicLoop h ba bo = (h, ba, bo)
+basicHeader :: BasicLoop -> Label
+basicHeader (h, _, _) = h
+basicBack :: BasicLoop -> Label
+basicBack (_, ba, _) = ba
+basicBody :: BasicLoop -> S.Set Label
+basicBody (_, _, bo) = bo
+
 data InductionLoc = Beginning | End deriving (Eq, Show)
 
 findInductionVariables :: Graph (PNode MidIRInst) C C -> [Label] -> FactBase DominFact -> Webs -> BasicLoop 
                        -> Maybe (IndVar, IndVar, S.Set IndVar)
-findInductionVariables pGraph mlabels domins webs (BasicLoop header loopBack body)
+findInductionVariables pGraph mlabels domins webs (header, loopBack, body)
     = case limitVar of 
         Nothing -> Nothing
         Just lv -> let bv = makeBaseVar lv 
@@ -526,7 +530,7 @@ analyzeParallelizationPass midir = worthIt
           loopCosts = calculateLoopCosts graph basicLoops loops
           niceLoopCosts = Map.fromList [(loop_header l, v) | (l, v) <- Map.toList loopCosts]
           insertIndVars :: BasicLoop -> Maybe Loop 
-          insertIndVars b@(BasicLoop header back body) 
+          insertIndVars b@(header, back, body) 
               = do (lv, bv, ivs) <- findInductionVariables pGraph mlabels domins webs b 
                    return $ Loop header body ivs lv bv
                           

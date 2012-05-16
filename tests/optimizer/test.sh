@@ -1,6 +1,6 @@
 #!/bin/sh
 
-opts="condelim"
+opts="basic"
 
 domidirc=0
 base=`dirname $0`

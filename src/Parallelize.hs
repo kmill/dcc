@@ -204,11 +204,11 @@ updateJumpOut pos loop lab block
 --           processHeader inst = inst
 --           (var, _, _, elbl) = t $ loopData loop blockMap
 
--- getBlock :: Label -> MidIRMap -> Block MidIRInst C C
--- getBlock label
---     = mapFindWithDefault 
---         (error $ "couldn't find block at " ++ (show label))
---         label
+getBlock :: Label -> MidIRMap -> Block MidIRInst C C
+getBlock label
+    = mapFindWithDefault 
+        (error $ "couldn't find block at " ++ (show label))
+        label
 
 -- headerPredBlock :: Loop -> MidIRMap -> Block MidIRInst C C
 -- headerPredBlock loop blockMap = getBlock (headerPred loop blockMap) blockMap
