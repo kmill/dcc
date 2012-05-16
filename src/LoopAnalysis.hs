@@ -679,9 +679,9 @@ analyzeParallelizationPass midir = worthIt
                     bounds = foldM maybeAddBounds Map.empty $ S.toList usedVariables
                     maybeAddBounds :: (Map.Map VarName (FloatExpr, FloatExpr)) -> VarName -> Maybe (Map.Map VarName (FloatExpr, FloatExpr))
                     maybeAddBounds map var 
-                        = do ((_, init, end, inc), _) <- Map.lookup var loopVarInfo
-                             initExpr <- linConstFloatExpr loop init
-                             endExpr <- linConstFloatExpr loop end
+                        = do ((_, init, end, inc), myLoop) <- Map.lookup var loopVarInfo
+                             initExpr <- linConstFloatExpr myLoop init
+                             endExpr <- linConstFloatExpr myLoop end
                              case inc > 0 of 
                                True -> return $ Map.insert var (initExpr, endExpr) map 
                                False -> return $ Map.insert var (endExpr, initExpr) map 
@@ -886,7 +886,7 @@ analyzeParallelizationPass midir = worthIt
                               addNonLoopVars s _ = s
                               removeNonLoop :: FloatExpr -> VarName -> Maybe FloatExpr 
                               removeNonLoop expr v
-                                  = let webID =  mFDebug v varNameToWebID 
+                                  = let webID = mFDebug v varNameToWebID 
                                         web = getWeb webID webs
                                         defs = webDefs web
                                         singleDef = head $ S.toList defs
