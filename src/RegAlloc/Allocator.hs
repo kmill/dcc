@@ -681,9 +681,10 @@ spillCost wl i = let web = igGetWeb i $ wInterfGraph wl
 --                     loopDepth l = M.findWithDefault 0 (nodeLabel l) (wLoops wl)
 --                     loadCost = sum $ map (\l -> 10 ^ (loopDepth l)) (S.toList (webUses web) ++ S.toList (webDefs web))
                      timesrun l = M.findWithDefault 1 (nodeLabel l) (wLoops wl)
-                     loadCost = sum $ map (\l -> timesrun l) (S.toList (webUses web) ++ S.toList (webDefs web))
-                     score = 100 * loadCost `div` (max 1 deg)
-                 in if webSpilled web then 3*score else score
+                     defuses = S.toList (webUses web) ++ S.toList (webDefs web)
+                     loadCost = sum $ map (\l -> timesrun l) defuses
+                     score = 200 * loadCost `div` (max 1 deg)
+                 in trace' ("cost " ++ show (length defuses) ++ " " ++ show score) (if webSpilled web then 3*score else score)
 
 -- | "SelectSpill"
 selectSpill :: AM ()

@@ -56,7 +56,7 @@ varIsCopy = mkFTransfer ft
       removeBindingsTo x oldMap = newMap 
           where newMap = Map.mapMaybe f oldMap 
                 f (PElem (pos, v)) = if v == x 
-                                     then Nothing 
+                                     then Just Top -- Nothing 
                                      else Just $ PElem (pos, v)
                 f v = Just v
 
