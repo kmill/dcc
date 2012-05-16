@@ -40,7 +40,7 @@ condAssignness = mkBTransfer f
   where f :: MidIRInst e x -> Fact x AssignMap -> AssignMap
         f n'@(Label p _) k = k
         f n'@(Store p v (Lit _ v')) k@(AssignMap (Just kr) kl lbl) = AssignMap (combineMaps (M.singleton (InVar v) (AssignCon p v')) kr) kl lbl
-        f n'@(Store p v (Var _ v')) k@(AssignMap (Just kr) kl lbl) = AssignMap (combineMaps (M.singleton (InVar v) (AssignVar p v')) kr) kl lbl
+--        f n'@(Store p v (Var _ v')) k@(AssignMap (Just kr) kl lbl) = AssignMap (combineMaps (M.singleton (InVar v) (AssignVar p v')) kr) kl lbl
         f n'@(Return _ rx (Just (Lit p v'))) fb = AssignMap (Just (M.singleton (InRet rx) (AssignCon p v'))) (Just M.empty) Nothing
 --        f n'@(Return _ rx (Just (Lit p v'))) fb = AssignMap (combineMaps (M.singleton (InRet rx) (AssignCon p v')) kr) kl lbl
 --          where
