@@ -31,6 +31,7 @@ import qualified Data.Map as Map
 loopCostThreshold :: Double 
 loopCostThreshold = 0
 
+trace' a x = x
 
 -- debug function for map find 
 mFDebug :: (Ord k, Show k) => k -> Map.Map k v -> v 
@@ -621,7 +622,7 @@ analyzeParallelizationPass midir = worthIt
                     
           noCrossDependency :: Loop -> (MidIRExpr, MidIRExpr) -> Bool 
           noCrossDependency loop (expr1, expr2) 
-              = case (findLabel expr1, findLabel expr2) of 
+              = case trace' ("HERE WITH: " ++ show (loop_header loop) ++ " EXPR1: " ++ show expr1 ++ " EXPR2: " ++ show expr2) $ (findLabel expr1, findLabel expr2) of 
                   (Nothing, _) -> False 
                   (_, Nothing) -> False 
                   (Just l1, Just l2) 
@@ -643,16 +644,17 @@ analyzeParallelizationPass midir = worthIt
           -- j1, j2 >= jmin and j1, j2 <= jmax-1
           noLinSoln :: Loop -> FloatExpr -> FloatExpr -> Bool 
           noLinSoln loop expr1 expr2 
-              = concreteBounds && (noGreaterSoln || glpkFailLT) && (noLessSoln || glpkFailGT)
+              = trace' ("HERE WITH " ++ show (loop_header loop) ++ " " ++ show glpkFailGT) $ concreteBounds && (noGreaterSoln || glpkFailGT) && (noLessSoln || glpkFailLT)
               where noLessSoln = case ltCode of 
-                                   Success -> False
-                                   v -> True
+                                   Success -> trace' ("SUCCESS " ++ show (loop_header loop)) False
+                                   v -> trace' (show v) True
                     noGreaterSoln = case gtCode of 
-                                      Success -> False 
-                                      v -> True
+                                      Success -> trace' ("SUCCESS " ++ show (loop_header loop)) False 
+                                      v -> trace' (show v) True
                     (ltCode, maybeLTSolution) = unsafePerformIO $ LP.evalLPT lessLP 
                     (gtCode, maybeGTSolution) = unsafePerformIO $ LP.evalLPT greaterLP
-                                                
+
+
                     glpkFailLT = case maybeLTSolution of 
                                    Just (_, solution) -> (solution Map.! "parallel_const") /= 1
                                    Nothing -> False 
@@ -788,7 +790,8 @@ analyzeParallelizationPass midir = worthIt
                                 mapM (\v -> LP.setVarKind v IntVar) $ Map.keys officialBounds
                                 LP.setVarKind "parallel_const" BinVar
                                 -- Finally, try to solve the integer linear program 
-                                LP.glpSolve $ mipDefaults {msgLev=MsgOff, presolve = False}
+                                (code, solution) <- LP.glpSolve $ mipDefaults {msgLev=MsgOff}
+                                trace' (show solution) $ return (code, solution)
 
                     greaterLP :: LP.LPT String Double IO (ReturnCode, Maybe (Double, Map.Map String Double)) 
                     greaterLP = do LP.setObjective Map.empty
@@ -808,7 +811,8 @@ analyzeParallelizationPass midir = worthIt
                                    mapM (\v -> LP.setVarKind v IntVar) $ Map.keys officialBounds
                                    LP.setVarKind "parallel_const" IntVar
                                    -- Finally, try to solve the integer linear program 
-                                   LP.glpSolve $ mipDefaults {msgLev=MsgOff, presolve = False}
+                                   (code, solution) <- LP.glpSolve $ mipDefaults {msgLev=MsgOff}
+                                   trace' (show solution) $ return (code, solution) 
 
           linConstExpr :: Loop -> MidIRExpr -> Maybe FloatExpr
           linConstExpr loop expr = maybeExpr
