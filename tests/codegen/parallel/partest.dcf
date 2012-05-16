@@ -1,16 +1,17 @@
 class Program{
-  int A[40000];
-  int B[200];
-  int C[200];
+  int A[1000000];
+  int B[10000];
+  int C[10000];
   void main() {
-    callout("start_caliper");
+    
     for(i = 0; 200) {
       for(j = 0; 200) {
 	A[200*i+j] = 5-i+j;
       }
       B[i] = 22*i-i*i;
     }
-    for(i = 0;200) {
+    callout("start_caliper");
+    for(i = 0;3000) {
       int w;
       w = 0;
       for(j = 0;200) {

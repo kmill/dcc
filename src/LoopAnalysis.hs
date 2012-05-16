@@ -119,6 +119,7 @@ linearize (FBinOp OpMul (FBinOp op expr1 expr2) expr)
         = Just $ (FBinOp op (FBinOp OpMul expr expr1) (FBinOp OpMul expr expr2))
 -- Coefficients should be combined if they're multiplied
 linearize (FBinOp OpMul (FLit i1) (FLit i2)) = Just (FLit (i1*i2))
+linearize (FUnOp OpNeg (FVar v)) = Just (FBinOp OpMul (FLit (-1)) (FVar v))
 -- Or added or subtracted 
 linearize (FBinOp OpMul expr (FLit i)) = Just $ FBinOp OpMul (FLit i) expr
 linearize (FBinOp OpMul (FLit i1) (FBinOp OpMul (FLit i2) expr)) 
@@ -510,11 +511,12 @@ calculateLoopCosts graph basicLoops loops = concreteLoopCosts
                     
 
 analyzeParallelizationPass :: MidIRRepr -> S.Set Loop 
-analyzeParallelizationPass midir = worthIt
+analyzeParallelizationPass midir = trace' (show worthItCosts) worthIt
     where basicLoops = findBasicLoops domins graph mlabels
           -- Let's see if we can identify induction vars
           loops = S.fromList $ catMaybes [insertIndVars l | l <- S.toList basicLoops]
           loopCosts = calculateLoopCosts graph basicLoops loops
+          worthItCosts = Map.fromList [(loop_header l, c) | (l, c) <- Map.toList loopCosts, S.member l worthIt]
           niceLoopCosts = Map.fromList [(loop_header l, v) | (l, v) <- Map.toList loopCosts]
           insertIndVars :: BasicLoop -> Maybe Loop 
           insertIndVars b@(header, back, body) 
@@ -836,7 +838,7 @@ analyzeParallelizationPass midir = worthIt
                                            case hasNonLoopVariables newExpr of 
                                              True -> do newExpr <- tryRemoveNonLoops newExpr
                                                         linConstFloatExpr loop newExpr
-                                             False -> do newExpr <- return $ makeLinear newExpr 
+                                             False -> do newExpr <- trace' (show (makeLinear newExpr)) $ return $ makeLinear newExpr 
                                                          rejectNonLinear newExpr
                                                     
               where v@(variants, invariants) = loopVarInfos Map.! loop
@@ -886,14 +888,14 @@ analyzeParallelizationPass midir = worthIt
                               addNonLoopVars s _ = s
                               removeNonLoop :: FloatExpr -> VarName -> Maybe FloatExpr 
                               removeNonLoop expr v
-                                  = let webID = mFDebug v varNameToWebID 
+                                  = let webID = trace' ("REPLACE VAR " ++ show (loop_header loop) ++ " " ++ show expr) $ mFDebug v varNameToWebID 
                                         web = getWeb webID webs
                                         defs = webDefs web
                                         singleDef = head $ S.toList defs
                                         replaceInst = getNodeInstOO singleDef pGraph
                                     in if S.size defs /= 1 
                                        then Nothing 
-                                       else case replaceInst of 
+                                       else case trace' (show replaceInst) replaceInst of 
                                               Just (Store _ _ new) 
                                                   -> case exprToFloatExpr new of 
                                                        Just fNew -> Just $ fromMaybe expr $ mapFEE (replaceVar v fNew) expr   
