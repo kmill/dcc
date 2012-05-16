@@ -133,7 +133,10 @@ instToAsm (I.Store pos d sexp)
           guard $ length rest < length parts
           let sumrest = foldl1 (I.BinOp pos I.OpAdd) rest
           (gs', s') <- expToIRM sumrest
-          return $ gs' <*> mkMiddle (A.ALU_IRMtoR pos A.Add s' (A.SReg $ show d))
+          return $ gs' <*> (case s' of
+                               A.IRM_I (A.Imm32 1) -> mkMiddle (A.Inc pos (A.RM_R $ A.SReg $ show d))
+                               A.IRM_I (A.Imm32 (-1)) -> mkMiddle (A.Dec pos (A.RM_R $ A.SReg $ show d))
+                               _ -> mkMiddle (A.ALU_IRMtoR pos A.Add s' (A.SReg $ show d)))
       ,do (gd, s) <- expToIRM sexp
           return $ gd <*> mkMiddle (A.MovIRMtoR pos s (A.SReg $ show d))
       ]
@@ -160,7 +163,10 @@ instToAsm (I.IndStore pos dexp sexp)
           (gd, d) <- expToMem dexp
           (gs', s') <- expToIR sumrest
           return $ gd <*> gs'
-                     <*> mkMiddle (A.ALU_IRtoM pos A.Add s' d)
+            <*> (case s' of
+                    A.IR_I (A.Imm32 1) -> mkMiddle (A.Inc pos (A.RM_M $ d))
+                    A.IR_I (A.Imm32 (-1)) -> mkMiddle (A.Dec pos (A.RM_M $ d))
+                    _ -> mkMiddle (A.ALU_IRtoM pos A.Add s' d))
       -- for *(x) -= y
       ,do I.BinOp pos' I.OpSub expa expb <- return sexp
           guard $ I.Load pos dexp == expa
@@ -354,13 +360,25 @@ expToR e = mcut $ msum rules
                             <*> mkMiddle (A.Neg pos (A.RM_R dr))
                           , dr )
               , do I.UnOp pos I.OpNot exp <- withNode e
-                   (g, o) <- expToRM exp
+                   (g, o) <- expToIRM exp
                    dr <- genTmpReg
                    return ( g
-                            <*> mkMiddle (A.MovIRMtoR pos (rmToIRM o) dr)
+                            <*> mkMiddle (A.MovIRMtoR pos o dr)
                             <*> mkMiddle (A.ALU_IRMtoR pos A.Xor
                                                (A.IRM_I $ A.Imm32 (1))
                                                dr)
+                          , dr )
+              , do I.BinOp pos I.OpAdd (I.Lit _ 1) expb <- withNode e
+                   (gb, b) <- expToIRM expb
+                   dr <- genTmpReg
+                   return ( gb <*> mkMiddle (A.MovIRMtoR pos b dr)
+                            <*> mkMiddle (A.Inc pos (A.RM_R dr))
+                          , dr )
+              , do I.BinOp pos I.OpAdd (I.Lit _ (-1)) expb <- withNode e
+                   (gb, b) <- expToIRM expb
+                   dr <- genTmpReg
+                   return ( gb <*> mkMiddle (A.MovIRMtoR pos b dr)
+                            <*> mkMiddle (A.Dec pos (A.RM_R dr))
                           , dr )
               , do I.BinOp pos I.OpAdd lit@(I.Lit _ _) expb <- withNode e
                    (ga, a) <- expToIRM lit
@@ -427,6 +445,15 @@ expToR e = mcut $ msum rules
                    return ( gb
                             <*> mkMiddles [ A.MovIRMtoR pos b dr
                                           , A.Shl pos (A.Imm8 $ fromIntegral logi) (A.RM_R dr) ]
+                          , dr )
+              , do I.BinOp pos I.OpMul (I.Lit _ i) expb <- withNode e
+                   Just scale <- return $ lookup i [(3, A.STwo)
+                                                   ,(5, A.SFour)
+                                                   ,(9, A.SEight)]
+                   (gb, b) <- expToR expb
+                   dr <- genTmpReg
+                   let mem = A.MemAddr (Just b) (A.Imm32 0) (Just b) scale
+                   return ( gb <*> mkMiddle (A.Lea pos mem dr)
                           , dr )
               , do I.BinOp pos I.OpMul expa expb <- withNode e
                    a <- expToI expa
@@ -551,18 +578,23 @@ cmpBinOpToFlag e = mcut $ msum rules
     where
       rules = [ --- make equality to zero be testq
                 do I.BinOp pos I.CmpEQ expa expb <- withNode e
-                   I.Lit _ 0 <- withNode expb
-                   (ga, a) <- expToRM expa
-                   return ( ga <*> mkMiddle(A.Test pos
-                                            (A.IR_I $ A.Imm32 (-1)) a)
+                   I.Lit _ 0 <- withNode expa
+                   (gb, b) <- expToRM expb
+                   return ( gb <*> mkMiddle(A.Test pos
+                                            (A.IR_I $ A.Imm32 (-1)) b)
                           , A.FlagZ )
                 --- make inequality to zero be testq
               , do I.BinOp pos I.CmpNEQ expa expb <- withNode e
-                   I.Lit _ 0 <- withNode expb
-                   (ga, a) <- expToRM expa
-                   return ( ga <*> mkMiddle(A.Test pos
-                                            (A.IR_I $ A.Imm32 (-1)) a)
+                   I.Lit _ 0 <- withNode expa
+                   (gb, b) <- expToRM expb
+                   return ( gb <*> mkMiddle(A.Test pos
+                                            (A.IR_I $ A.Imm32 (-1)) b)
                           , A.FlagNZ )--- by for binop comparisons, just use cmp
+              , do I.BinOp pos op lit@(I.Lit{}) expb <- withNode e
+                   a <- expToI lit
+                   (gb, b) <- expToRM expb
+                   return ( gb <*> mkMiddle (A.Cmp pos (A.IR_I a) b)
+                          , flipFlag $ cmpToFlag op )
               , do I.BinOp pos op expa expb <- withNode e
                    guard $ op `elem` [ I.CmpLT, I.CmpGT, I.CmpLTE
                                      , I.CmpGTE, I.CmpEQ, I.CmpNEQ ]
@@ -582,6 +614,13 @@ cmpToFlag I.CmpGTE = A.FlagGE
 cmpToFlag I.CmpEQ = A.FlagE
 cmpToFlag I.CmpNEQ = A.FlagNE
 cmpToFlag _ = error "not a comparison!"
+
+flipFlag A.FlagL = A.FlagG
+flipFlag A.FlagG = A.FlagL
+flipFlag A.FlagLE = A.FlagGE
+flipFlag A.FlagGE = A.FlagLE
+flipFlag A.FlagE = A.FlagE
+flipFlag A.FlagNE = A.FlagNE
 
 lookupLabel (GMany _ g_blocks _) lbl = case mapLookup lbl g_blocks of
   Just x -> x
