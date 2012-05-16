@@ -1,11 +1,11 @@
 #!/bin/sh
 
-opts="all,-betterifyasm"
+opts="condelim"
 
 domidirc=0
 base=`dirname $0`
 
-main_dccopts="-r --opt=basic"
+main_dccopts="-r"
 
 if uname -a | grep "Darwin" > /dev/null; then
     echo "(compiling for Mac OS X)"
