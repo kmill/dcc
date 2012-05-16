@@ -2,7 +2,7 @@
 
 #optstring="--opt=constprop --opt=deadcode --opt=blockelim"
 #optstring="--opt=none"
-optstring="--opt=all,-condelim,-parallelize -r"
+optstring="--opt=all,-betterify,-parallelize -r"
 
 file=$1
 out=$2
