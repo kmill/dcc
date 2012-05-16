@@ -94,14 +94,14 @@ betterifySpills = FwdPass
           handleToR :: BetterifyLoc -> Reg -> BetterifyFact -> BetterifyFact
           handleToR v r (spills, regs)
               = ( removeBindingsTo (BReg r) spills
-                , removeBindingsTo (BReg r) $ M.insert r (PElem v') regs )
-              where v' = lookupBInt64 v (spills, regs)
+                , removeBindingsTo (BReg r) $ M.insert r (PElem v) regs )
+              where v' = lookupBInt64 v (spills, regs) -- ?
                            
           handleToS :: BetterifyLoc -> SpillLoc -> BetterifyFact -> BetterifyFact
           handleToS v s (spills, regs)
-              = ( removeBindingsTo (BSpill s) $ M.insert s (PElem v') spills
+              = ( removeBindingsTo (BSpill s) $ M.insert s (PElem v) spills
                 , removeBindingsTo (BSpill s) regs )
-              where v' = lookupBInt64 v (spills, regs)
+              where v' = lookupBInt64 v (spills, regs) -- ?
           
           removeToR :: Reg -> BetterifyFact -> BetterifyFact
           removeToR r (spills, regs)
@@ -147,7 +147,7 @@ betterifySpills = FwdPass
                            Just (BReg r') -> Just $ mkMiddle $ mov pos r' r
                            Just (BInt64 i) -> Just $ mkMiddle $ mov pos i r
                            Just (BSpill s')
-                               | s /= s' -> Just $mkMiddle $ Reload pos s' r
+                               | s /= s' -> Just $ mkMiddle $ Reload pos s' r
                            _ -> Nothing
           rwOO (MovIRMtoR pos (IRM_R r0) r) f
               = return $ case getR r0 f of

@@ -403,18 +403,17 @@ expToR e = mcut $ msum rules
                                            (A.RM_R $ true) dr)
                           , dr )
               , do I.BinOp pos I.OpMul expa expb <- withNode e
-                   b <- expToI expb
-                   A.Imm32 b' <- return b
-                   let logb' = log2 b'
+                   A.Imm32 i <- expToI expa
+                   let logi = log2 i
                        log2 1 = 0
                        log2 n = 1 + log2 (n `div` 2)
-                   guard $ b' > 0
-                   guard $ b' == 2 ^ logb'
-                   (ga, a) <- expToIRM expa
+                   guard $ i > 0
+                   guard $ i == 2 ^ logi
+                   (gb, b) <- expToIRM expb
                    dr <- genTmpReg
-                   return ( ga
-                            <*> mkMiddles [ A.MovIRMtoR pos a dr
-                                          , A.Shl pos (A.Imm8 $ fromIntegral logb') (A.RM_R dr) ]
+                   return ( gb
+                            <*> mkMiddles [ A.MovIRMtoR pos b dr
+                                          , A.Shl pos (A.Imm8 $ fromIntegral logi) (A.RM_R dr) ]
                           , dr )
               , do I.BinOp pos I.OpMul expa expb <- withNode e
                    a <- expToI expa
