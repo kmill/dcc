@@ -3,6 +3,8 @@
 domidirc=0
 base=`dirname $0`
 
+main_dccopts="-r --opt=basic"
+
 if uname -a | grep "Darwin" > /dev/null; then
     echo "(compiling for Mac OS X)"
     d=`pwd`
@@ -29,11 +31,11 @@ fi
 
 
 runcompiler_opt() {
-    $base/../../dcc -r -target codegen -opt all -o $2 $1
+    $base/../../dcc -r --opt=all -o $2 $1 $dccopt
 }
 
 runcompiler_unopt() {
-    $base/../../dcc -target codegen -opt none -o $2 $1
+    $base/../../dcc -r --opt=none -o $2 $1 $dccopt
 }
 
 
@@ -54,7 +56,7 @@ fail=0
 cd `dirname $0`
 orig_pwd=$PWD
 for file in $PWD/input/*.dcf; do
-  workingdir=`mktemp -d`
+  workingdir=`mktemp -d /tmp/XXXXXXX`
   progname=`basename $file .dcf`
   input_filename="`echo $progname|cut -d_ -f1`.pgm"
   orig_input="${orig_pwd}/data/$input_filename"
@@ -69,7 +71,7 @@ for file in $PWD/input/*.dcf; do
   cp $orig_input $input;
   msg=""
   if runcompiler_opt $file $asm; then
-    if gcc $archstring -o $binary $asm $lib -l6035 -lpthread; then
+    if gcc $archstring -o $binary $asm $lib; then
       cd $workingdir
       if $binary > $timing_opt; then
         if ! diff -q $output $golden > /dev/null; then
@@ -86,7 +88,7 @@ for file in $PWD/input/*.dcf; do
   fi
   cd "$orig_pwd";
   if runcompiler_unopt $file $asm; then
-    if gcc -o $binary $asm $lib -l6035 -lpthread; then
+    if gcc -o $binary $asm $lib $archstring; then
       cd $workingdir
       if $binary > $timing_unopt; then
         if ! diff -q $output $golden > /dev/null; then
