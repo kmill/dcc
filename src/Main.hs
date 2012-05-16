@@ -152,7 +152,7 @@ doLowIRFile opts ifname input midir
                                  lowir <- (if debugMode opts then return else performBakeSpills opts) lowir
                                  return lowir
                       return $ Right lowir
-      where allocator = case regAllocMode opts of
+      where allocator = case regAllocMode opts || (hasOptFlag "regalloc" (optMode opts)) of
                           True -> RegisterAllocator.regAlloc
                           False -> SimpleRegAlloc.regAlloc
                  
