@@ -168,7 +168,7 @@ fold_EN _ z (Fail _) = z
 -- Alive Dead Information 
 
 
-type MidAliveDead = ([VarName], [VarName])
+type MidAliveDead = Maybe ([VarName], [VarName])
 
 --infixl 5 <+>
 
@@ -176,28 +176,28 @@ type MidAliveDead = ([VarName], [VarName])
 --(a1,d1) <+> (a2,d2) = (a1++a2, d1++d2)
 
 emptyMAD :: MidAliveDead
-emptyMAD = ([], [])
+emptyMAD = Just ([], [])
 
 -- | Gets the variables which are used and fefined (also known as 
 -- "alive" and "dead", respectively, because of backwards liveness 
 -- analysis). 
 
-getMidAliveDead :: MidIRInst e x -> MidAliveDead 
+getMidAliveDead :: MidIRInst e x -> MidAliveDead
 getMidAliveDead inst 
     = case inst of 
         Label _ _ -> emptyMAD 
-        Enter _ _ args -> ([], args)
+        Enter _ _ args -> Just ([], args)
         PostEnter _ _ -> emptyMAD 
-        n@(Store _ x _) -> (S.toList $ getUses S.empty n, [x])
-        n@(DivStore _ x _ _ _) -> (S.toList $ getUses S.empty n, [x])
-        n@(IndStore _ _ _) -> (S.toList $ getUses S.empty n, [])
-        n@(Call _ x _ _) -> (S.toList $ getUses S.empty n, [x])
-        n@(Callout _ x _ _) -> (S.toList $ getUses S.empty n, [x])
-        n@(Parallel _ _ x _ _) -> ([], [x])
-        ThreadReturn _ _ -> error "tried to getMidAliveDead ThreadReturn"
+        n@(Store _ x _) -> Just (S.toList $ getUses S.empty n, [x])
+        n@(DivStore _ x _ _ _) -> Just (S.toList $ getUses S.empty n, [x])
+        n@(IndStore _ _ _) -> Just (S.toList $ getUses S.empty n, [])
+        n@(Call _ x _ _) -> Just (S.toList $ getUses S.empty n, [x])
+        n@(Callout _ x _ _) -> Just (S.toList $ getUses S.empty n, [x])
+        n@(Parallel _ _ x _ _) -> Just ([], [x])
+        ThreadReturn _ _ -> Nothing
         Branch _ _ -> emptyMAD
-        n@(CondBranch _ _ _ _) -> (S.toList $ getUses S.empty n, [])
-        n@(Return _ _ _) -> (S.toList $ getUses S.empty n, [])
+        n@(CondBranch _ _ _ _) -> Just (S.toList $ getUses S.empty n, [])
+        n@(Return _ _ _) -> Just (S.toList $ getUses S.empty n, [])
         Fail _ -> emptyMAD
 
       where getUses :: S.Set VarName -> MidIRInst e x -> S.Set VarName

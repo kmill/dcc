@@ -121,7 +121,20 @@ instToAsm (I.Enter pos l args)
                     <*> (genLoadArgs pos args)
 instToAsm (I.Store pos d sexp)
     = mcut $ msum [
-       do (gd, s) <- expToIRM sexp
+       do I.BinOp pos I.OpSub (I.Var _ v) exp2 <- return sexp
+          guard $ d == v
+          (gb, b) <- expToIRM exp2
+          return $ gb <*> mkMiddle (A.ALU_IRMtoR pos A.Sub b (A.SReg $ show d))
+       -- for *(x) += y
+      ,do let parts = flattenOp I.OpAdd sexp
+          guard $ length parts > 1
+          let dr = I.Var pos d
+          let rest = delete dr parts
+          guard $ length rest < length parts
+          let sumrest = foldl1 (I.BinOp pos I.OpAdd) rest
+          (gs', s') <- expToIRM sumrest
+          return $ gs' <*> mkMiddle (A.ALU_IRMtoR pos A.Add s' (A.SReg $ show d))
+      ,do (gd, s) <- expToIRM sexp
           return $ gd <*> mkMiddle (A.MovIRMtoR pos s (A.SReg $ show d))
       ]
 instToAsm (I.DivStore pos d op expa expb)
@@ -403,18 +416,17 @@ expToR e = mcut $ msum rules
                                            (A.RM_R $ true) dr)
                           , dr )
               , do I.BinOp pos I.OpMul expa expb <- withNode e
-                   b <- expToI expb
-                   A.Imm32 b' <- return b
-                   let logb' = log2 b'
+                   A.Imm32 i <- expToI expa
+                   let logi = log2 i
                        log2 1 = 0
                        log2 n = 1 + log2 (n `div` 2)
-                   guard $ b' > 0
-                   guard $ b' == 2 ^ logb'
-                   (ga, a) <- expToIRM expa
+                   guard $ i > 0
+                   guard $ i == 2 ^ logi
+                   (gb, b) <- expToIRM expb
                    dr <- genTmpReg
-                   return ( ga
-                            <*> mkMiddles [ A.MovIRMtoR pos a dr
-                                          , A.Shl pos (A.Imm8 $ fromIntegral logb') (A.RM_R dr) ]
+                   return ( gb
+                            <*> mkMiddles [ A.MovIRMtoR pos b dr
+                                          , A.Shl pos (A.Imm8 $ fromIntegral logi) (A.RM_R dr) ]
                           , dr )
               , do I.BinOp pos I.OpMul expa expb <- withNode e
                    a <- expToI expa

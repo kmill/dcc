@@ -27,6 +27,12 @@ import Data.Maybe
 import qualified Data.Set as S
 import qualified Data.Map as Map
 
+-- The threshhold for when we think it's worth parallelizing a loop 
+loopCostThreshold :: Double 
+loopCostThreshold = 0
+
+trace' a x = x
+
 -- debug function for map find 
 mFDebug :: (Ord k, Show k) => k -> Map.Map k v -> v 
 mFDebug k map = case Map.lookup k map of 
@@ -65,6 +71,14 @@ exprToFloatExpr (BinOp _ op expr1 expr2)
              return $ FBinOp op expr1' expr2'
 exprToFloatExpr _ = Nothing
 
+floorFloatExpr :: FloatExpr -> FloatExpr 
+floorFloatExpr expr = case floored of 
+                        Nothing -> expr 
+                        Just expr' -> floorFloatExpr expr'
+    where floored = mapFEE floorIt expr
+          floorIt (FLit d) = Just $ ILit $ floor d
+          floorIt _ = Nothing
+
 fold_FEE :: (a -> FloatExpr -> a) -> a -> FloatExpr -> a 
 fold_FEE f z e@(ILit _) = f z e 
 fold_FEE f z e@(FLit _) = f z e 
@@ -86,6 +100,39 @@ mapFEE f e@(FBinOp op e1 e2)
         (Nothing, Nothing) -> f e 
         (e1', e2') -> Just $ fromMaybe e' (f e') 
             where e' = FBinOp op (fromMaybe e1 e1') (fromMaybe e2 e2')
+
+makeLinear :: FloatExpr -> FloatExpr 
+makeLinear expr = case lineared of 
+                    Nothing -> expr 
+                    Just expr' -> makeLinear expr'
+    where lineared = mapFEE linearize expr
+
+linearize :: FloatExpr -> Maybe FloatExpr
+-- We're now in the land of floats 
+linearize (ILit i) = Just $ FLit $ fromIntegral i
+-- Coefficients should be distributed
+linearize (FBinOp OpMul expr (FBinOp op expr1 expr2))
+    | op == OpAdd || op == OpSub 
+        = Just $ (FBinOp op (FBinOp OpMul expr expr1) (FBinOp OpMul expr expr2))
+linearize (FBinOp OpMul (FBinOp op expr1 expr2) expr)
+    | op == OpAdd || op == OpSub 
+        = Just $ (FBinOp op (FBinOp OpMul expr expr1) (FBinOp OpMul expr expr2))
+-- Coefficients should be combined if they're multiplied
+linearize (FBinOp OpMul (FLit i1) (FLit i2)) = Just (FLit (i1*i2))
+-- Or added or subtracted 
+linearize (FBinOp OpMul expr (FLit i)) = Just $ FBinOp OpMul (FLit i) expr
+linearize (FBinOp OpMul (FLit i1) (FBinOp OpMul (FLit i2) expr)) 
+    = Just (FBinOp OpMul (FLit (i1*i2)) expr)
+linearize (FBinOp OpSub expr1 expr2) = Just (FBinOp OpAdd expr1 (FUnOp OpNeg expr2))
+linearize (FUnOp OpNeg (FLit i)) = Just (FLit (-i))
+linearize (FUnOp OpNeg (FBinOp op expr1 expr2))
+    | op == OpAdd || op == OpSub 
+        = Just $ (FBinOp op (FUnOp OpNeg expr1) (FUnOp OpNeg expr2))
+linearize (FUnOp OpNeg (FBinOp OpMul (FLit i) expr) ) 
+    =  Just $ FBinOp OpMul (FLit (-i)) expr
+linearize (FUnOp OpNeg (FUnOp OpNeg expr)) = Just expr
+linearize (FBinOp OpAdd (FLit i1) (FLit i2)) = Just (FLit (i1+i2))
+linearize _ = Nothing
 
 -- required for using Int64s as coefficients in a LP 
 instance Group Int64 where 
@@ -419,27 +466,88 @@ findLoopVariables graph headerDomin headerBlock loopbackBlock
           findIncValue v (BinOp _ OpAdd (Lit _ i) (Var _ x)) =  Just i 
           findIncValue v _ = Nothing
 
-      
+calculateLoopCosts :: NonLocal n => Graph n C C -> S.Set BasicLoop -> S.Set Loop -> Map.Map Loop Double
+calculateLoopCosts graph basicLoops loops = concreteLoopCosts
+    where headerToBasicLoop = Map.fromList [(h, l) | l@(h, _, _) <- S.toList basicLoops]
+          headerToConcreteLoop = Map.fromList [(loop_header l, l) | l <- S.toList loops] 
+
+          concreteLoopCosts = Map.fromList [(l, headerToLoopCost Map.! loop_header l) | l <- S.toList loops]
+          headerToLoopCost = Map.fromList [(h, findLoopCost l) | l@(h, _, _) <- S.toList basicLoops]
+          
+
+          looseChildren :: Map.Map BasicLoop (S.Set BasicLoop)
+          looseChildren = Map.fromList [(l, findLoopChildren l) | l <- S.toList basicLoops]
+
+          findLoopChildren :: BasicLoop -> S.Set BasicLoop
+          findLoopChildren (ph, _, pb) = S.fromList [l | l <- S.toList basicLoops, isLoopChild l] 
+              where isLoopChild (ch, _, cb)
+                        = S.size cb < S.size pb && S.member ch pb 
+
+          strictChildren :: Map.Map BasicLoop (S.Set BasicLoop) 
+          strictChildren = Map.fromList [(l, findStrictChildren l) | l <- S.toList basicLoops]
+          
+          findStrictChildren :: BasicLoop -> S.Set BasicLoop 
+          findStrictChildren parent = S.fromList [l | l <- S.toList children, isStrictChild l] 
+              where children = fromMaybe S.empty $ Map.lookup parent looseChildren 
+                    grandChildren = [fromMaybe S.empty $ Map.lookup c looseChildren | c <- S.toList children]
+                    isStrictChild child = all (S.notMember child) grandChildren
+
+          findLoopCost :: BasicLoop -> Double
+          findLoopCost loop@(h, _, body) = iterations * (childCosts + blockCosts)
+              where iterations = findNumIterations loop
+                    childCosts = sum [findLoopCost c | c <- S.toList myStrictChilds]
+                    myStrictChilds = fromMaybe S.empty $ Map.lookup loop strictChildren
+                    myLooseChilds = fromMaybe S.empty $ Map.lookup loop looseChildren
+                    allChildBlocks = S.unions $ S.toList $ S.map (\(_, _, b) -> b) myLooseChilds
+                    blockCosts = sum [findBlockCost b | b <- S.toList body]
+                    findBlockCost bLabel
+                        | S.member bLabel allChildBlocks = 0 
+                        | otherwise = let BodyBlock block = lookupBlock graph bLabel
+                                          (_, inner, _) = blockToNodeList block
+                                          in fromIntegral $ length inner
+
+          defaultIterations = 50
+          findNumIterations :: BasicLoop -> Double
+          findNumIterations (h, _, b) 
+              = case Map.lookup h headerToConcreteLoop of 
+                  Nothing -> defaultIterations
+                  Just loop -> let (_, _, end, _) = loop_base loop 
+                               in case floorFloatExpr (makeLinear end) of 
+                                    ILit i
+                                          | (fromIntegral i) > defaultIterations -> fromIntegral i
+                                    _ -> defaultIterations
+                    
 
 analyzeParallelizationPass :: MidIRRepr -> S.Set Loop 
-analyzeParallelizationPass midir = parallelLoops
+analyzeParallelizationPass midir = worthIt
     where basicLoops = findBasicLoops domins graph mlabels
           -- Let's see if we can identify induction vars
           loops = S.fromList $ catMaybes [insertIndVars l | l <- S.toList basicLoops]
+          loopCosts = calculateLoopCosts graph basicLoops loops
+          niceLoopCosts = Map.fromList [(loop_header l, v) | (l, v) <- Map.toList loopCosts]
           insertIndVars :: BasicLoop -> Maybe Loop 
           insertIndVars b@(BasicLoop header back body) 
               = do (lv, bv, ivs) <- findInductionVariables pGraph mlabels domins webs b 
                    return $ Loop header body ivs lv bv
-
+                          
           
           -- First pass, removes obviously non-parallel loops (such as loops that contain returns or callouts)
           noBreaksRetsCallsLoops = S.filter (\l -> noCalls l && noRets l && noBreaks l) loops 
           -- Second pass, removes loops that write to values that aren't loop invariant (i.e. for loops calculating a sum)
+          -- Actually, loops calculating a sum might still be parallelizable by induction variable identification. 
           noVariantWritesLoops = S.filter (\l -> noVariantWrites (loopVarInfos Map.! l) l) noBreaksRetsCallsLoops
           -- Third pass, removes all loops with cross-loop dependencies. This is the big one that involves solving some 
           -- equations. This should effectively return all of the parallelizable loops.
           parallelLoops = S.filter noCrossDependencies noVariantWritesLoops
+          -- Finally, remove any loops that are children of other loops in the parallel group since we only want to parallelize
+          -- the outer most loops 
+          noChildren = S.filter notChild parallelLoops 
+          notChild loop = all (\p -> S.notMember p parallelLoops) parents
+              where parents = fromMaybe [] $ Map.lookup loop loopParents
           
+          -- Only parallelize loops that meet a certain cost criteria
+          worthIt = S.filter (\l -> fromMaybe 0 (Map.lookup l loopCosts) > loopCostThreshold) noChildren
+
 
           loopVarInfos = Map.fromList [(loop, findLoopVarInfo webs loop) | loop <- S.toList noBreaksRetsCallsLoops]
 
@@ -523,7 +631,7 @@ analyzeParallelizationPass midir = parallelLoops
                     
           noCrossDependency :: Loop -> (MidIRExpr, MidIRExpr) -> Bool 
           noCrossDependency loop (expr1, expr2) 
-              = case (findLabel expr1, findLabel expr2) of 
+              = case trace' ("HERE WITH: " ++ show (loop_header loop) ++ " EXPR1: " ++ show expr1 ++ " EXPR2: " ++ show expr2) $ (findLabel expr1, findLabel expr2) of 
                   (Nothing, _) -> False 
                   (_, Nothing) -> False 
                   (Just l1, Just l2) 
@@ -545,13 +653,25 @@ analyzeParallelizationPass midir = parallelLoops
           -- j1, j2 >= jmin and j1, j2 <= jmax-1
           noLinSoln :: Loop -> FloatExpr -> FloatExpr -> Bool 
           noLinSoln loop expr1 expr2 
-              = concreteBounds && noLessSoln && noGreaterSoln
-              where noLessSoln = case unsafePerformIO $ LP.evalLPT lessLP of 
-                                   Success -> False
-                                   v -> True
-                    noGreaterSoln = case unsafePerformIO $ LP.evalLPT greaterLP of 
-                                      Success -> False 
-                                      v -> True
+              = trace' ("HERE WITH " ++ show (loop_header loop) ++ " " ++ show glpkFailGT) $ concreteBounds && (noGreaterSoln || glpkFailGT) && (noLessSoln || glpkFailLT)
+              where noLessSoln = case ltCode of 
+                                   Success -> trace' ("SUCCESS " ++ show (loop_header loop)) False
+                                   v -> trace' (show v) True
+                    noGreaterSoln = case gtCode of 
+                                      Success -> trace' ("SUCCESS " ++ show (loop_header loop)) False 
+                                      v -> trace' (show v) True
+                    (ltCode, maybeLTSolution) = unsafePerformIO $ LP.evalLPT lessLP 
+                    (gtCode, maybeGTSolution) = unsafePerformIO $ LP.evalLPT greaterLP
+
+
+                    glpkFailLT = case maybeLTSolution of 
+                                   Just (_, solution) -> (solution Map.! "parallel_const") /= 1
+                                   Nothing -> False 
+
+                    glpkFailGT = case maybeGTSolution of 
+                                   Just (_, solution) -> (solution Map.! "parallel_const") /= 1
+                                   Nothing -> False
+
                     concreteBounds = isJust bounds && isJust indConstraints
                     loopVarInfo = Map.union myVariables $ Map.union parentVars childVars 
                     parentVars =  Map.fromList [(n, (i, p)) | p <- loopParents Map.! loop, i@(n, _, _, _) <- S.toList $ loop_variables p]
@@ -568,9 +688,9 @@ analyzeParallelizationPass midir = parallelLoops
                     bounds = foldM maybeAddBounds Map.empty $ S.toList usedVariables
                     maybeAddBounds :: (Map.Map VarName (FloatExpr, FloatExpr)) -> VarName -> Maybe (Map.Map VarName (FloatExpr, FloatExpr))
                     maybeAddBounds map var 
-                        = do ((_, init, end, inc), _) <- Map.lookup var loopVarInfo
-                             initExpr <- linConstFloatExpr loop init
-                             endExpr <- linConstFloatExpr loop end
+                        = do ((_, init, end, inc), myLoop) <- Map.lookup var loopVarInfo
+                             initExpr <- linConstFloatExpr myLoop init
+                             endExpr <- linConstFloatExpr myLoop end
                              case inc > 0 of 
                                True -> return $ Map.insert var (initExpr, endExpr) map 
                                False -> return $ Map.insert var (endExpr, initExpr) map 
@@ -595,17 +715,14 @@ analyzeParallelizationPass midir = parallelLoops
                     indConstraints = foldM maybeAddConstraint Map.empty $ S.toList usedVariables
 
                     maybeAddConstraint map var 
-                        | var == base_loop_var = Just map 
-                        | otherwise = do ((_, init, end, inc), myLoop) <- Map.lookup var loopVarInfo 
-                                         let maybeConstraint 
-                                                 | myLoopVar /= var = Just $ FBinOp OpAdd (FBinOp OpMul (FLit dInc) (FVar myLoopVar)) init
-                                                 | otherwise = Nothing
-                                             dInc = fromIntegral inc 
-                                             (myLoopVar, _, _, _) = loop_base myLoop
-                                         constraint <- maybeConstraint
-                                         correct <- linConstFloatExpr loop constraint
+                        | var == myLoopVar = Just map
+                        | otherwise = do correct <- linConstFloatExpr myLoop myConstraint
                                          return $ Map.insert var correct map
-                                                
+                        where ((_, init, end, inc), myLoop) = fromMaybe (error ":-{") $ Map.lookup var loopVarInfo 
+                              (myLoopVar, _, _, _) = loop_base myLoop 
+                              dInc = fromIntegral inc 
+                              myConstraint = FBinOp OpAdd (FBinOp OpMul (FLit dInc) (FVar myLoopVar)) init
+
                     mCon = fromJust indConstraints
                                   
 
@@ -620,14 +737,17 @@ analyzeParallelizationPass midir = parallelLoops
                     linFunc2 = makeLinFunc "_2" expr2
 
                     makeLinFunc :: String -> FloatExpr -> LinFunc String Double 
+                    makeLinFunc suf (FVar v) = var $ ((show v) ++ suf) 
+                    makeLinFunc suf (FLit i) = Map.singleton "parallel_const" i
                     makeLinFunc suf expr = fold_FEE (addCoeffs suf) Map.empty expr
 
                     addCoeffs :: String -> LinFunc String Double -> FloatExpr -> LinFunc String Double
                     addCoeffs suf fun (FBinOp OpAdd (FLit i) _) = addCoeff "parallel_const" i fun 
                     addCoeffs suf fun (FBinOp OpAdd _ (FLit i)) = addCoeff "parallel_const" i fun 
+                    addCoeffs suf fun (FBinOp OpAdd (FLit i) (FVar v)) = addCoeff ( (show v) ++ suf) 1 $ addCoeff "parallel_const" i fun
                     addCoeffs suf fun (FBinOp OpMul (FLit i) (FVar v)) = addCoeff ( (show v) ++ suf) i fun
-                    addCoeffs suf fun (FLit i) = addCoeff "parallel_const" i fun 
-                    addCoeffs suf fun (FVar v) = addCoeff ((show v) ++ suf) 1 fun
+                    --addCoeffs suf fun (FLit i) = addCoeff "parallel_const" i fun 
+                    --addCoeffs suf fun (FVar v) = addCoeff ((show v) ++ suf) 1 fun
                     addCoeffs suf fun _ = fun
 
                     addCoeff :: String -> Double -> LinFunc String Double -> LinFunc String Double
@@ -641,8 +761,27 @@ analyzeParallelizationPass midir = parallelLoops
                     createPlus1 :: String -> LinFunc String Double
                     createPlus1 v = (var v) ^+^ (var "parallel_const") 
 
-                    lessLP :: LP.LPT String Double IO ReturnCode 
-                    lessLP = do LP.setObjective Map.empty
+                    testLP :: LP.LPM String Double ()
+                    testLP =  do LP.setObjective Map.empty
+                                -- Make the dependencies equal
+                                 LP.equal linFunc1 linFunc2
+                                -- Set bounds on all of our looping variables
+                                 mapM (\(v, (l, u)) -> do LP.geq (var v) l 
+                                                          LP.leq (var v) u) $ Map.toList officialBounds
+                                -- Add the constraints to all of our looping variables
+                                 mapM (\(v, c) -> LP.equal (var v) c) $ Map.toList officialConstraints
+                                 LP.varEq "parallel_const" 1 -- and the "constant" variable should always be 1
+                                -- Make our main looping variables (the current loop) inequal 
+                                -- Specifically for this LP, make it < 
+                                 LP.leq (var base_1) $ createMin1 base_2
+
+                                -- Set the kinds on all of our variables 
+                                 mapM (\v -> LP.setVarKind v IntVar) $ Map.keys officialBounds
+                                 LP.setVarKind "parallel_const" IntVar
+                                -- Finally, try to solve the integer linear program 
+
+                    lessLP :: LP.LPT String Double IO (ReturnCode, Maybe (Double, Map.Map String Double)) 
+                    lessLP = do LP.setObjective $ Map.singleton "parallel_const" 1
                                 -- Make the dependencies equal
                                 LP.equal linFunc1 linFunc2
                                 -- Set bounds on all of our looping variables
@@ -650,19 +789,20 @@ analyzeParallelizationPass midir = parallelLoops
                                                          LP.leq (var v) u) $ Map.toList officialBounds
                                 -- Add the constraints to all of our looping variables
                                 mapM (\(v, c) -> LP.equal (var v) c) $ Map.toList officialConstraints
-                                LP.varEq "parallel_const" 1 -- and the "constant" variable should always be 1
+                                LP.varEq "parallel_const" 1
+                                --LP.varEq "parallel_const" 1 -- and the "constant" variable should always be 1
                                 -- Make our main looping variables (the current loop) inequal 
                                 -- Specifically for this LP, make it < 
                                 LP.leq (var base_1) $ createMin1 base_2
 
                                 -- Set the kinds on all of our variables 
                                 mapM (\v -> LP.setVarKind v IntVar) $ Map.keys officialBounds
-                                LP.setVarKind "parallel_const" IntVar
+                                LP.setVarKind "parallel_const" BinVar
                                 -- Finally, try to solve the integer linear program 
-                                (code, _) <- LP.glpSolve $ mipDefaults {msgLev=MsgOff}
-                                return code
+                                (code, solution) <- LP.glpSolve $ mipDefaults {msgLev=MsgOff}
+                                trace' (show solution) $ return (code, solution)
 
-                    greaterLP :: LP.LPT String Double IO ReturnCode 
+                    greaterLP :: LP.LPT String Double IO (ReturnCode, Maybe (Double, Map.Map String Double)) 
                     greaterLP = do LP.setObjective Map.empty
                                    -- Make the dependencies equal
                                    LP.equal linFunc1 linFunc2
@@ -680,13 +820,14 @@ analyzeParallelizationPass midir = parallelLoops
                                    mapM (\v -> LP.setVarKind v IntVar) $ Map.keys officialBounds
                                    LP.setVarKind "parallel_const" IntVar
                                    -- Finally, try to solve the integer linear program 
-                                   (code, _) <- LP.glpSolve $ mipDefaults {msgLev=MsgOff}
-                                   return code
+                                   (code, solution) <- LP.glpSolve $ mipDefaults {msgLev=MsgOff}
+                                   trace' (show solution) $ return (code, solution) 
 
           linConstExpr :: Loop -> MidIRExpr -> Maybe FloatExpr
-          linConstExpr loop expr = do newExpr <- return $ eliminateLabels expr 
-                                      newExpr <- exprToFloatExpr newExpr
-                                      linConstFloatExpr loop newExpr
+          linConstExpr loop expr = maybeExpr
+              where maybeExpr = do newExpr <- return $ eliminateLabels expr 
+                                   newExpr <- exprToFloatExpr newExpr
+                                   linConstFloatExpr loop newExpr
           eliminateLabels :: MidIRExpr -> MidIRExpr 
           eliminateLabels expr = fromMaybe expr $ (mapEE maybeEliminateLabel) expr 
           maybeEliminateLabel (BinOp _ _ (LitLabel _ _) expr) = Just expr 
@@ -704,10 +845,10 @@ analyzeParallelizationPass midir = parallelLoops
                                            case hasNonLoopVariables newExpr of 
                                              True -> do newExpr <- tryRemoveNonLoops newExpr
                                                         linConstFloatExpr loop newExpr
-                                             False -> do newExpr <- makeLinear newExpr 
+                                             False -> do newExpr <- return $ makeLinear newExpr 
                                                          rejectNonLinear newExpr
                                                     
-              where v@(variants, invariants) = loopVarInfos Map.! loop 
+              where v@(variants, invariants) = loopVarInfos Map.! loop
                     (variantNames, invariantNames) = loopVarNames v 
                     varNameToWebID :: Map.Map VarName WebID 
                     varNameToWebID = Map.fromList [(webVar $ getWeb id webs, id) | id <- S.toList $ S.union variants invariants]
@@ -724,7 +865,7 @@ analyzeParallelizationPass midir = parallelLoops
 
                     isObviousProblem :: Bool -> FloatExpr -> Bool 
                     isObviousProblem b (FVar v)
-                        | S.member v variantNames = True
+                        | S.member v variantNames && S.notMember v availableLoopVars = True
                     isObviousProblem b _ = b 
 
                     rejectNonLinear :: FloatExpr -> Maybe FloatExpr 
@@ -738,41 +879,6 @@ analyzeParallelizationPass midir = parallelLoops
                     isNonLinear b (FLit _) = b || False 
                     isNonLinear b (FVar _) = b || False 
                     isNonLinear b _ = True 
-
-                    makeLinear :: FloatExpr -> Maybe FloatExpr 
-                    makeLinear expr = case lineared of 
-                                        Nothing -> Just expr 
-                                        Just expr' -> makeLinear expr'
-                        where lineared = mapFEE linearize expr
-
-                    linearize :: FloatExpr -> Maybe FloatExpr
-                    -- We're now in the land of floats 
-                    linearize (ILit i) = Just $ FLit $ fromIntegral i
-                    -- Coefficients should be distributed
-                    linearize (FBinOp OpMul expr (FBinOp op expr1 expr2))
-                        | op == OpAdd || op == OpSub 
-                            = Just $ (FBinOp op (FBinOp OpMul expr expr1) (FBinOp OpMul expr expr2))
-                    linearize (FBinOp OpMul (FBinOp op expr1 expr2) expr)
-                        | op == OpAdd || op == OpSub 
-                            = Just $ (FBinOp op (FBinOp OpMul expr expr1) (FBinOp OpMul expr expr2))
-                    -- Coefficients should be combined if they're multiplied
-                    linearize (FBinOp OpMul (FLit i1) (FLit i2)) = Just (FLit (i1*i2))
-                    -- Or added or subtracted 
-                    linearize (FBinOp OpMul expr (FLit i)) = Just $ FBinOp OpMul (FLit i) expr
-                    linearize (FBinOp OpMul (FLit i1) (FBinOp OpMul (FLit i2) expr)) 
-                        = Just (FBinOp OpMul (FLit (i1*i2)) expr)
-                    linearize (FBinOp OpSub expr1 expr2) = Just (FBinOp OpAdd expr1 (FUnOp OpNeg expr2))
-                    linearize (FUnOp OpNeg (FLit i)) = Just (FLit (-i))
-                    linearize (FUnOp OpNeg (FBinOp op expr1 expr2))
-                        | op == OpAdd || op == OpSub 
-                            = Just $ (FBinOp op (FUnOp OpNeg expr1) (FUnOp OpNeg expr2))
-                    linearize (FUnOp OpNeg (FBinOp OpMul (FLit i) expr) ) 
-                        =  Just $ FBinOp OpMul (FLit (-i)) expr
-                    linearize (FUnOp OpNeg (FUnOp OpNeg expr)) = Just expr
-                    linearize (FBinOp OpAdd (FLit i1) (FLit i2)) = Just (FLit (i1+i2))
-                    linearize _ = Nothing
-                              
-
 
                     hasNonLoopVariables :: FloatExpr -> Bool 
                     hasNonLoopVariables expr = fold_FEE isNonLoopVar False expr 

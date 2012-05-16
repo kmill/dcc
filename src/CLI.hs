@@ -6,6 +6,7 @@ module CLI ( compilerOpts, CompilerOpts(..), TargetFlag(..), hasOptFlag, OptFlag
 import System.Console.GetOpt
 import System.Exit
 import qualified Data.Set as S
+import Data.Maybe
 import Data.List
 import Data.List.Utils(split)
 
@@ -31,6 +32,7 @@ data CompilerOpts
                    -- ^ Which optimizations to use.
                    , macMode :: Bool
                    , regAllocMode :: Bool
+                   , numThreads :: !Int
                    }
       deriving (Show)
 
@@ -45,6 +47,7 @@ defaultOptions
                    , optMode = defaultOptFlags
                    , macMode = False
                    , regAllocMode = False
+                   , numThreads = 12
                    }
 
 -- | This type represents the possible actions to do with the input
@@ -131,6 +134,7 @@ options =
     , Option ['m']     ["mac"]   (NoArg mac')              "Enables Mac OS X mode"
     , Option ['c']     ["compat"]  (NoArg compat')             "Enables compatibility mode with 6.035 output spec"
     , Option ['h']  ["help"]    (NoArg help')               "Prints this usage information"
+    , Option ['p']  ["numthreads"] (ReqArg numthreads' "NUM") ("Sets the number of threads used by parallelize (default: " ++ show (numThreads defaultOptions) ++ ")")
     , Option ['r']  ["regalloc"] (NoArg regalloc')          "Enables the register allocator"
     , Option ['O']     ["opt"]     (ReqArg optimize' "OPTIMIZATION") ("Enables optimizations:\n"
                                                                       ++ showOptimizations
@@ -147,6 +151,7 @@ options =
                                [optOpt p | p <- split "," t] }
           mac' opts = opts { macMode = True }
           regalloc' opts = opts { regAllocMode = True }
+          numthreads' nt opts = opts { numThreads = fst $ fromMaybe (error "That's not a number passed to --numthreads") $ listToMaybe $ reads nt }
 
 
 targetOpt :: String -> TargetFlag

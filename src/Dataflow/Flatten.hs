@@ -120,7 +120,7 @@ flattenExpr (Load pos e) f
     | nonTrivial e = withTmp pos e (\e' -> f $ Load pos e')
     | otherwise = return Nothing
 flattenExpr (Cond pos cexp texp fexp) f
-    | nonTrivial cexp = withTmp pos fexp
+    | nonTrivial fexp = withTmp pos fexp
                         (\fexp' -> f $ Cond pos cexp texp fexp')
     | nonTrivial texp = withTmp pos texp
                         (\texp' -> f $ Cond pos cexp texp' fexp)

@@ -1,0 +1,27 @@
+class Program{
+  int A[40000];
+  int B[200];
+  int C[200];
+  void main() {
+    callout("start_caliper");
+    for(i = 0; 200) {
+      for(j = 0; 200) {
+	A[200*i+j] = 5-i+j;
+      }
+      B[i] = 22*i-i*i;
+    }
+    for(i = 0;200) {
+      int w;
+      w = 0;
+      for(j = 0;200) {
+	w += A[200*j + i] * B[j];
+      }
+      C[i] = w;
+    }
+    callout("end_caliper");
+    for(i = 0;10) {
+      callout("printf", "%d\n", C[i]);
+    }
+  }
+}
+//MipOpts MsgOn 10000 True DrTom LocBound AllPre False [] 0.0

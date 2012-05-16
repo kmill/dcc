@@ -30,7 +30,7 @@ else
 fi
 
 runcompiler() {
-    $base/../../dcc $dccopt --target codegen $3 -o $2 $1
+    $base/../../dcc -r $dccopt --target codegen $3 -o $2 $1
 }
 
 runcompilertoc() {

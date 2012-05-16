@@ -369,6 +369,14 @@ instance Show (Asm e x) where
   show (Reload pos sname reg)
       = printf "RELOAD %s, %s  # %s"
         (show sname) (show reg) (showPos pos)
+  show (MovIRMtoR pos (IRM_I (Imm32 0)) b)
+    | isJust (show32 b)  = let Just b' = show32 b
+                           in printf "xorl %s, %s    # %s" b' b' (showPos pos)
+    | otherwise = showBinOp "xorq" pos b b
+  show (MovIRMtoR pos irm@(IRM_I (Imm32 i)) b)
+    | i >= 0 && isJust (show32 b)
+          = let Just b' = show32 b
+            in printf "movl %s, %s    # %s" (show irm) b' (showPos pos)
   show (MovIRMtoR pos a b) = showBinOp "movq" pos a b
   show (MovIRtoM pos a b) = showBinOp "movq" pos a b
   show (Mov64toR pos a b) = printf "%s $%s, %s      # %s"
@@ -382,15 +390,10 @@ instance Show (Asm e x) where
         (show lbl) adjSP nargs (showPos pos)
       where adjSP = case st of
                       0 -> ""
-                      _ -> printf "subq $%d, %s" st (show (MReg RSP))
+                      _ -> printf "subq $%d, %%rsp" st
   show (Leave pos returns st) = fixsp ++ showNullOp "ret" pos
                                 ++ (if not returns then " (void method)" else "")
       where fixsp = if st == 0 then "" else printf "addq $%d, %%rsp\n   " st
---    printf "%s# leave  %s"
---                        adjSP (showPos pos)
---      where adjSP = case st of
---                      0 -> ""
---                      _ -> printf "addq $%d, %s  " st (show (MReg RSP))
 
   show (Call pos nargs func) = showUnOp "call" pos func
   show (Callout pos nargs func) = showUnOp "call" pos func
@@ -419,6 +422,7 @@ instance Show (Asm e x) where
   show (JCond pos flag oper fallthrough)
       = (showUnOp opcode pos oper) ++ " falls to " ++ show fallthrough
       where opcode = "j" ++ show flag
+
 
   show (ALU_IRMtoR pos op a b) = showBinOp ((show op) ++ "q") pos a b
   show (ALU_IRtoM pos op a b) = showBinOp ((show op) ++ "q") pos a b
@@ -545,6 +549,17 @@ instance Show X86Reg where
     show R13 = "%r13"
     show R14 = "%r14"
     show R15 = "%r15"
+
+show32 :: Reg -> Maybe String
+show32 (MReg RAX) = Just "%eax"
+show32 (MReg RBX) = Just "%ebx"
+show32 (MReg RCX) = Just "%ecx"
+show32 (MReg RDX) = Just "%edx"
+show32 (MReg RSP) = Just "%esp"
+show32 (MReg RBP) = Just "%ebp"
+show32 (MReg RSI) = Just "%esi"
+show32 (MReg RDI) = Just "%edi"
+show32 _ = Nothing
 
 class AsmRename x where
     -- | Takes a function on registers and something, and replaces the
