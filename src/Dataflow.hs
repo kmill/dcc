@@ -54,6 +54,7 @@ dataflows copts
     = [ DFA optConstProp performConstPropPass
       -- , DFA optNZP performNZPPass
       , DFA optTailcall performTailcallPass
+      , DFA optCondElim performCondElimPass
       , DFA optDeadCode performDeadCodePass
       , DFA optBlockElim performBlockElimPass
       , DFA optFlat performFlattenPass
@@ -63,7 +64,6 @@ dataflows copts
       -- doing constprop after flatten/cse does great good! see tests/codegen/fig18.6.dcf
       , DFA optConstProp performConstPropPass
       , DFA optDeadCode performDeadCodePass
-      , DFA optCondElim performCondElimPass
       , DFA optUnflat performUnflattenPass 
       , DFA optCopyProp performCopyPropPass
       , DFA optConstProp performConstPropPass

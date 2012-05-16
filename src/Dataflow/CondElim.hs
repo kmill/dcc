@@ -31,7 +31,7 @@ condAssignLattice = DataflowLattice { fact_name = "Branch Assignments"
   where add _ (OldFact o@(AssignMap (Just ol) (Just or) fl)) (NewFact n@(AssignMap (Just nl) (Just nr) ll)) = (changeIf $ n /= n', n')
           where n' = addFacts o n
         add _ _ (NewFact n) = (changeIf $ n /= (AssignMap Nothing Nothing Nothing), AssignMap Nothing Nothing Nothing)
-        add _ _ _ = (NoChange, AssignMap Nothing Nothing Nothing)
+        
 emptyCEFact :: AssignMap
 emptyCEFact = fact_bot condAssignLattice
 
@@ -82,13 +82,6 @@ ll' :: MidIRInst e x -> AssignMap -> Maybe (Graph MidIRInst e x)
 ll' n'@(CondBranch p ce tl fl) f@(AssignMap (Just a) (Just b) lbl') = case (createLast p ce a b lbl') of
   Nothing -> Nothing
   Just endInst -> Just $ (foldr (<*>) endInst (map (mkMInstr p ce a b) (filter (isNotRet) (M.keys $ M.union a a)))) --b))))
---  | M.size (M.intersection a b) == 1 && M.size a == 1 && M.size b == 1 = 
---    case head (M.keys $ M.intersection a b) of 
---      InRet r -> Just $ mkLast $ Return p r (Just (Cond p ce (assignment (head $ M.elems a)) (assignment (head $ M.elems b))))
---      InVar v -> case lbl' of
---        Just lbl -> Just $ (mkMiddle $ Store p v (Cond p ce (assignment (head $ M.elems a)) (assignment (head $ M.elems b)))) <*> (mkLast $ Branch p lbl)
---        _ -> Nothing
---  | otherwise = Nothing
 ll' _ _ = Nothing
     
 isNotRet (InRet _) = False
