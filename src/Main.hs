@@ -155,7 +155,7 @@ doLowIRFile opts ifname input midir
                                  return lowir
                       return $ Right lowir
       where allocator itermap
-              = case regAllocMode opts of
+              = case regAllocMode opts || (hasOptFlag "regalloc" (optMode opts)) of
                   True -> RegisterAllocator.regAlloc itermap
                   False -> SimpleRegAlloc.regAlloc
                  
