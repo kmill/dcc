@@ -510,6 +510,67 @@ calculateLoopCosts graph basicLoops loops = concreteLoopCosts
                                     _ -> defaultIterations
                     
 
+findIterationMap :: MidIRRepr -> Map.Map Label Int
+findIterationMap midir = numIterations
+    where basicLoops = findBasicLoops domins graph mlabels
+          loops = S.fromList $ catMaybes [insertIndVars l | l <- S.toList basicLoops]
+          graph = midIRGraph midir 
+          pGraph = toPGraph graph 
+          webs = getWebs mlabels pGraph
+          mlabels = map methodEntry $ midIRMethods midir 
+          domins = findDominators graph mlabels 
+
+          iterationMap = Map.fromList [(l, findNumIterations l) | l <- S.toList basicLoops]
+
+          numIterations = S.fold findIterations Map.empty basicLoops 
+          
+          findIterations :: BasicLoop -> Map.Map Label Int -> Map.Map Label Int 
+          findIterations l@(_, _, body) map = S.fold (addIterations n) map body 
+              where n = case Map.lookup l iterationMap of 
+                          Just n' -> n' 
+                          _ -> defaultIterations
+                                            
+          addIterations :: Int -> Label -> Map.Map Label Int -> Map.Map Label Int
+          addIterations n label map = case Map.lookup label map of 
+                                        Just i -> Map.insert label (i+n) map 
+                                        Nothing -> Map.insert label n map 
+
+
+          insertIndVars b@(header, back, body)
+              = do (lv, bv, ivs) <- findInductionVariables pGraph mlabels domins webs b 
+                   return $ Loop header body ivs lv bv
+
+          headerToConcreteLoop = Map.fromList [(loop_header l, l) | l <- S.toList loops]
+
+          looseChildren = Map.fromList [(l, findLoopChildren l) | l <- S.toList basicLoops]
+
+          findLoopChildren :: BasicLoop -> S.Set BasicLoop
+          findLoopChildren (ph, _, pb) = S.fromList [l | l <- S.toList basicLoops, isLoopChild l] 
+              where isLoopChild (ch, _, cb)
+                        = S.size cb < S.size pb && S.member ch pb 
+
+          strictChildren :: Map.Map BasicLoop (S.Set BasicLoop) 
+          strictChildren = Map.fromList [(l, findStrictChildren l) | l <- S.toList basicLoops]
+          
+          findStrictChildren :: BasicLoop -> S.Set BasicLoop 
+          findStrictChildren parent = S.fromList [l | l <- S.toList children, isStrictChild l] 
+              where children = fromMaybe S.empty $ Map.lookup parent looseChildren 
+                    grandChildren = [fromMaybe S.empty $ Map.lookup c looseChildren | c <- S.toList children]
+                    isStrictChild child = all (S.notMember child) grandChildren
+
+
+          defaultIterations = 10 
+          findNumIterations :: BasicLoop -> Int 
+          findNumIterations (h, _, b) 
+              = case Map.lookup h headerToConcreteLoop of 
+                  Nothing -> defaultIterations
+                  Just loop -> let (_, _, end, _) = loop_base loop 
+                               in case floorFloatExpr (makeLinear end) of 
+                                    ILit i
+                                          | (fromIntegral i) > defaultIterations -> (fromIntegral i)
+                                    _ -> defaultIterations
+
+
 analyzeParallelizationPass :: MidIRRepr -> S.Set Loop 
 analyzeParallelizationPass midir = trace' (show worthItCosts) worthIt
     where basicLoops = findBasicLoops domins graph mlabels
