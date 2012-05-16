@@ -31,7 +31,7 @@ condAssignLattice = DataflowLattice { fact_name = "Branch Assignments"
   where add _ (OldFact o@(AssignMap (Just ol) (Just or) fl)) (NewFact n@(AssignMap (Just nl) (Just nr) ll)) = (changeIf $ n /= n', n')
           where n' = addFacts o n
         add _ _ (NewFact n) = (changeIf $ n /= (AssignMap Nothing Nothing Nothing), AssignMap Nothing Nothing Nothing)
-                
+        add _ _ _ = (NoChange, AssignMap Nothing Nothing Nothing)
 emptyCEFact :: AssignMap
 emptyCEFact = fact_bot condAssignLattice
 
@@ -39,12 +39,8 @@ condAssignness :: BwdTransfer MidIRInst AssignMap
 condAssignness = mkBTransfer f
   where f :: MidIRInst e x -> Fact x AssignMap -> AssignMap
         f n'@(Label p _) k = k
-        f n'@(Store p v (Lit _ v')) k@(AssignMap (Just kr) kl lbl)
-            = AssignMap (combineMaps (M.singleton (InVar v) (AssignCon p v'))
-                         kr) kl lbl
-        f n'@(Store p v (Var _ v')) fb = AssignMap (combineMaps (M.singleton (InVar v) (AssignVar p v')) kr) kl lbl
-          where
-            k@(AssignMap (Just kr) kl lbl) = fb        
+        f n'@(Store p v (Lit _ v')) k@(AssignMap (Just kr) kl lbl) = AssignMap (combineMaps (M.singleton (InVar v) (AssignCon p v')) kr) kl lbl
+        f n'@(Store p v (Var _ v')) k@(AssignMap (Just kr) kl lbl) = AssignMap (combineMaps (M.singleton (InVar v) (AssignVar p v')) kr) kl lbl
         f n'@(Return _ rx (Just (Lit p v'))) fb = AssignMap (Just (M.singleton (InRet rx) (AssignCon p v'))) (Just M.empty) Nothing
 --        f n'@(Return _ rx (Just (Lit p v'))) fb = AssignMap (combineMaps (M.singleton (InRet rx) (AssignCon p v')) kr) kl lbl
 --          where
