@@ -587,7 +587,7 @@ findIterationMap midir = numIterations
 
 
 analyzeParallelizationPass :: MidIRRepr -> S.Set Loop 
-analyzeParallelizationPass midir = trace (show worthItCosts) worthIt
+analyzeParallelizationPass midir = trace' (show worthItCosts) worthIt
     where basicLoops = findBasicLoops domins graph mlabels
           -- Let's see if we can identify induction vars
           loops = S.fromList $ catMaybes [insertIndVars l | l <- S.toList basicLoops]
