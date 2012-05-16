@@ -16,7 +16,8 @@ import Debug.Trace
 import Control.Monad.Trans.State.Lazy
 
 ts :: (Show a) => a -> b -> b
-ts = traceShow
+--ts = traceShow
+ts x = id
 t :: (Show a) => a -> a
 t x = ts x x
 
@@ -122,8 +123,8 @@ motionSetTransfer = mkBTransfer3 btCO' btOO btOC
           btOO (Callout _ var _ _) f = invalidate var f
 
           btOC :: MidIRInst O C -> FactBase MotionSet -> MotionSet
-          btOC Parallel{} = error "LICM should come before parallelization!"
-          btOC _ = S.unions . mapElems
+          btOC Parallel{} _ = error "LICM should come before parallelization!"
+          btOC n fb = S.unions $ map (\l -> mapFindWithDefault S.empty l fb) $ successors n
 
           invalidate :: VarName -> S.Set MSInst -> S.Set MSInst
           invalidate var fact = S.filter (not . dependsOn var) fact'

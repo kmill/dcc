@@ -175,13 +175,13 @@ testfile() {
 }
 
 for file in `find $base -iname '*.dcf'`; do
-  testfile $file "--opt=all,-condelim,-parallelize -r"
-  if [ ! -z "$retest" ]; then
-    echo "test $file failed, trying with all optimization levels"
-    for opt in $opts; do
-      testfile $file "--opt=$opt"
-    done
-  fi
+  testfile $file "--opt=all,-condelim,-betterifyasm,-licm -r"
+  # if [ ! -z "$retest" ]; then
+  #   echo "test $file failed, trying with all optimization levels"
+  #   for opt in $opts; do
+  #     testfile $file "--opt=$opt"
+  #   done
+  # fi
 done
 
 if [ "$fail" -ne "0" ]; then
