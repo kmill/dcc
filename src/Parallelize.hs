@@ -80,7 +80,10 @@ mkInitBlock lab pos loop i
                       , JustC (Branch pos (loop_header loop)))
     where mkInits = map mkInit $ S.toList $ loop_variables loop
           mkInit (var, start, _, step)
-              = Store pos var (evalFloatExpr pos start)
+              = Store pos var (BinOp pos OpAdd
+                               (evalFloatExpr pos start)
+                               (BinOp pos OpMul
+                                (Lit pos step) (Var pos i)))
 
 
 mkDoneBlock :: SourcePos -> Label -> Label -> VarName -> Loop
