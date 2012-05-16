@@ -465,7 +465,7 @@ calculateLoopCosts graph basicLoops loops = concreteLoopCosts
 
           concreteLoopCosts = Map.fromList [(l, headerToLoopCost Map.! loop_header l) | l <- S.toList loops]
           headerToLoopCost = Map.fromList [(h, findLoopCost l) | l@(h, _, _) <- S.toList basicLoops]
-          
+        
 
           looseChildren :: Map.Map BasicLoop (S.Set BasicLoop)
           looseChildren = Map.fromList [(l, findLoopChildren l) | l <- S.toList basicLoops]
@@ -521,18 +521,22 @@ findIterationMap midir = numIterations
           domins = findDominators graph mlabels 
 
           iterationMap = Map.fromList [(l, findNumIterations l) | l <- S.toList basicLoops]
+          showIterationMap = Map.fromList [(h, v) | ((h, _, _), v) <- Map.toList iterationMap]
 
-          numIterations = S.fold findIterations Map.empty basicLoops 
+          noParents = S.fromList [l | (l, p) <- Map.toList looseParents, S.null p]
+
+          numIterations = S.fold findIterations Map.empty noParents 
           
           findIterations :: BasicLoop -> Map.Map Label Int -> Map.Map Label Int 
-          findIterations l@(_, _, body) map = S.fold (addIterations n) map body 
-              where n = case Map.lookup l iterationMap of 
-                          Just n' -> n' 
-                          _ -> defaultIterations
+          findIterations l@(_, _, body) map = S.fold (addIterations n) newMap body 
+              where newMap = S.fold findIterations map myChildren 
+                    myChildren = fromMaybe S.empty $ Map.lookup l strictChildren
+                    n = fromMaybe defaultIterations $ Map.lookup l iterationMap
+                                   
                                             
           addIterations :: Int -> Label -> Map.Map Label Int -> Map.Map Label Int
           addIterations n label map = case Map.lookup label map of 
-                                        Just i -> Map.insert label (i+n) map 
+                                        Just i -> Map.insert label (i*n) map 
                                         Nothing -> Map.insert label n map 
 
 
@@ -541,6 +545,14 @@ findIterationMap midir = numIterations
                    return $ Loop header body ivs lv bv
 
           headerToConcreteLoop = Map.fromList [(loop_header l, l) | l <- S.toList loops]
+
+          looseParents :: Map.Map BasicLoop (S.Set BasicLoop)
+          looseParents = Map.fromList [(l, findLoopParents l) | l <- S.toList basicLoops] 
+          
+          findLoopParents :: BasicLoop -> S.Set BasicLoop 
+          findLoopParents (ch, _, cb) = S.fromList [l | l <- S.toList basicLoops, isLoopParent l]
+              where isLoopParent (ph, _, pb) 
+                        = S.size cb < S.size pb && S.member ch pb
 
           looseChildren = Map.fromList [(l, findLoopChildren l) | l <- S.toList basicLoops]
 
@@ -564,7 +576,8 @@ findIterationMap midir = numIterations
           findNumIterations (h, _, b) 
               = case Map.lookup h headerToConcreteLoop of 
                   Nothing -> defaultIterations
-                  Just loop -> let (_, _, end, _) = loop_base loop 
+                  Just loop -> let (_, _, firstEnd, _) = loop_base loop 
+                                   end = FBinOp OpAdd (ILit 1) firstEnd
                                in case floorFloatExpr (makeLinear end) of 
                                     ILit i
                                           | (fromIntegral i) > defaultIterations -> (fromIntegral i)
