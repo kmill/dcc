@@ -1,6 +1,6 @@
 #!/bin/sh
 
-opts="basic"
+opts="all,-betterifyasm,-licm"
 
 domidirc=0
 base=`dirname $0`
