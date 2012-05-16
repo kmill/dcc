@@ -56,6 +56,7 @@ dataflows copts
       , DFA optTailcall performTailcallPass
       , DFA optCondElim performCondElimPass
       , DFA optDeadCode performDeadCodePass
+      , DFA optCondElim performCondElimPass
       , DFA optBlockElim performBlockElimPass
       , DFA optFlat performFlattenPass
       --, DFA optLICM performLICMPass
