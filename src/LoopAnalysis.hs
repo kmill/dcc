@@ -289,6 +289,8 @@ findInductionVariables pGraph mlabels domins webs (header, loopBack, body)
               = makeLimitVar (BinOp s CmpGT e1 e2) 
           makeReverseLimitVar (BinOp s CmpLT e1 e2) 
               = makeLimitVar (BinOp s CmpGTE e1 e2)
+          makeReverseLimitVar _ 
+              = Nothing
 
           headerDomins = case mapLookup header domins of 
                            Just (PElem domin) -> domin
