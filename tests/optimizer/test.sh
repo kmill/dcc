@@ -1,5 +1,7 @@
 #!/bin/sh
 
+opts="all,-betterifyasm"
+
 domidirc=0
 base=`dirname $0`
 
@@ -31,7 +33,7 @@ fi
 
 
 runcompiler_opt() {
-    $base/../../dcc -r --opt=all -o $2 $1 $dccopt
+    $base/../../dcc -r --opt=$opts -o $2 $1 $dccopt
 }
 
 runcompiler_unopt() {
