@@ -53,6 +53,7 @@ condAssignness :: BwdTransfer MidIRInst AssignMap
 condAssignness = mkBTransfer f
   where f :: MidIRInst e x -> Fact x AssignMap -> AssignMap
         f n'@(Label p _) k = k
+<<<<<<< HEAD
         f n'@(Store p v (Lit _ v')) k@(AssignMap (Just kr) kl lbl)
             = AssignMap (combineMaps (M.singleton (InVar v) (AssignCon p v'))
                          kr) kl lbl
@@ -81,6 +82,34 @@ condAssignness = mkBTransfer f
                 addFacts _ _ = AssignMap Nothing Nothing Nothing
         f _ k = AssignMap (Just M.empty) (Just M.empty) Nothing
         
+=======
+        f n'@(Store p v (Lit _ v')) k@(AssignMap (Just kr) kl lbl) = AssignMap (combineMaps (M.singleton (InVar v) (AssignCon p v')) kr) kl lbl
+        f n'@(Store p v (Var _ v')) k@(AssignMap (Just kr) kl lbl) = AssignMap (combineMaps (M.singleton (InVar v) (AssignVar p v')) kr) kl lbl
+        f n'@(Return _ rx (Just (Lit p v'))) fb = AssignMap (Just (M.singleton (InRet rx) (AssignCon p v'))) (Just M.empty) Nothing
+--        f n'@(Return _ rx (Just (Lit p v'))) fb = AssignMap (combineMaps (M.singleton (InRet rx) (AssignCon p v')) kr) kl lbl
+--          where
+--            k@(AssignMap (Just kr) kl lbl) = joinOutFacts condAssignLattice n' fb        
+        f n'@(Return _ rx (Just (Var p v'))) fb = AssignMap (Just (M.singleton (InRet rx) (AssignVar p v'))) (Just M.empty) Nothing
+        f (Branch _ lbl) kl = AssignMap (Just M.empty) (Just M.empty) (Just lbl)
+--        f n@(CondBranch _ _ tl fl) k = AssignMap (Just M.empty) (Just M.empty) (Just $ matchesMaybe tl fl) --(addFacts (fromMaybe (AssignMap Nothing Nothing Nothing) $ lookupFact tl k) (fromMaybe (AssignMap Nothing Nothing Nothing) $ lookupFact fl k))
+        f _ k = AssignMap Nothing Nothing Nothing
+        
+addFacts o@(AssignMap (Just ol) (Just or) fl') n@(AssignMap (Just nl) (Just nr) ll') = n'
+  where n'
+          | M.null or && M.null nr && M.null nl = AssignMap (Just ol) (Just nl) lbl
+          | M.null or && M.null nr && M.null ol = AssignMap (Just nl) (Just ol) lbl
+          | M.null or && M.null nr = AssignMap (Just ol) (Just nl) lbl
+          | otherwise = AssignMap Nothing Nothing Nothing
+        lbl = matchesMaybe fl' ll'
+addFacts _ _ = AssignMap Nothing Nothing Nothing
+
+matchesMaybe Nothing (Just x) = Just x
+matchesMaybe (Just x) Nothing = Just x
+matchesMaybe (Just x) (Just y)
+  | x == y = Just x
+  | otherwise = Nothing
+matchesMaybe _ _ = Nothing
+
 combineMaps :: (M.Map Assigned Assignable) -> (M.Map Assigned Assignable) -> Maybe (M.Map Assigned Assignable)
 combineMaps a b 
   | M.size (M.intersection a b) > 0 = Nothing
@@ -104,6 +133,21 @@ ll' n'@(CondBranch p ce tl fl) f@(AssignMap (Just a) (Just b) lbl')
   | otherwise = Nothing
 ll' _ _ = Nothing
     
+isNotRet (InRet _) = False
+isNotRet _ = True
+
+createLast p ce a b lbl = case (filter (not . isNotRet) (M.keys $ M.intersection a b)) of
+  [] -> case lbl of
+    Nothing -> Nothing 
+    Just lbl' -> if ((length (filter (not . isNotRet) (M.keys $ M.intersection a b))) == (length (filter (not . isNotRet) (M.keys $ M.union a b)))) 
+                 then Just $ mkLast $ Branch p lbl'
+                 else Nothing
+  x -> Just $ mkLInstr p ce a b (head x)
+
+mkLInstr p ce a b n@(InRet v) = mkLast $ Return p v (Just (Cond p ce (assignment (fromJust $ M.lookup n a)) (assignment (fromJust $ M.lookup n b))))
+mkMInstr p ce a b n@(InVar v) = mkMiddle $ Store p v (Cond p ce (assignment (fromMaybe (AssignVar p v) (M.lookup n a))) (assignment (fromMaybe (AssignVar p v) (M.lookup n b))))
+
+>>>>>>> 30021a6c7fabc86590da86cec007f182e19db2dd
 assignment :: Assignable -> Expr VarName
 assignment (AssignVar p x) = Var p x
 assignment (AssignCon p x) = Lit p x
