@@ -290,24 +290,30 @@ handleBinaryOp env pos opstr expr1 expr2
       where orExpr = do t <- genTmpVar
                         (gex1, ex1) <- expressionToMidIR env expr1
                         (gex2, ex2) <- expressionToMidIR env expr2
-                        [iffalsel, donel] <- replicateM 2 freshLabel
-                        let g = (gex1 <*> (mkMiddle $ Store pos t ex1)
-                                 <*> (mkLast $ CondBranch pos (Var pos t) donel iffalsel))
-                              |*><*| (mkFirst (Label pos iffalsel) <*> gex2
-                                      <*> (mkMiddle $ Store pos t ex2)
-                                      <*> (mkLast $ Branch pos donel))
-                              |*><*| mkFirst (Label pos donel)
+                        [iftruel, iffalsel, donel] <- replicateM 3 freshLabel
+                        let g = (gex1 <*> (mkLast $ CondBranch pos ex1 iftruel iffalsel))
+                             |*><*| (mkFirst (Label pos iftruel)
+                                     <*> (mkMiddle $ Store pos t (Lit pos bTrue))
+                                     <*> mkLast (Branch pos donel))
+                             |*><*| (mkFirst (Label pos iffalsel)
+                                     <*> gex2
+                                     <*> (mkMiddle $ Store pos t ex2)
+                                     <*> (mkLast (Branch pos donel)))
+                             |*><*| (mkFirst (Label pos donel))
                         return (g, Var pos t)
             andExpr = do t <- genTmpVar
                          (gex1, ex1) <- expressionToMidIR env expr1
                          (gex2, ex2) <- expressionToMidIR env expr2
-                         [iftruel, donel] <- replicateM 2 freshLabel
-                         let g = (gex1 <*> (mkMiddle $ Store pos t ex1)
-                                  <*> (mkLast $ CondBranch pos (Var pos t) iftruel donel))
-                               |*><*| (mkFirst (Label pos iftruel) <*> gex2
-                                       <*> (mkMiddle $ Store pos t ex2)
-                                       <*> (mkLast $ Branch pos donel))
-                               |*><*| mkFirst (Label pos donel)
+                         [iftruel, iffalsel, donel] <- replicateM 3 freshLabel
+                         let g = (gex1 <*> (mkLast $ CondBranch pos ex1 iftruel iffalsel))
+                              |*><*| (mkFirst (Label pos iffalsel)
+                                      <*> (mkMiddle $ Store pos t (Lit pos bFalse))
+                                      <*> mkLast (Branch pos donel))
+                              |*><*| (mkFirst (Label pos iftruel)
+                                      <*> gex2
+                                      <*> (mkMiddle $ Store pos t ex2)
+                                      <*> (mkLast (Branch pos donel)))
+                              |*><*| (mkFirst (Label pos donel))
                          return (g, Var pos t)
             normalExpr op = do (gex1, ex1) <- expressionToMidIR env expr1
                                (gex2, ex2) <- expressionToMidIR env expr2

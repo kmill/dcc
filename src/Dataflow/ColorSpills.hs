@@ -57,7 +57,7 @@ spillAliveDead _ = Just ([], [])
 
 -- This is of (moves, tomove)
 type CollectSpillMoveFact = (M.Map NodePtr (S.Set WebID, S.Set WebID),
-                             M.Map Reg (S.Set WebID))
+                             M.Map Reg (WithTop (S.Set WebID)))
 
 
 -- | Collects a list of "spill moves"
@@ -75,34 +75,43 @@ collectSpillMovePass spills
                             { fact_name = "Spill move lattice"
                             , fact_bot = (M.empty, M.empty)
                             , fact_join = joinProd (joinMaps (joinProd joinSets joinSets))
-                                          (joinMaps joinSets) }
+                                          (joinMaps (extendJoinDomain joinSets')) }
+          where joinSets' :: Label -> OldFact (S.Set WebID) -> NewFact (S.Set WebID)
+                          -> (ChangeFlag, WithTop (S.Set WebID))
+                joinSets' l (OldFact o) (NewFact n) = (ch, PElem new)
+                    where (ch, new) = joinSets l (OldFact o) (NewFact n)
       getSpillMoveTransfer :: BwdTransfer (PNode Asm) CollectSpillMoveFact
       getSpillMoveTransfer = mkBTransfer3 usedCO usedOO usedOC
           where
             usedCO :: (PNode Asm) C O -> CollectSpillMoveFact -> CollectSpillMoveFact
-            usedCO (PNode _ n) (moves, tomove) = (moves, remove dead tomove)
+            usedCO (PNode _ n) (moves, tomove) = (moves, foldl (flip id) tomove (map removeR dead))
                 where (_, dead) = getAliveDead n
+            
+            removeR :: Reg -> M.Map Reg (WithTop (S.Set WebID)) -> M.Map Reg (WithTop (S.Set WebID))
+            removeR r tomove = M.insert r Top tomove
             
             usedOO :: (PNode Asm) O O -> CollectSpillMoveFact -> CollectSpillMoveFact
             usedOO (PNode l (Reload _ s r)) (moves, tomove)
                 = case M.lookup r tomove of
-                    Just webs -> (moves', M.delete r tomove)
+                    Just (PElem webs) -> (moves', removeR r tomove)
                         where spillID = lookupVarUse s l spills
-                              moves' = M.insertWith update l
+                              moves' = M.insert l
                                        (S.singleton spillID, webs)
                                        moves
-                              update = S.union >< S.union
-                    Nothing -> (moves, tomove)
+                              --update = S.union >< S.union
+                    _ -> (moves, tomove)
             usedOO (PNode l (Spill _ r s)) (moves, tomove)
                 = (moves, tomove')
-                  where tomove' = M.insertWith S.union r (S.singleton spillID) tomove
+                  where tomove' = case M.lookup r tomove of
+                                    Just (PElem tom) -> M.insert r (PElem $ S.insert spillID tom) tomove
+                                    _ -> tomove
                         spillID = lookupVarDef s l spills
             usedOO (PNode l n) (moves, tomove)
-                = (moves, remove dead tomove)
+                = (moves, foldl (flip id) tomove (map removeR dead))
                   where (_, dead) = getAliveDead n
             
             usedOC :: (PNode Asm) O C -> FactBase CollectSpillMoveFact -> CollectSpillMoveFact
-            usedOC (PNode l n) fs = (moves, remove dead tomove)
+            usedOC (PNode l n) fs = (moves, foldl (flip id) tomove (map removeR dead))
                 where (moves, tomove) = joinOutFacts getSpillMoveLattice n fs
                       (_, dead) = getAliveDead n
             

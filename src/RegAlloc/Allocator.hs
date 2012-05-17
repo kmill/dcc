@@ -34,13 +34,13 @@ dotrace = False
 trace' a b = if dotrace then trace a b else b 
 
 -- | Main entry point to allocating registers for the IR
-regAlloc :: LowIRRepr -> I.GM LowIRRepr
-regAlloc lir
+regAlloc :: M.Map Label Int -> LowIRRepr -> I.GM LowIRRepr
+regAlloc itermap lir
     = do LowIRRepr fields strs ipc meths graph <- evalStupidFuelMonad (performDeadAsmPass lir) maxBound
          let GMany _ body _ = graph
              mlabels = map I.methodEntry meths
          massgraph <- evalStupidFuelMonad (massageGraph mlabels graph) maxBound
-         let graph' = foldl1 (|*><*|) $ map (\mlabel -> doRegAlloc freeSpillLocs mlabel (subgraph massgraph mlabel)) mlabels
+         let graph' = foldl1 (|*><*|) $ map (\mlabel -> doRegAlloc itermap freeSpillLocs mlabel (subgraph massgraph mlabel)) mlabels
 --         graph'' <- evalStupidFuelMonad (simplifySpillsAndBetterify mlabels graph') maxBound
          return $ LowIRRepr fields strs ipc meths graph'
     where
@@ -289,13 +289,13 @@ makeWorklists g loops = wl'
                 }
 
 -- | "main"
-doRegAlloc :: SpillLocSupply -> Label -> Graph Asm C C -> Graph Asm C C
-doRegAlloc spillLocs mlabel graph
+doRegAlloc :: M.Map Label Int -> SpillLocSupply -> Label -> Graph Asm C C -> Graph Asm C C
+doRegAlloc itermap spillLocs mlabel graph
     = let pg = toPGraph graph
           dus = collectDU [mlabel] pg
           webs = collectWebs (dus M.! mlabel)
           interfgraph = makeInterfGraph [mlabel] pg webs
-          loops = L.loopNestInformation graph [mlabel]
+          loops = itermap -- L.loopNestInformation graph [mlabel]
           initState = makeWorklists interfgraph loops
           spilledNodes = evalState (return pg) initState
           -- | runs simplify/coalesce/freeze/selectspill until work
@@ -322,7 +322,7 @@ doRegAlloc spillLocs mlabel graph
                     wl <- get
                     if trace' ("endState:\n" ++ displayWL wl) $ not $ null spilledWebs
                        then let (spillLocs', graph') = insertSpills spillLocs pg wl interfgraph
-                            in trace' ("spilledCode:\n" ++ unlines (graphToAsm graph' mlabel)) $ return $ doRegAlloc spillLocs' mlabel graph'
+                            in trace' ("spilledCode:\n" ++ unlines (graphToAsm graph' mlabel)) $ return $ doRegAlloc itermap spillLocs' mlabel graph'
                        else let graph' = rewriteGraph pg wl interfgraph
                             in trace' ("endCode:\n" ++ unlines (graphToAsm graph' mlabel)++"\n****\n****\n") $ return graph'
       in evalState main (trace' ("initCode:\n" ++ unlines (graphToAsm graph mlabel) ++ "\ninitState:\n" ++ displayWL initState) initState)
@@ -678,10 +678,13 @@ freezeMoves u = do u <- getAlias u
 spillCost :: RWorklists -> WebID -> Int
 spillCost wl i = let web = igGetWeb i $ wInterfGraph wl
                      deg = wDegrees wl M.! i
-                     loopDepth l = M.findWithDefault 0 (nodeLabel l) (wLoops wl)
-                     loadCost = sum $ map (\l -> 10 ^ (loopDepth l)) (S.toList (webUses web) ++ S.toList (webDefs web))
-                     score = 1000 * loadCost `div` (max 1 deg)
-                 in if webSpilled web then 2*score else score
+--                     loopDepth l = M.findWithDefault 0 (nodeLabel l) (wLoops wl)
+--                     loadCost = sum $ map (\l -> 10 ^ (loopDepth l)) (S.toList (webUses web) ++ S.toList (webDefs web))
+                     timesrun l = M.findWithDefault 1 (nodeLabel l) (wLoops wl)
+                     defuses = S.toList (webUses web) ++ S.toList (webDefs web)
+                     loadCost = sum $ map (\l -> timesrun l) defuses
+                     score = 200 * loadCost `div` (max 1 deg)
+                 in trace' ("cost " ++ show (length defuses) ++ " " ++ show score) (if webSpilled web then 3*score else score)
 
 -- | "SelectSpill"
 selectSpill :: AM ()

@@ -5,36 +5,12 @@ module Dataflow.Flatten where
 import Control.Monad
 import qualified Data.Set as Set
 import Compiler.Hoopl
+import Dataflow.OptSupport
 import IR
 import AST(SourcePos)
 import Data.Maybe
 
-nullLattice :: DataflowLattice ()
-nullLattice = DataflowLattice
-              { fact_name = "Null lattice (for flattener)"
-              , fact_bot = ()
-              , fact_join = (\ _ _ _ -> (NoChange, ())) }
-
-nullTransfer :: FwdTransfer MidIRInst ()
-nullTransfer = mkFTransfer ft
-    where
-      ft :: MidIRInst e x -> () -> Fact x ()
-      ft (Branch _ l) f = mapSingleton l f
-      ft (ThreadReturn _ l) f = mapSingleton l f
-      ft (Parallel _ ll _ _ el) f = mkFactBase nullLattice
-                                    [(ll, ()), (el, ())]
-      ft (CondBranch _ _ tl fl) f = mkFactBase nullLattice
-                                    [(tl, ()), (fl, ())]
-      ft (Return _ _ _) f = mapEmpty
-      ft (Fail _) f = mapEmpty
-      ft Label{} f = f
-      ft PostEnter{} f = f
-      ft Enter{} f = f
-      ft Store{} f = f
-      ft DivStore{} f = f
-      ft IndStore{} f = f
-      ft Call{} f = f
-      ft Callout{} f = f
+-- uses a null lattice
 
 nonTrivial :: Expr v -> Bool
 nonTrivial (Load _ _) = True
@@ -66,8 +42,8 @@ flattenRewrite = deepFwdRw fl
       fl (Enter _ _ _) f = return Nothing
       fl (Store pos v e) f = flattenExpr e (\e' -> Store pos v e')
       fl (DivStore pos v op e1 e2) f
-          | nonTrivial e1 = flattenExpr e1 (\e1' -> DivStore pos v op e1' e2)
-          | nonTrivial e2 = flattenExpr e2 (\e2' -> DivStore pos v op e1 e2')
+          | nonTrivial e1 = withTmp pos e1 (\e1' -> DivStore pos v op e1' e2)
+          | nonTrivial e2 = withTmp pos e2 (\e2' -> DivStore pos v op e1 e2')
           | otherwise = return Nothing
       fl (IndStore pos dest src) f
           | nonTrivial dest = withTmp pos dest

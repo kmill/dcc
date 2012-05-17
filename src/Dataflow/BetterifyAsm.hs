@@ -65,7 +65,7 @@ betterifySpills = FwdPass
                   , fp_rewrite = rewrite }
     where 
           ftCO :: Asm C O -> BetterifyFact -> BetterifyFact
-          ftCO (Enter _ _ numargs _) (spills, regs)
+          ftCO (Enter _ _ numargs _) (_, _)
               = (spills'', regs')
                 where spills' = M.fromList $ map (\a -> (a, Top)) $ 
                                 lefts $ drop 6 $ take numargs argLocation
@@ -77,7 +77,7 @@ betterifySpills = FwdPass
           removeBindingsTo :: Ord k => BetterifyLoc -> M.Map k (WithTop BetterifyLoc)
                            -> M.Map k (WithTop BetterifyLoc)
           removeBindingsTo x oldMap = M.mapMaybe f oldMap
-              where f p@(PElem v) = if v == x then Nothing else Just p
+              where f p@(PElem v) = if v == x then Just Top else Just p
                     f y = Just y
           
           lookupBInt64 :: BetterifyLoc -> BetterifyFact -> BetterifyLoc
@@ -115,7 +115,8 @@ betterifySpills = FwdPass
           ftOO (MovIRMtoR _ (IRM_R r0) r) f = handleToR (BReg r0) r f
           ftOO (Mov64toR _ (Imm64 i) r) f = handleToR (BInt64 i) r f
           ftOO n f = let (alive, dead) = getAliveDead n
-                     in foldl (flip id) f (map removeToR dead)
+                         f' = foldl (flip id) f (map removeToR dead)
+                     in f'
           
           ftOC :: Asm O C -> BetterifyFact -> FactBase BetterifyFact
           ftOC = distributeFact

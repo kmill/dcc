@@ -69,12 +69,18 @@ simpI e = case e of
                 do exprs' <- simpEMany exprs
                    return $ Callout pos v name exprs'
             CondBranch pos exp tl fl ->
-                do exp' <- simpES exp
-                   case exp' of
-                     Lit _ x ->
-                         return $ Branch pos
-                                    $ if intToBool x then tl else fl
-                     _ -> mzero
+              msum [ do exp' <- simpE exp
+                        case exp' of
+                          Lit _ x -> return $ Branch pos
+                                     $ if intToBool x then tl else fl
+                          _ -> return $ CondBranch pos exp' tl fl
+                   , do exp' <- simpES exp
+                        case exp' of
+                          Lit _ x ->
+                            return $ Branch pos
+                            $ if intToBool x then tl else fl
+                          _ -> mzero
+                   ]
             Return pos from (Just exp) ->
                 do exp' <- simpE exp
                    return $ Return pos from (Just exp')
@@ -326,6 +332,18 @@ simpBinOp pos op sex1 sex2 = traceM ("bin", op, sex1, sex2) $ msum rules
                guard $ i /= minBound
                UnOp _ OpNeg nsex2 <- withExpr sex2
                simpES $ BinOp pos OpMul (Lit litpos (negate i)) nsex2
+          , do guard $ op `elem` cmpOps
+               guard $ sex1 > sex2
+               simpES $ BinOp pos (flipCmpOp op) sex2 sex1
+          , do guard $ op `elem` cmpOps
+               Lit _ 0 <- withExpr sex1
+               BinOp pos2 OpSub sex2_1 sex2_2 <- withExpr sex2
+               simpES $ BinOp pos op sex2_2 sex2_1
+          , do guard $ op `elem` cmpOps
+               Lit _ 0 <- withExpr sex1
+               BinOp pos2 OpAdd (Lit litpos i) sex2_2  <- withExpr sex2
+               guard $ i /= minBound
+               simpES $ BinOp pos op (Lit litpos (negate i)) sex2_2
           -- Don't put in a default case.
           ]
 
@@ -345,3 +363,12 @@ binOp CmpNEQ = \x y -> boolToInt $ x /= y
 unOp :: UnOp -> Int64 -> Int64
 unOp OpNeg = negate 
 unOp OpNot = boolToInt . not . intToBool
+
+cmpOps = [CmpLT, CmpGT, CmpLTE, CmpGTE, CmpEQ, CmpNEQ]
+flipCmpOp CmpLT = CmpGT
+flipCmpOp CmpGT = CmpLT
+flipCmpOp CmpLTE = CmpGTE
+flipCmpOp CmpGTE = CmpLTE
+flipCmpOp CmpEQ = CmpEQ
+flipCmpOp CmpNEQ = CmpNEQ
+flipCmpOp _ = error "flipCmpOp: Not a comparison!"
