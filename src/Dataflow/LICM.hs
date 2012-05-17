@@ -11,15 +11,26 @@ import Compiler.Hoopl
 import IR
 import qualified Data.Set as S
 import qualified Data.List as L
+import qualified Data.Map as M
 import Data.Maybe(catMaybes, fromMaybe, isJust)
 import Debug.Trace
 import Control.Monad.Trans.State.Lazy
 
+tr :: String -> a -> a
+tr = trace
+--tr = id
 ts :: (Show a) => a -> b -> b
---ts = traceShow
-ts x = id
+ts = tr . show
 t :: (Show a) => a -> a
 t x = ts x x
+tt :: (Show a, Show b) => a -> b -> b
+tt x y = ts (x, y) y
+
+data Movable = Mov | Immov
+    deriving (Eq, Ord, Show)
+movJoin :: Movable -> Movable -> Movable
+movJoin Mov Mov = Mov
+movJoin _ _ = Immov
 
 data (Ord v) => SInst v
     = SStore SourcePos v (Expr v)
@@ -46,48 +57,48 @@ unStoreInst SOtherInst = Nothing
 type MSInst = SInst VarName
 
 -- Set of instructions which can be moved to this point
-type MotionSet = S.Set MSInst
-type MotionFact = (MotionSet, Live)
+type MotionMap = M.Map MSInst Movable
+type MotionFact = (MotionMap, Live)
 motionLattice :: DataflowLattice MotionFact
 motionLattice = DataflowLattice { fact_name = "Code Motion Lattice"
                                 , fact_bot = emptyMotionFact
                                 , fact_join = intersectFacts }
     where intersectFacts :: Label -> OldFact MotionFact -> NewFact MotionFact -> (ChangeFlag, MotionFact)
-          intersectFacts l (OldFact (oldSet, oldLive)) (NewFact (newSet, newLive))
-              = (c, (resSet', resLive))
+          intersectFacts l (OldFact (oldMap, oldLive)) (NewFact (newMap, newLive))
+              = (c, (resMap', resLive))
               where c = changeIf $ setBool || (changeBool lc)
-                    setBool = not $ resSet' == oldSet
-                    -- instruction survives if variable is in newSet or is dead
-                    resSet = S.union (S.intersection oldSet newSet) (S.filter (isDeadIn oldLive) newSet) -- (trace (show newSet) newSet))
-                    resSet'
-                        | killIndStores = S.filter (not . isIndStore) resSet
-                        | otherwise = resSet
-                    killIndStores = S.filter isIndStore oldSet == S.filter isIndStore resSet
-                    isDeadIn :: Live -> MSInst -> Bool
-                    isDeadIn live (SStore _ var _) = not $ S.member var live
-                    isDeadIn live (SDivStore _ var _ _ _) = not $ S.member var live
-                    isDeadIn _ _ = False
+                    setBool = not $ resMap' == oldMap
+                    -- instruction survives if variable is in newMap or is dead
+                    resMap = M.unionWith movJoin (M.intersectionWith movJoin oldMap newMap) (M.filterWithKey (isDeadIn oldLive) newMap) -- (trace (show newMap) newMap))
+                    resMap'
+                        | killIndStores = filterKey (not . isIndStore) resMap
+                        | otherwise = resMap
+                    killIndStores = filterKey isIndStore oldMap == filterKey isIndStore resMap
+                    isDeadIn :: Live -> MSInst -> Movable -> Bool
+                    isDeadIn live (SStore _ var _) _ = not $ S.member var live
+                    isDeadIn live (SDivStore _ var _ _ _) _ = not $ S.member var live
+                    isDeadIn _ _ _ = False
                     (lc, resLive) = fact_join liveLattice l (OldFact oldLive) (NewFact newLive)
                     changeBool SomeChange = True
                     changeBool NoChange = False
 
 emptyMotionFact :: MotionFact
-emptyMotionFact = (S.empty, S.empty)
+emptyMotionFact = (M.empty, S.empty)
 
-exprDepend :: (Ord v) => Expr v -> S.Set v
-exprDepend (Var _ v) = S.singleton v
+exprDepend :: (Ord v) => Expr v -> M.Map v Movable
+exprDepend (Var _ v) = M.singleton v Mov
 exprDepend (Load _ expr) = exprDepend expr
 exprDepend (UnOp _ _ expr) = exprDepend expr
-exprDepend (BinOp _ _ expr1 expr2) = S.unions $ map exprDepend $ [expr1, expr2] 
+exprDepend (BinOp _ _ expr1 expr2) = M.unionsWith movJoin $ map exprDepend $ [expr1, expr2] 
 exprDepend (Cond _ exprc expr1 expr2)
-    = S.unions $ map exprDepend $ [exprc, expr1, expr2]
-exprDepend _ = S.empty
+    = M.unionsWith movJoin $ map exprDepend $ [exprc, expr1, expr2]
+exprDepend _ = M.empty
 
-instDepend :: (Ord v) => SInst v -> S.Set v
+instDepend :: (Ord v) => SInst v -> M.Map v Movable
 instDepend (SStore _ _ expr) = exprDepend expr
-instDepend (SDivStore _ _ _ expr1 expr2) = S.unions $ map exprDepend $ [expr1, expr2]
-instDepend (SIndStore _ expr1 expr2) = S.unions $ map exprDepend $ [expr1, expr2]
-instDepend SOtherInst = S.empty
+instDepend (SDivStore _ _ _ expr1 expr2) = M.unionsWith movJoin $ map exprDepend $ [expr1, expr2]
+instDepend (SIndStore _ expr1 expr2) = M.unionsWith movJoin $ map exprDepend $ [expr1, expr2]
+instDepend SOtherInst = M.empty
 
 decompose :: (IsMap m) => m (a, b) -> (m a, m b)
 decompose m = (mapMap fst m, mapMap snd m)
@@ -105,42 +116,51 @@ isIndStore :: (Ord v) => SInst v -> Bool
 isIndStore SIndStore{} = True
 isIndStore _ = False
 
-motionSetTransfer :: BwdTransfer MidIRInst MotionSet
-motionSetTransfer = mkBTransfer3 btCO' btOO btOC
+filterKey :: (Ord k) => (k -> Bool) -> M.Map k v -> M.Map k v
+filterKey f = M.filterWithKey (\a _ -> f a) 
+
+motionMapTransfer :: BwdTransfer MidIRInst MotionMap
+motionMapTransfer = mkBTransfer3 btCO' btOO btOC
     where btCO' n f = ts (n, btCO n f) $ btCO n f
-          btCO :: MidIRInst C O -> MotionSet -> MotionSet
+          btCO :: MidIRInst C O -> MotionMap -> MotionMap
           btCO i@(Enter _ _ args) f = invalidateList args f
           btCO _ f = f
 
-          btOO :: MidIRInst O O -> MotionSet -> MotionSet
+          btOO :: MidIRInst O O -> MotionMap -> MotionMap
           btOO i@(Store _ var expr) f
-             = invalidate var (S.insert (storeInst (ts (i, f) i)) f)
+             = invalidate var (M.insert (storeInst i) Mov f)
              --  = (\res -> trace ("store " ++ (show i) ++ " with lattice " ++ (show f) ++ "\n" ++ (show res) ++ "\n") res) $ invalidate var (S.insert (storeInst i) f)
           btOO i@(DivStore _ var _ expr1 expr2) f
-              = invalidate var (S.insert (storeInst i) f)
-          btOO i@(IndStore _ _ _) f = S.insert (storeInst i) f
+              = invalidate var (M.insert (storeInst i) Mov f)
+          btOO i@(IndStore _ _ _) f = M.insert (storeInst i) Mov f
           btOO (Call _ var _ _) f = invalidate var f
           btOO (Callout _ var _ _) f = invalidate var f
 
-          btOC :: MidIRInst O C -> FactBase MotionSet -> MotionSet
+          btOC :: MidIRInst O C -> FactBase MotionMap -> MotionMap
           btOC Parallel{} _ = error "LICM should come before parallelization!"
-          btOC n fb = S.unions $ map (\l -> mapFindWithDefault S.empty l fb) $ successors n
+          btOC n fb = M.unionsWith movJoin $ map (\l -> mapFindWithDefault M.empty l fb) $ successors n
 
-          invalidate :: VarName -> S.Set MSInst -> S.Set MSInst
-          invalidate var fact = S.filter (not . dependsOn var) fact'
+          invalidate :: VarName -> MotionMap -> MotionMap
+          invalidate var fact = trace ("invalidating " ++ (show var) ++ " in " ++ (show fact)) filterMov (not . dependsOn var) fact'
               where fact'
-                        | killIndStores = S.filter (not . isIndStore) fact
+                        | killIndStores = filterMov (not . isIndStore) fact
                         | otherwise = fact
-                    killIndStores = S.null $ S.filter (dependsOn var) indStores
-                    indStores = S.filter isIndStore fact
+                    killIndStores = M.null $ filterKey (dependsOn var) indStores
+                    indStores = filterKey isIndStore fact
                     dependsOn :: VarName -> MSInst -> Bool
-                    dependsOn var = S.member var . instDepend
+                    dependsOn var n = M.member var $ tt n $ instDepend n
+                    filterMov :: (MSInst -> Bool) -> MotionMap -> MotionMap
+                    filterMov f = M.mapWithKey change
+                        where change :: MSInst -> Movable -> Movable
+                              change a b
+                                  | f a = b
+                                  | otherwise = tr "FOUND IMMOV" Immov
 
-          invalidateList :: [VarName] -> S.Set MSInst -> MotionSet
+          invalidateList :: [VarName] -> MotionMap -> MotionMap
           invalidateList vars initial = foldr invalidate initial vars
 
 motionTransfer :: BwdTransfer MidIRInst MotionFact
-motionTransfer = pairBwdTransfer motionSetTransfer liveness
+motionTransfer = pairBwdTransfer motionMapTransfer liveness
 
 motionRewrite :: forall m . FuelMonad m => BwdRewrite m MidIRInst MotionFact
 motionRewrite = noBwdRewrite
@@ -195,7 +215,11 @@ motionLoop facts loop graph = do
     put $ S.union alreadyMoved toMove
     return $ GMany NothingO blockMap'' NothingO
     where GMany _ blockMap _ = graph
-          naiveToMove = t $ fst $ mapFindWithDefault (error "couldn't find label for licm") (basicHeader loop) (t facts)
+          isMov :: Movable -> Bool
+          isMov Mov = True
+          isMov Immov = False
+          naiveToMove = M.keysSet $ M.filter isMov $ t $ fst fact
+          fact = mapFindWithDefault (error "couldn't find label for licm") (basicHeader loop) (t facts)
           predBlock = basicHeaderPredBlock (t loop) blockMap
           (entry, middle, exit) = blockToNodeList predBlock
           instList :: S.Set MSInst -> [MidIRInst O O]
