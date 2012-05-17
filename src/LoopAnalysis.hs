@@ -724,7 +724,7 @@ analyzeParallelizationPass midir = trace' (show worthItCosts) worthIt
                     
           noCrossDependency :: Loop -> (MidIRExpr, MidIRExpr) -> Bool 
           noCrossDependency loop (expr1, expr2) 
-              = case trace' ("HERE WITH: " ++ show (loop_header loop) ++ " EXPR1: " ++ show expr1 ++ " EXPR2: " ++ show expr2) $ (findLabel expr1, findLabel expr2) of 
+              = case trace' ("HERE TO SIMPLIFY " ++ show (loop_header loop) ++ " EXPR1: " ++ show expr1 ++ " EXPR2: " ++ show expr2) $ (findLabel expr1, findLabel expr2) of 
                   (Nothing, _) -> False 
                   (_, Nothing) -> False 
                   (Just l1, Just l2) 
@@ -746,7 +746,7 @@ analyzeParallelizationPass midir = trace' (show worthItCosts) worthIt
           -- j1, j2 >= jmin and j1, j2 <= jmax-1
           noLinSoln :: Loop -> FloatExpr -> FloatExpr -> Bool 
           noLinSoln loop expr1 expr2 
-              = trace' ("HERE WITH " ++ show (loop_header loop) ++ " " ++ show glpkFailGT) $ concreteBounds && (noGreaterSoln || glpkFailGT) && (noLessSoln || glpkFailLT)
+              = trace' ("HERE IN NO LIN " ++ show (loop_header loop) ++ " " ++ show linFunc1 ++ " " ++ show testEval) $ concreteBounds && (noGreaterSoln || glpkFailGT) && (noLessSoln || glpkFailLT)
               where noLessSoln = case ltCode of 
                                    Success -> trace' ("SUCCESS " ++ show (loop_header loop)) False
                                    v -> trace' (show v) True
@@ -754,7 +754,7 @@ analyzeParallelizationPass midir = trace' (show worthItCosts) worthIt
                                       Success -> trace' ("SUCCESS " ++ show (loop_header loop)) False 
                                       v -> trace' (show v) True
                     (ltCode, maybeLTSolution) = unsafePerformIO $ LP.evalLPT lessLP 
-                    (gtCode, maybeGTSolution) = unsafePerformIO $ LP.evalLPT greaterLP
+                    (gtCode, maybeGTSolution) = trace' "LOOKING UP SOLUTION: " $ unsafePerformIO $ LP.evalLPT greaterLP
 
 
                     glpkFailLT = case maybeLTSolution of 
@@ -765,6 +765,7 @@ analyzeParallelizationPass midir = trace' (show worthItCosts) worthIt
                                    Just (_, solution) -> (solution Map.! "parallel_const") /= 1
                                    Nothing -> False
 
+                    testEval = LP.execLPM testLP
                     concreteBounds = isJust bounds && isJust indConstraints
                     loopVarInfo = Map.union myVariables $ Map.union parentVars childVars 
                     parentVars =  Map.fromList [(n, (i, p)) | p <- loopParents Map.! loop, i@(n, _, _, _) <- S.toList $ loop_variables p]
@@ -778,15 +779,15 @@ analyzeParallelizationPass midir = trace' (show worthItCosts) worthIt
                     addUsedVariables set _ = set
 
                     bounds :: Maybe (Map.Map VarName (FloatExpr, FloatExpr))
-                    bounds = if isJust normalBounds then normalBounds else arrayBounds
-                    arrayBounds = Just $ Map.fromList [(var, (FLit 0, FLit $ fromIntegral $ max 10000 $ fromMaybe 0 $ Map.lookup myLoop maxArrayAccess)) | ((var,_,_,_), myLoop) <- Map.elems loopVarInfo ]
+                    bounds = normalBounds
+                    arrayBounds = Just $ Map.fromList [(var, (FLit 0, FLit $ fromIntegral $ min 2000 $ fromMaybe 0 $ Map.lookup myLoop maxArrayAccess)) | ((var,_,_,_), myLoop) <- Map.elems loopVarInfo ]
 
                     normalBounds = foldM maybeAddBounds Map.empty $ S.toList usedVariables
                     maybeAddBounds :: (Map.Map VarName (FloatExpr, FloatExpr)) -> VarName -> Maybe (Map.Map VarName (FloatExpr, FloatExpr))
                     maybeAddBounds map var 
-                        = do ((_, init, end, inc), myLoop) <- Map.lookup var loopVarInfo
+                        = do ((_, init, end, inc), myLoop) <-  Map.lookup var loopVarInfo
                              initExpr <- linConstFloatExpr myLoop init
-                             endExpr <- linConstFloatExpr myLoop end
+                             endExpr <- trace' ("THIS: " ++ show end ++ (show $ linConstFloatExpr myLoop end)) $ linConstFloatExpr myLoop end
                              case inc > 0 of 
                                True -> return $ Map.insert var (initExpr, endExpr) map 
                                False -> return $ Map.insert var (endExpr, initExpr) map 
@@ -805,10 +806,16 @@ analyzeParallelizationPass midir = trace' (show worthItCosts) worthIt
                     
                     makeLinFuncs suf (f1, f2) = (makeLinFunc suf f1, makeLinFunc suf f2)
 
+                    normalizeLinFuncs :: LinFunc String Double -> LinFunc String Double -> (LinFunc String Double, LinFunc String Double)
+                    normalizeLinFuncs lf1 lf2 = let smallestCoeff = min (minimum $ Map.elems (Map.delete "parallel_const" lf1)) (minimum $ Map.elems (Map.delete "parallel_const" lf2))
+                                                    lf1' = Map.map (\d -> d*(1/smallestCoeff)) lf1
+                                                    lf2' = Map.map (\d -> d*(1/smallestCoeff)) lf2
+                                                in (lf1', lf2')
+
                     -- Now need to create the constraints on all of the non-base variables 
                     -- So they're all a linear function of i
                     indConstraints :: Maybe (Map.Map VarName FloatExpr)
-                    indConstraints = foldM maybeAddConstraint Map.empty $ S.toList usedVariables
+                    indConstraints = trace' "GOT HERE?" $ foldM maybeAddConstraint Map.empty $ S.toList usedVariables
 
                     maybeAddConstraint map var 
                         | var == myLoopVar = Just map
@@ -826,12 +833,14 @@ analyzeParallelizationPass midir = trace' (show worthItCosts) worthIt
                     expr1Con = Map.fromList [( (show k) ++ "_1", makeLinFunc "_1" v) | (k, v) <- Map.toList mCon]
                     expr2Con = Map.fromList [( (show k) ++ "_2", makeLinFunc "_2" v) | (k, v) <- Map.toList mCon]
 
-                    linFunc1 :: LinFunc String Double
-                    linFunc1 = makeLinFunc "_1" expr1
+                    linFunc1' :: LinFunc String Double
+                    linFunc1' = makeLinFunc "_1" expr1
 
-                    linFunc2 :: LinFunc String Double 
-                    linFunc2 = makeLinFunc "_2" expr2
-
+                    linFunc2' :: LinFunc String Double 
+                    linFunc2' = makeLinFunc "_2" expr2
+                    
+                    (linFunc1, linFunc2) = normalizeLinFuncs linFunc1' linFunc2' 
+                    
                     makeLinFunc :: String -> FloatExpr -> LinFunc String Double 
                     makeLinFunc suf (FVar v) = var $ ((show v) ++ suf) 
                     makeLinFunc suf (FLit i) = Map.singleton "parallel_const" i
@@ -866,6 +875,7 @@ analyzeParallelizationPass midir = trace' (show worthItCosts) worthIt
                                                           LP.leq (var v) u) $ Map.toList officialBounds
                                 -- Add the constraints to all of our looping variables
                                  mapM (\(v, c) -> LP.equal (var v) c) $ Map.toList officialConstraints
+                                 mapM (\v -> LP.equal (var $ (show v) ++ "_1") (var $ (show v) ++ "_2")) $ [v | v <- Map.keys parentVars, S.member v usedVariables]
                                  LP.varEq "parallel_const" 1 -- and the "constant" variable should always be 1
                                 -- Make our main looping variables (the current loop) inequal 
                                 -- Specifically for this LP, make it < 
@@ -939,8 +949,8 @@ analyzeParallelizationPass midir = trace' (show worthItCosts) worthIt
           -- of available loop induction variables. Returns Nothing if the 
           -- expression can't be placed in linear constant form
           linConstFloatExpr :: Loop -> FloatExpr -> Maybe FloatExpr 
-          linConstFloatExpr loop expr = do newExpr <- trace' (show expr) $ rejectObviousProblems expr
-                                           case hasNonLoopVariables newExpr of 
+          linConstFloatExpr loop expr = do newExpr <- trace' ("YES " ++ show expr) $ rejectObviousProblems expr
+                                           case trace' (show newExpr) $ hasNonLoopVariables newExpr of 
                                              True -> do newExpr <- tryRemoveNonLoops newExpr
                                                         linConstFloatExpr loop newExpr
                                              False -> do newExpr <- trace' (show (makeLinear newExpr)) $ return $ makeLinear newExpr 
@@ -962,9 +972,9 @@ analyzeParallelizationPass midir = trace' (show worthItCosts) worthIt
                         | otherwise = Just expr
 
                     isObviousProblem :: Bool -> FloatExpr -> Bool 
-                    isObviousProblem b (FVar v)
-                        | S.member v variantNames && S.notMember v availableLoopVars = True
-                    isObviousProblem b _ = b 
+                    isObviousProblem b e@(FVar v)
+                        | S.member v variantNames && S.notMember v availableLoopVars = trace' (show e) True
+                    isObviousProblem b e = trace' (show e) b 
 
                     rejectNonLinear :: FloatExpr -> Maybe FloatExpr 
                     rejectNonLinear expr 
