@@ -32,6 +32,27 @@ noLattice = DataflowLattice
             { fact_name = "no lattice"
             , fact_bot = ()
             , fact_join = const $ const $ const (NoChange, ()) }
+            
+noTransfer :: FwdTransfer MidIRInst ()
+noTransfer = mkFTransfer ft
+    where
+      ft :: MidIRInst e x -> () -> Fact x ()
+      ft (Branch _ l) f = mapSingleton l f
+      ft (ThreadReturn _ l) f = mapSingleton l f
+      ft (Parallel _ ll _ _ el) f = mkFactBase noLattice
+                                    [(ll, ()), (el, ())]
+      ft (CondBranch _ _ tl fl) f = mkFactBase noLattice
+                                    [(tl, ()), (fl, ())]
+      ft (Return _ _ _) f = mapEmpty
+      ft (Fail _) f = mapEmpty
+      ft Label{} f = f
+      ft PostEnter{} f = f
+      ft Enter{} f = f
+      ft Store{} f = f
+      ft DivStore{} f = f
+      ft IndStore{} f = f
+      ft Call{} f = f
+      ft Callout{} f = f
 
 setLattice :: Ord a => DataflowLattice (S.Set a)
 setLattice = DataflowLattice
