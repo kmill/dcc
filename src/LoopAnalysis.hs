@@ -30,8 +30,9 @@ import qualified Data.Map as Map
 -- The threshhold for when we think it's worth parallelizing a loop 
 loopCostThreshold :: Double 
 loopCostThreshold = 1000000
+--loopCostThreshold = 0
 
-trace' a x = x
+trace' a x = x 
 
 -- debug function for map find 
 mFDebug :: (Ord k, Show k) => k -> Map.Map k v -> v 
@@ -46,6 +47,7 @@ mFDebug k map = case Map.lookup k map of
 data FloatExpr = ILit Int64
                | FLit Double 
                | FVar VarName 
+               | FLoad MidIRExpr
                | FUnOp UnOp FloatExpr 
                | FBinOp BinOp FloatExpr FloatExpr 
                  deriving (Eq, Ord)
@@ -53,6 +55,7 @@ data FloatExpr = ILit Int64
 instance Show FloatExpr where 
     showsPrec _ (ILit x) = shows x 
     showsPrec _ (FLit x) = shows x
+    showsPrec _ (FLoad expr) = showString "*(" . showsPrec 0 expr . showString ")"
     showsPrec _ (FVar v) = shows v 
     showsPrec p (FUnOp op expr) = showParen (p>0) (shows op . showString " " . showsPrec 1 expr)
     showsPrec p (FBinOp op ex1 ex2)
@@ -61,6 +64,7 @@ instance Show FloatExpr where
 exprToFloatExpr :: MidIRExpr -> Maybe FloatExpr 
 exprToFloatExpr (Lit _ i) = Just $ ILit i 
 exprToFloatExpr (Var _ v) = Just $ FVar v 
+exprToFloatExpr (Load _ expr) = Just $ FLoad expr
 exprToFloatExpr (UnOp _ op expr) 
     | op == OpNeg = do expr' <- exprToFloatExpr expr 
                        return $ (FUnOp op expr')
@@ -83,6 +87,7 @@ fold_FEE :: (a -> FloatExpr -> a) -> a -> FloatExpr -> a
 fold_FEE f z e@(ILit _) = f z e 
 fold_FEE f z e@(FLit _) = f z e 
 fold_FEE f z e@(FVar _) = f z e 
+fold_FEE f z e@(FLoad _) = f z e 
 fold_FEE f z e@(FUnOp _ expr) = f (fold_FEE f z expr) e 
 fold_FEE f z e@(FBinOp _ expr1 expr2) = f (fold_FEE f (fold_FEE f z expr2) expr1) e 
 
@@ -90,6 +95,7 @@ mapFEE :: MaybeChange FloatExpr -> MaybeChange FloatExpr
 mapFEE f e@(ILit _) = f e 
 mapFEE f e@(FLit _) = f e 
 mapFEE f e@(FVar _) = f e 
+mapFEE f e@(FLoad _) = f e
 mapFEE f e@(FUnOp op expr) 
     = case mapFEE f expr of 
         Nothing -> f e 
@@ -221,7 +227,7 @@ findInductionVariables pGraph mlabels domins webs (header, loopBack, body)
     = case limitVar of 
         Nothing -> Nothing
         Just lv -> let bv = makeBaseVar lv 
-                   in Just (lv, bv, makeRestOfTheVariables lv (makeBaseVar lv))
+                   in Just (lv, bv, makeRestOfTheVariables lv bv)
     where loopWebs = websIntersectingBlocks webs body 
           varNameToWebID = Map.fromList [(webVar $ getWeb id webs, id) | id <- S.toList loopWebs]
           -- Now that we have a list of the webs, look at each one and determine if it's an induction variable
@@ -252,32 +258,40 @@ findInductionVariables pGraph mlabels domins webs (header, loopBack, body)
 
           makeLimitVar :: MidIRExpr -> Maybe IndVar
           makeLimitVar (BinOp _ CmpGTE (Var _ v) expr)
+              | Map.member v varNameToInfo
               = do fExpr <- exprToFloatExpr expr 
                    (v, init, inc) <- Map.lookup v varNameToInfo
                    guard $ inc > 0
                    return (v, init, minOne fExpr, inc)
           makeLimitVar (BinOp _ CmpGT (Var _ v) expr)
+              | Map.member v varNameToInfo
               = do fExpr <- exprToFloatExpr expr 
                    (v, init, inc) <- Map.lookup v varNameToInfo
                    guard $ inc > 0 
                    return (v, init, fExpr, inc) 
-          makeLimitVar (BinOp _ CmpLTE (Var _ v) expr) 
+          makeLimitVar (BinOp _ CmpLTE (Var _ v) expr)
+              | Map.member v varNameToInfo
               = do fExpr <- exprToFloatExpr expr 
                    (v, init, inc) <- Map.lookup v varNameToInfo 
                    guard $ inc < 0 
                    return (v, init, plusOne fExpr, inc)
           makeLimitVar (BinOp _ CmpLT (Var _ v) expr) 
+              | Map.member v varNameToInfo
               = do fExpr <- exprToFloatExpr expr 
                    (v, init, inc) <- Map.lookup v varNameToInfo 
                    guard $ inc < 0 
                    return (v, init, fExpr, inc)
-          makeLimitVar (BinOp _ CmpGTE expr (Var _ v)) 
+          makeLimitVar (BinOp _ CmpGTE expr (Var _ v))
+              | Map.member v varNameToInfo
               = makeLimitVar (BinOp dsp CmpLTE (Var dsp v) expr)
           makeLimitVar (BinOp _ CmpGT expr (Var _ v))
+              | Map.member v varNameToInfo
               = makeLimitVar (BinOp dsp CmpLT (Var dsp v) expr) 
           makeLimitVar (BinOp _ CmpLTE expr (Var _ v)) 
+              | Map.member v varNameToInfo
               = makeLimitVar (BinOp dsp CmpGTE (Var dsp v) expr)
-          makeLimitVar (BinOp _ CmpLT expr (Var _ v)) 
+          makeLimitVar (BinOp _ CmpLT expr (Var _ v))
+              | Map.member v varNameToInfo 
               = makeLimitVar (BinOp dsp CmpGT (Var dsp v) expr) 
           makeLimitVar _ = Nothing
 
@@ -460,8 +474,8 @@ findLoopVariables graph headerDomin headerBlock loopbackBlock
           findIncValue v (BinOp _ OpAdd (Lit _ i) (Var _ x)) =  Just i 
           findIncValue v _ = Nothing
 
-calculateLoopCosts :: NonLocal n => Graph n C C -> S.Set BasicLoop -> S.Set Loop -> Map.Map Loop Double
-calculateLoopCosts graph basicLoops loops = concreteLoopCosts
+calculateLoopCosts :: NonLocal n => Graph n C C -> Map.Map Loop Int64 -> S.Set BasicLoop -> S.Set Loop -> Map.Map Loop Double
+calculateLoopCosts graph maxArrayAccess basicLoops loops = concreteLoopCosts
     where headerToBasicLoop = Map.fromList [(h, l) | l@(h, _, _) <- S.toList basicLoops]
           headerToConcreteLoop = Map.fromList [(loop_header l, l) | l <- S.toList loops] 
 
@@ -509,7 +523,10 @@ calculateLoopCosts graph basicLoops loops = concreteLoopCosts
                                in case floorFloatExpr (makeLinear end) of 
                                     ILit i
                                           | (fromIntegral i) > defaultIterations -> fromIntegral i
-                                    _ -> defaultIterations
+                                    _ -> case Map.lookup loop maxArrayAccess of 
+                                           Just x
+                                               | (fromIntegral x) > defaultIterations -> fromIntegral x
+                                           _ -> defaultIterations
                     
 
 findIterationMap :: MidIRRepr -> Map.Map Label Int
@@ -591,7 +608,7 @@ analyzeParallelizationPass midir = trace' (show worthItCosts) worthIt
     where basicLoops = findBasicLoops domins graph mlabels
           -- Let's see if we can identify induction vars
           loops = S.fromList $ catMaybes [insertIndVars l | l <- S.toList basicLoops]
-          loopCosts = calculateLoopCosts graph basicLoops loops
+          loopCosts = calculateLoopCosts graph maxArrayAccess basicLoops loops
           worthItCosts = Map.fromList [(loop_header l, c) | (l, c) <- Map.toList loopCosts, S.member l worthIt]
           niceLoopCosts = Map.fromList [(loop_header l, v) | (l, v) <- Map.toList loopCosts]
           insertIndVars :: BasicLoop -> Maybe Loop 
@@ -599,7 +616,14 @@ analyzeParallelizationPass midir = trace' (show worthItCosts) worthIt
               = do (lv, bv, ivs) <- findInductionVariables pGraph mlabels domins webs b 
                    return $ Loop header body ivs lv bv
                           
-          
+          -- A map of the max sizes of the arrays used by the loops. Useful as a heuristic if loop bounds are unknown.
+          arraySizes = Map.fromList [(name, fromMaybe 1 size) | MidIRField _ name size <- midIRFields midir]
+          maxArrayAccess = Map.fromList [(l, maxArraySize l) | l <- S.toList loops]
+          maxArraySize loop = let (loads, stores) = findLoopLoadsAndStores loop graph 
+                                  fields = S.map (fromJust . findLabel) $ S.union loads stores
+                                  arrayAccesses = [fromMaybe 1 $ Map.lookup field arraySizes | field <- S.toList fields]
+                              in if (null arrayAccesses) then 0 else (maximum arrayAccesses)
+
           -- First pass, removes obviously non-parallel loops (such as loops that contain returns or callouts)
           noBreaksRetsCallsLoops = S.filter (\l -> noCalls l && noRets l && noBreaks l) loops 
           -- Second pass, removes loops that write to values that aren't loop invariant (i.e. for loops calculating a sum)
@@ -754,7 +778,10 @@ analyzeParallelizationPass midir = trace' (show worthItCosts) worthIt
                     addUsedVariables set _ = set
 
                     bounds :: Maybe (Map.Map VarName (FloatExpr, FloatExpr))
-                    bounds = foldM maybeAddBounds Map.empty $ S.toList usedVariables
+                    bounds = if isJust normalBounds then normalBounds else arrayBounds
+                    arrayBounds = Just $ Map.fromList [(var, (FLit 0, FLit $ fromIntegral $ max 10000 $ fromMaybe 0 $ Map.lookup myLoop maxArrayAccess)) | ((var,_,_,_), myLoop) <- Map.elems loopVarInfo ]
+
+                    normalBounds = foldM maybeAddBounds Map.empty $ S.toList usedVariables
                     maybeAddBounds :: (Map.Map VarName (FloatExpr, FloatExpr)) -> VarName -> Maybe (Map.Map VarName (FloatExpr, FloatExpr))
                     maybeAddBounds map var 
                         = do ((_, init, end, inc), myLoop) <- Map.lookup var loopVarInfo
@@ -858,6 +885,7 @@ analyzeParallelizationPass midir = trace' (show worthItCosts) worthIt
                                                          LP.leq (var v) u) $ Map.toList officialBounds
                                 -- Add the constraints to all of our looping variables
                                 mapM (\(v, c) -> LP.equal (var v) c) $ Map.toList officialConstraints
+                                mapM (\v -> LP.equal (var $ (show v) ++ "_1") (var $ (show v) ++ "_2")) $ [v | v <- Map.keys parentVars, S.member v usedVariables]
                                 LP.varEq "parallel_const" 1
                                 --LP.varEq "parallel_const" 1 -- and the "constant" variable should always be 1
                                 -- Make our main looping variables (the current loop) inequal 
@@ -880,6 +908,7 @@ analyzeParallelizationPass midir = trace' (show worthItCosts) worthIt
                                                             LP.leq (var v) u) $ Map.toList officialBounds
                                    -- Add the constraints to all of our looping variables
                                    mapM (\(v, c) -> LP.equal (var v) c) $ Map.toList officialConstraints
+                                   mapM (\v -> LP.equal (var $ (show v) ++ "_1") (var $ (show v) ++ "_2")) $ [v | v <- Map.keys parentVars, S.member v usedVariables]
                                    LP.varEq "parallel_const" 1 -- and the "constant" variable should always be 1
                                    -- Make our main looping variables (the current loop) inequal 
                                    -- Specifically for this LP, make it > 
@@ -910,7 +939,7 @@ analyzeParallelizationPass midir = trace' (show worthItCosts) worthIt
           -- of available loop induction variables. Returns Nothing if the 
           -- expression can't be placed in linear constant form
           linConstFloatExpr :: Loop -> FloatExpr -> Maybe FloatExpr 
-          linConstFloatExpr loop expr = do newExpr <- rejectObviousProblems expr
+          linConstFloatExpr loop expr = do newExpr <- trace' (show expr) $ rejectObviousProblems expr
                                            case hasNonLoopVariables newExpr of 
                                              True -> do newExpr <- tryRemoveNonLoops newExpr
                                                         linConstFloatExpr loop newExpr
