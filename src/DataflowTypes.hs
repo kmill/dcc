@@ -41,8 +41,8 @@ instance CheckpointMonad m => CheckpointMonad (StupidFuelMonadT m) where
                                                     return (fuel, ()))
 
 instance Monad m => FuelMonad (StupidFuelMonadT m) where
-    getFuel = StupidFuelMonadT (\fuel -> return (fuel, fuel))
-    setFuel f = StupidFuelMonadT (\fuel -> return (f, ()))
+    getFuel = return maxBound --StupidFuelMonadT (\fuel -> return (fuel, fuel))
+    setFuel f = return () --StupidFuelMonadT (\fuel -> return (f, ()))
 
 instance FuelMonadT StupidFuelMonadT where
     runWithFuel fuel m = evalStupidFuelMonad m fuel

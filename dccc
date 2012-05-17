@@ -5,7 +5,8 @@
 optstring="--opt=colorspills,deadcodeasm,blockelimasm,betterifyasm -r"
 optstring="--opt=all,-betterifyasm -r"
 optstring="--opt=all,-betterifyasm,-parallelize -r -p 4"
-optstring="--opt=all,-betterifyasm -r -p 4"
+optstring="--opt=all,-parallelize -r"
+optstring="--opt=all -r -p12"
 
 file=$1
 out=$2

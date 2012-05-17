@@ -58,6 +58,8 @@ dataflows copts
       , DFA optDeadCode performDeadCodePass
       , DFA optCondElim performCondElimPass
       , DFA optBlockElim performBlockElimPass
+
+      , DFA optConstProp performConstPropPass        
       , DFA optFlat performFlattenPass
       --, DFA optLICM performLICMPass
       , DFA optCommonSubElim performCSEPass
@@ -66,6 +68,18 @@ dataflows copts
       , DFA optConstProp performConstPropPass
       , DFA optDeadCode performDeadCodePass
       , DFA optUnflat performUnflattenPass 
+        
+      , DFA optConstProp performConstPropPass
+      , DFA optFlat performFlattenPass
+      --, DFA optLICM performLICMPass
+      , DFA optCommonSubElim performCSEPass
+      , DFA optCopyProp performCopyPropPass
+      -- doing constprop after flatten/cse does great good! see tests/codegen/fig18.6.dcf
+      , DFA optConstProp performConstPropPass
+      , DFA optDeadCode performDeadCodePass
+      , DFA optUnflat performUnflattenPass 
+
+        
       , DFA optCopyProp performCopyPropPass
       , DFA optConstProp performConstPropPass
       , DFA optDeadCode performDeadCodePass
@@ -90,8 +104,8 @@ dataflows copts
       optNZP = hasOptFlag "nzp"
       optDeadCode = hasOptFlag "deadcode"
       optBlockElim = hasOptFlag "blockelim"
-      optFlat opts = hasOptFlag "flat" opts || optCommonSubElim opts
-      optUnflat opts = hasOptFlag "unflat" opts || optFlat opts
+      optFlat opts = hasOptFlag "flat" opts
+      optUnflat opts = hasOptFlag "unflat" opts
       optTailcall = hasOptFlag "tailcall"
       optLICM = hasOptFlag "licm"
       optParallelize = hasOptFlag "parallelize"
@@ -133,8 +147,8 @@ performBwdPass = performPass analyzeAndRewriteBwd
 performCSEPass :: MidIRRepr -> RM MidIRRepr 
 performCSEPass midir 
     = do nonTemps <- getVariables midir
-         let nonTemps' = S.unions $ mapElems nonTemps
-         performFwdPass (csePass nonTemps') midir emptyExprFact
+         performFwdPass (csePass nonTemps) midir emptyExprFact
+--         performFwdPass (pairFwd copyPropPass (csePass nonTemps')) midir (fact_bot copyLattice, emptyExprFact)
 
 performLICMPass midir = performBwdPass (licmPass loops) midir emptyMotionFact
     where loops = error "Can't use midir loops to get loops anymore"
@@ -214,17 +228,17 @@ blockElimPass = BwdPass
 flattenPass :: (CheckpointMonad m, FuelMonad m, UniqueNameMonad m)
                => FwdPass m MidIRInst ()
 flattenPass = FwdPass
-              { fp_lattice = nullLattice
-              , fp_transfer = nullTransfer
+              { fp_lattice = noLattice
+              , fp_transfer = noTransfer
               , fp_rewrite = flattenRewrite } 
 
 
 csePass :: (CheckpointMonad m, FuelMonad m, UniqueNameMonad m) 
-           => S.Set VarName -> FwdPass m MidIRInst ExprFact
+           => FactBase (S.Set VarName) -> FwdPass m MidIRInst ExprFact
 csePass nonTemps = FwdPass 
                    { fp_lattice = exprLattice
                    , fp_transfer = exprAvailable nonTemps
-                   , fp_rewrite = cseRewrite nonTemps }
+                   , fp_rewrite = cseRewrite }
 
 licmPass :: (CheckpointMonad m, FuelMonad m, UniqueNameMonad m)
             => S.Set Loop -> BwdPass m MidIRInst MotionFact
@@ -277,7 +291,7 @@ getVariablesPass = BwdPass
             used IndStore{} f = f
             used (Call _ x _ _) f = S.insert x f
             used (Callout _ x _ _) f = S.insert x f
-            used (Parallel _ l x _ _) f = S.insert x $ fact f l
+            used (Parallel _ l x _ l2) f = S.insert x $ fact f l `S.union` fact f l2
             used (Branch _ l) f = fact f l
             used (ThreadReturn _ l) f = fact f l
             used (CondBranch _ _ tl fl) f = fact f tl `S.union` fact f fl
@@ -337,7 +351,7 @@ getLitLabelsPass = BwdPass
             used (IndStore _ e1 e2) f = S.unions [getLabs e1, getLabs e2, f]
             used (Call _ _ _ es) f = f `S.union` S.unions [getLabs e | e <- es]
             used (Callout _ _ _ es) f = f `S.union` S.unions [getLabs e | e <- es]
-            used (Parallel _ l x _ _) fs = fact fs l
+            used (Parallel _ l x _ ll) fs = fact fs l `S.union` fact fs ll
             used (Branch _ l) f = fact f l
             used (ThreadReturn _ l) f = fact f l
             used (CondBranch _ e tl fl) f = getLabs e `S.union` fact f tl `S.union` fact f fl

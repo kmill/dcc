@@ -333,4 +333,4 @@ buildAdjLists mlabels graph usedef moves
                                  mapEmpty
                     return f
           facts :: FactBase AdjListFact
-          facts = runGM $ evalStupidFuelMonad doAL 2222222
+          facts = runGM $ evalStupidFuelMonad doAL maxBound

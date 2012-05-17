@@ -179,7 +179,7 @@ collectDU :: [Label] -> Graph (PNode Asm) C C -> M.Map Label (S.Set DU)
 collectDU mlabels graph
     = M.fromList $ map (\l -> (l, getDUs $ fromJust $ lookupFact l f)) mlabels
       where f :: FactBase DUBuildFact
-            f = I.runGM $ evalStupidFuelMonad getf 2222222
+            f = I.runGM $ evalStupidFuelMonad getf maxBound
             getf :: RM (FactBase DUBuildFact)
             getf = do (_, f, _) <- analyzeAndRewriteBwd
                                    duPass
@@ -330,7 +330,7 @@ buildAdjLists mlabels graph usedef
                                  mapEmpty
                     return f
           facts :: FactBase AdjListFact
-          facts = I.runGM $ evalStupidFuelMonad doAL 2222222
+          facts = I.runGM $ evalStupidFuelMonad doAL maxBound
 
 -- | Inserts moves for each fixed register so that we can properly
 -- spill them.  This is run before register allocation itself.  Only

@@ -1121,7 +1121,7 @@ findDominators graph mlabels = domins
                             (JustC mlabels)
                             graph
                             (mapFromList (map (\l -> (l, fact_bot dominatorLattice)) mlabels)))
-           domins' = runWithFuel 2222222 dominAnalysis
+           domins' = runWithFuel maxBound dominAnalysis
 
 generalDominPass :: (CheckpointMonad m, FuelMonad m, UniqueNameMonad m, NonLocal n)
                  => FwdPass m n DominFact 
@@ -1169,7 +1169,7 @@ findReaching loopBack loopHeader graph mlabels
                            (JustC mlabels)
                            graph
                            mapEmpty)
-            reaching' = runWithFuel 2222222 reachingRun
+            reaching' = runWithFuel maxBound reachingRun
             reachingPass = BwdPass reachingLattice (reachingAnalysis loopBack loopHeader) noBwdRewrite
             initialReaching = S.fromList [l | (l, b) <- mapToList reaching, b == True]
             failReaching = S.fold addClosedSuccs initialReaching initialReaching
