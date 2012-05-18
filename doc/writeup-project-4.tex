@@ -8,14 +8,19 @@
 \begin{document}
 \maketitle
 
+\section {Instructions for Building and Running the Project}
+
 \section {Overview}
+
+
 
 \section {Division of Work}
 
 The work was divided as follows. Kyle Miller designed and implemented
 the register allocator along with a slew of peephole optimizations
 that occurred at the code generation level. Kyle also wrote part of
-the code generator portion of the loop parallelizer. Alec Thomson wrote all of
+the code generator portion of the loop parallelizer and wrote web
+analysis for the Mid IR that was essential for loop analysis. Alec Thomson wrote most of
 the loop analysis routines, including all of the loop parallelization
 analysis, the dominator analysis, the loop nesting analysis, and
 several loop heuristics that were used by the register allocator and
@@ -28,9 +33,16 @@ manage the considerable test-suite. Steven Valdez wrote an expression
 optimization involving elimination of conditional statements and also
 helped manage the test-suite. 
 
+\section {Algebraic Simplification} 
+
+
 \section {Expression Unflattener}
 
-The purpose of the expression unflattener is to return the mid-ir to ``Tree-Form'' after CSE is performed while maintaining the benefits gained from CSE so that Instruction Selection Peephole Optimizations can be easily performed by the code generator. The design, implementation, and test plan of the unflattener are described below. 
+The purpose of the expression unflattener is to return the mid-ir to
+``Tree-Form'' after CSE is performed while maintaining the benefits
+gained from CSE so that optimized Instruction Selection can be easily
+performed by the code generator. The design, implementation, and test
+plan of the unflattener are described below.
 
 \subsection{Design of Expression Unflattener}
 
@@ -69,11 +81,23 @@ while the mid-ir is returned to tree-form.
 
 \subsection{Implementation of Expression Unflattener}
 
-The expression unflattener is implemented in the Dataflow.hs source file. The algorithm is roughly the same as the one described above with some augmentations to allow for easy fixed point detection. 
+The expression unflattener is implemented in the Dataflow.hs source
+file. The algorithm is roughly the same as the one described above
+with some augmentations to allow for easy fixed point detection.
 
-The first thing the implementation does is use the Hoopl liveness analysis implemented as part of the previous project to obtain a factbase of the live variables at the start of every block. Next it maps the ``UnflattenBlock'' function across every block in the graph to obtain a new graph with every block flattened to a fixed point. The ``UnflattenBlock'' function will call itself recursively if it detects that it is returning a changed graph as a result of its modifications. When ``UnflattenBlock'' no longer has an effect, the algorithm terminates. 
+The first thing the implementation does is use the Hoopl liveness
+analysis implemented as part of the previous project to obtain a
+factbase of the live variables at the start of every block. Next it
+maps the ``UnflattenBlock'' function across every block in the graph
+to obtain a new graph with every block flattened to a fixed point. The
+``UnflattenBlock'' function will call itself recursively if it detects
+that it is returning a changed graph as a result of its
+modifications. When ``UnflattenBlock'' no longer has an effect, the
+algorithm terminates.
 
-After unflattening every block in the graph, the algorithm then concludes by performing dead code elimination again to eliminate assignments to temporaries that are no longer being used. 
+After unflattening every block in the graph, the algorithm then
+concludes by performing dead code elimination again to eliminate
+assignments to temporaries that are no longer being used.
 
 \subsection{Experimental Results of Expression Unflattener}
 
@@ -83,6 +107,11 @@ simple program. The second figure shows how the unflattener maintains
 the benefits obtained from CSE. 
 
 % TODO: Put the before and after graphs right here for unflattentest1 and unflattentest2
+
+\section {Conditional Elimination} 
+
+
+\section {Register Allocation}
 
 \section{Loop Parallelizer}
 
@@ -116,7 +145,7 @@ solve the cross dependency constraints.
 \subsubsection {Dominator Analysis} 
 
 A useful first step in performing loop analysis was to discover the
-dominator spectrum of the midir. To do so, we used a simple forwards
+dominator map of the midir. To do so, we used a simple forwards
 dataflow analysis using Hoopl. The fact type was a set of dominators
 while the join function was set intersection with bottom being
 represented by the abstract ``Bot'' type. 
@@ -126,9 +155,9 @@ dominators at entry and exit points of the blocks. Ultimately, Hoopl
 took care of most of the analysis and there was no need to rewrite any
 portion of the graph. 
 
-The dominator spectrum produced by this analysis was then a map from
+The dominator map produced by this analysis was then a map from
 block labels to the sets of dominators of those blocks. The dominator
-spectrum proved essential to the discovery of loops, loop induction
+map proved essential to the discovery of loops, loop induction
 variables, and loop invariant expressions and variables. 
 
 \subsubsection {Loop Identification}
@@ -142,6 +171,63 @@ of the ``Natural Loop'' can be found by looking for all of the blocks
 that are capable of reaching the loop-back \emph{without} travelling
 through the loop-header.  
 
+To find all of the blocks in the loop body, another custom dataflow
+analysis was performed called ``loop-reaching'' analysis that
+ultimately identified all the blocks in the control-flow graph that
+could reach the loop-back without travelling through the
+loop-header. This was a backwards dataflow analysis with a boolean
+fact type that returned the set of blocks belonging to the natural
+loop body. 
+
+After the body of the natural loop was discovered, additional blocks
+needed to be added to the loop body that were not caught by the
+reaching analysis. These blocks were those that ended in return or
+fail statements and thus wouldn't be identified as part of the natural
+loop but should be considered to be part of the loop body. In
+particular fail statements were an essential part of the loop body as
+they were placed there by run-time array bounds checks. 
+
+\subsubsection {Induction Variable Identification} 
+
+After loop bodies were identified, the next was identification of the
+base induction variables. Since loop analysis is done at the Mid-IR,
+identification of base induction variables is slightly more
+complicated than just looking at the variable used in the decleration
+of a for loop. Fortunately, since the process identifies any base
+induction variable without looking at high level code, while loops and
+for loops can be analyzed identically. For example, at the mid ir
+level, the code 
+
+\begin{verbatim} 
+
+for(i=0; N) { 
+// Do Stuff
+}
+
+\end{verbatim}
+
+\noindent is effectively identical to 
+
+\begin{verbatim} 
+
+i=0; 
+while(i < N) { 
+// Do Stuff 
+i+=1;
+}
+
+\end{verbatim} 
+
+\noindent To aid in identification of induction variables, a set of
+mid level ``webs'' were constructed for the mid ir graph. The mid
+level webs are a set of Def-Use chains that are essentially the webs
+defined in the register allocation lecture. Once a set of webs has
+been produced for the entire mid level graph, 
+
+\subsubsection {Loop Invariance Analysis} 
+
+
+\subsubsection {Dependency Analysis}
 
 \subsection{Code Generation}
 
@@ -159,7 +245,10 @@ only execute some of the loop's executions in each run.
 Below are some examples of some code that gets generated by the
 parallelizer. With a loop cost threshold of about 1000000, we found
 that parallelization could provide up to a 75\% speedup on
-specifically designed tests (such as matrix multiply). 
+specifically designed tests (such as matrix multiply). On test cases
+that were almost exclusively parallel loops, the parallelizer could
+produce speedup results close to the number of cores on the target
+machine. 
 
 % add some graphs
 
