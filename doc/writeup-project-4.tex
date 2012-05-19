@@ -138,9 +138,10 @@ for-loops and while-loops equally while reaping the full benefits of
 constant and copy propagation. The major stages of loop analysis,
 described in detail below, are Dominator Analysis, Loop
 Identification, Induction Variable Identification, Loop Invariance
-Analysis, and Cross Dependency Analysis. Ultimately, the analyzer uses
-the integer programming method with the help of the glpk-hs library to
-solve the cross dependency constraints. 
+Analysis, Cross Dependency Analysis, and Loop Cost
+Analysis. Ultimately, the analyzer uses the integer programming method
+with the help of the glpk-hs library to solve the cross dependency
+constraints.
 
 \subsubsection {Dominator Analysis} 
 
@@ -199,37 +200,320 @@ for loops can be analyzed identically. For example, at the mid ir
 level, the code 
 
 \begin{verbatim} 
-
 for(i=0; N) { 
 // Do Stuff
 }
-
 \end{verbatim}
 
 \noindent is effectively identical to 
 
 \begin{verbatim} 
-
 i=0; 
 while(i < N) { 
 // Do Stuff 
 i+=1;
 }
-
 \end{verbatim} 
 
 \noindent To aid in identification of induction variables, a set of
 mid level ``webs'' were constructed for the mid ir graph. The mid
 level webs are a set of Def-Use chains that are essentially the webs
 defined in the register allocation lecture. Once a set of webs has
-been produced for the entire mid level graph, 
+been produced for the entire mid-level graph, the webs relevant to a
+specific loop are identified by finding the webs whose defs and uses
+intersect any block in the loop body. The webs are then filtered by
+the following list of requirements to identify potential inductions
+variables.\\ 
+
+\noindent For a web to be an induction variable: 
+
+\begin{enumerate} 
+
+\item It must only have two defs. 
+
+\item One of the defs, called the ``Initial Def'' must occur in one of the
+  dominators of the loop to provide the induction variable with an
+  initial value. This value is recorded as an expression for the
+  initial value of the induction variable. 
+
+\item The other def, called the ``Induction Step'' must exist in the
+  loop and correspond to one of the following patterns: 
+\begin{verbatim}
+i = i + expr 
+i = expr + i
+\end{verbatim}
+where \emph{expr} is an integer literal. 
+
+\item The Induction Step must either dominate all of the other uses of
+  the induction variable in the loop (therefore, be at the start of
+  the loop), or it must dominate the loop-back and contain no uses in
+  between itself and the loop back (therefore, be at the end of the
+  loop). another instance of loop reaching analysis is used here to
+  confirm this. 
+
+\end{enumerate} 
+
+After potential induction variables have been identified by the above
+process, we then look for a ``Limit Induction Variable'' for which we
+can identify a solid upper bound. If we are able to identify an upper
+bound of at least one induction variable, then we are able to identify
+an upper bound for the rest of them. To find a potential upper bound
+for the Limit-IV, we look at the terminating condition in the
+loop-header, i.e. the condition responsible for ultimately terminating
+the loop. If the terminating condition of the loop has nothing to do
+with any of the potential induction variables, then we are unable to
+identify the upper bound of any of the induction variables. 
+
+Assuming we have a valid Limit-IV $u$ with upper bound $e$, initial value
+$b$, and induction step $a$, such that $b \leq u \leq e$ ($e$ is easily
+modified so we have an inclusive upper bound), we can identify a
+``Base Induction Variable'' representing the iteration space of the
+loop. The Base-IV $i$ is related to the Limit-IV $u$ by the equation
+$u = ai + b$. The upper limit of the Base-IV, which is also one less than the total
+number of iterations of the loop, is then $i \leq \frac{e-b}{a}$. If
+the loop does not have a Base-IV by default (as all for-loops do),
+then one is easily constructed by the above process for easier
+calculation of loop dependencies. To account for the fact that the
+inclusive upper bound of the Base-IV might not be an integer, upper
+and lower bounds are converted into a new expression type called
+``FloatExpr'' that allows literal values of type ``Double''.
+
+\subsubsection {Discarding Obviously Non-Parallel Loops} 
+
+After induction variables are discovered, the next step is to remove
+from consideration loops that are obviously not parallelizable because
+they contain calls, callouts, breaks, or returns. This is a farily
+routine step that filters each loop looking for illegal
+instructions. Breaks are discovered by looking for blocks in the loop
+body that can branch out of the loop body (excluding the loop-header for
+which this is required). 
 
 \subsubsection {Loop Invariance Analysis} 
 
+The next step for parallel analysis is to discard any loops that write
+to variables that are used in other iterations of the loop. For
+example, the following code is not parallelizable: 
+
+\begin{verbatim}
+sum = 0;
+for (i=0; N) { 
+sum += A[i] 
+}
+\end{verbatim}
+
+To detect problems like these, the webs intersecting the loop
+(previously identified while searching for induction variables) can be
+split into two categories, ``variant'' and ``invariant''. Invariant
+loop webs are those for which each iteration always defines the web
+before it is used. Variant loop webs are those for which an interation
+could use the variable before defining it, or those variables which are used
+after the termination of the loop. Under this definition, the
+induction variables identified in the previous step would fall in the
+``variant'' category and thus aren't considered during this
+step. Invariant loop webs can be identified easily by checking to see
+if the web is contained completely within the loop body. If so, we can
+assume that each iteration uses it's own unique value of the invariant
+variable and we don't need to worry about loops interfering with each
+other. 
+
+Once the set of variant and invariant loop variables have been
+identified, any loop that makes a write to a variant variable is
+considered not parallelizable and removed from consideration. 
 
 \subsubsection {Dependency Analysis}
 
-\subsection{Code Generation}
+Finally, after loop invariance analysis is performed, the last step of
+parallel loop analysis is to look for cross dependencies between
+memory locations used in the loop. As explained in lecture, there are three
+types of dependencies to watch out for: 
+
+\begin{enumerate} 
+
+\item True Dependencies: An earlier iteration of the loop writes
+  to a location that is read by a later iteration of the loop. 
+
+\item Anti Dependencies: An earlier iteration of the loop reads from a
+  location  that is written by a later iteration of the loop. 
+
+\item Output Dependecies: An earlier iteration of the loop writes to a
+  location that is also written by a later iteration of the loop. 
+
+\end{enumerate} 
+
+While anti dependencies can be eliminated by making a copy of the
+array beforehand and output dependencies can sometimes be eliminated
+by only writing to the array during the final iteration of the loop,
+we actively made a decision not to eliminate these because of the increased
+complexity involved. 
+
+With this decision in mind, we constructed a list of all the potential
+dependencies by finding all of the loads and stores in the loop and
+pairing each load with each store and pairing each store with each
+store. The result is a list of pairs of expressions that can
+potentially conflict. For example, the following code 
+\begin{verbatim}
+for (i = 0; N) { 
+A[2*i] = A[i]
+B[N-i] = A[22*i]
+}
+\end{verbatim}
+would produce this list of potential dependencies: 
+\begin{verbatim}
+[ ($A+2*i, $A+i), ($A+2*i, $A+22*i), ($B+N-i, $A+i), ($B+N-i,
+$A+22*i), ($A+2*i, $A+2*i), ($A+2*i, $B+N-i), ($B+N-i, $A+2*i),
+($B+N-i, $B+N-i) ]
+\end{verbatim}
+
+
+As a first step, if the two expressions
+reference different global fields, we immediately know there is no
+dependency because Decaf does not allow global fields to overlap. For
+example, the following code does not have any cross-dependencies: 
+
+\begin{verbatim}
+for (i = 0; N) {
+A[i+1] = B[i]
+}
+\end{verbatim}
+
+Next, we remove the global field label from the dependency expressions
+and attempt to place both dependency expressions in
+``sum-of-products'' form for easy integration into the integer
+programming solver. 
+
+For an expression to succesfully be placed in ``sum-of-products'' form
+is must be a sum of products of avaialble induction
+variables. Available induction variables include the induction
+variables of the current loop along with the induction variables of
+any parent loops (i.e loops that the current loop is nested inside)
+and any child loops child loops (i.e loops that are nested in the
+current loop). If the dependency expressions contain temporary variables produced
+by CSE (as they often do), the def-use chains contained in the loop
+web information is used to replace temps with original expressions
+when possible. If a dependency expression cannot be placed in sum-of-products form,
+then the loop is removed from consideration for parallelization. 
+
+Once both of the dependency expressions have been placed in
+sum-of-products form, we can build a set of constraints and plug the
+whole system into the integer programming solver to determine if an
+actual dependency exists. 
+
+Given a loop with a Base-IV $j$, nested inside a loop with Base-IV
+$i$, containing a nested loop with Base-IV $k$, and dependency
+expressions $f(i, j, k)$ and $g(i, j, k)$, we construct the following
+set of constraints: 
+
+\begin{enumerate}
+
+\item $f(i, j_1, k_1) = g(i, j_2, k_2)$. Note here that each parent IV
+  must be equal on both sides of the equation since every iteration of
+  an inner loop will operate under the same iteration of an outer
+  loop. Unfortunately, in the implementation submitted, there is a bug
+  where outer loop IVs are allowed to be different values on both
+  sides of the equation. This does not invalidate correctness, but it
+  will cause some inner loops to appear to be not parallelizable when
+  they actually are. 
+
+\item $i, j_1, k_1, i_2, j_2, k_2 \geq 0$. This is true since a
+  Base-IV is defined as always starting at $0$.
+
+\item $i \leq e_i$, $j_1, j_2 \leq e_j$, $k_1, k_1 \leq e_k$
+
+\item For each induction variable $u$ with initial value $b$ and
+  induction step $a$ that is not the Base-IV of its
+  loop (with Base-IV $i$): $u = ai + b$, $u \leq ae_i + b$ 
+
+\item $j_1 \neq j_2$. As explained in lecture, since inequality isn't
+  an affine operator, we construct \emph{two} sets of linear
+  constraints, one with $j_1 \leq j_2-1$ and the other with $j_1 \geq
+  j_2 + 1$, and test to see if a solution exists for either set.
+
+\end{enumerate}
+
+If a solution exists to the integer program defined by these
+constraints, then there must exist a cross dependency and the loop is
+marked not parallelizable. 
+
+To actually solve the integer linear program defined by these
+constraints, we used the glpk-hs library that defines a Haskell
+wrapper around the \emph{GNU Linear Programming Kit} (glpk). For a
+small number of induction variables with upper bounds $\leq 10000$,
+glpk is able to determine if an integer solution exists within a
+reasonable amount of time. If glpk detemines that no solution exists
+to the given linear constraint, then we conclude that there is no
+cross-dependency for the given dependency expressions. If this fact is
+true for all potential dependencies in a loop, the loop analysis
+concludes that the loop is parallelizable and will ultimately return a
+set of parallelizable loops.
+
+
+\subsubsection {Loop Cost Analysis} 
+
+Once the loops for which parallelization is \emph{possible} are
+discovered, we need to identify which of these loops are actually
+\emph{worth} parallelizing. To do so, we created a ``Loop-Cost''
+heuristic that assigns each loop a value representing the
+estimated cost of executing the loop. 
+
+First, we attempt to discover the number of iterations of the loop. If
+the bounds of the loop and initial value of the IVs are known, this is
+a simple algebraic calculation to discover the exact number of
+iterations of the loop. If this information cannot be found, we
+assign a default loop iteration value (which in our case was 50). One
+heuristic we considered implementing but ultimately didn't was using
+the size of the largest array accessed in the loop as an additional
+estimate for loop iterations when they were unknown. 
+
+Once loop iterations are known or estimated for each of the natural loops
+within the program, we do the following to calculate the total loop
+cost: For a loop with $n$ iterations and a set $C$ of \emph{direct child
+  loops} (loops nested within this loop that are not also nested
+within another child of this loop): 
+
+\begin{enumerate}
+
+\item Calculate the loop cost for each of the direct children in
+  $C$. The sum of these costs is $c$. 
+
+\item For each block in the loop body, if the block is not part of a
+  direct child of this loop: Sum all of the instructions in the
+  block. For a more powerful heuristic, each instruction could be
+  given a different cost based on the actual cost of the instruction
+  in assembly. The sum of all of these costs is $b$. 
+
+\item The total loop cost for this loop is then $n\cdot (c+b)$. 
+
+\end{enumerate}
+
+Once the loop costs were determined for every parallelizable loop, we
+chose to only parallelize those whose cost exceeded the ``loop cost
+threshold'' which was a value determined by experimentation to
+determine how costly a loop needed to be before parallelizing it was
+worth the overhead of thread creation. Ultimately, our loop cost
+threshold was determined to be $1000000$. Additionally, if an inner
+and outer loop were both considered parallelizable, we chose to only
+parallelize the outer loop to avoid the additional complications of
+threads spawning additional threads. 
+
+
+\subsubsection {Loop Heuristics for Register Allocation} 
+
+Outside of parallelization analysis, some of the loop analyses were
+useful heuristics for register allocation and thus were provided as
+information to the register allocator. These included the loop nest
+information that revealed how many loops a given block was nested
+inside. For example, the header block of an outer loop would have a
+loop nest of $1$, the header block of a loop nested inside an outer
+loop would have a loop nest of $2$, and a block not contained within
+any loop would have a loop nest of $0$. 
+
+Another heuristic provided to the register allocator was the loop cost
+analysis. When the number of iterations of a loop is actually possible
+to determine, this is very useful for the register allocator to
+know. Again, loops with an unknown number of iterations are given a
+default number of iterations, this time about $10$.   
+
+\subsection{Parallel Code Generation}
 
 % stuff about loop analysis
 
