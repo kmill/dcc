@@ -33,6 +33,128 @@ manage the considerable test-suite. Steven Valdez wrote an expression
 optimization involving elimination of conditional statements and also
 helped manage the test-suite. 
 
+\section{Assumptions}
+
+The following assumptions were made about the Decaf specification.
+All of them are arbitrary, and so we feel no need to justify them.
+\begin{itemize}
+\item The array index expression is evaluated before the assignment
+  expression.
+\item Binary operators are evaluated left to right.
+\item Loop bounds are evaluated from left to right.
+\item Method arguments are evaluated right to left.  This was chosen
+  when we still used \texttt{push} for stack-based arguments.
+\end{itemize}
+
+We assumed a stack-based calling convention in that the stack may
+overflow during a call.  However, we did not require stack-based
+semantics for method invocation.  For instance, with tail-call
+elimination, some programs which would have overflowed the stack were
+transformed into programs which no longer did so.  The reason we
+assumed stack-based calling semantics was for its straightforwardness
+as well as to be able to use C calling conventions for
+\texttt{callout}s.
+
+We assumed that division by zero is a run time error in addition to
+the array bounds checking and control-flow falloff checking.
+Furthermore, we required that a program which failed due to a division
+by zero never be transformed into a program which did not fail in such
+a manner.  This assumption is required to reason about transformations
+like dead code elimination which may remove divisions.  We made this
+assumption for consistency: whether a program fails should not be
+contingent on whether we performed dead code elimination.  This may
+seem contradictory to letting tail call optimization to remove stack
+overflows, but stack-based semantics are not part of Decaf (one could
+imagine a heap-based calling convention, for instance), but division
+semantics are implicitly imported into Decaf by virtue of having
+division.
+
+The specification is contradictory as to what may be passed as an
+argument to a callout.  At some point it mentions that arrays may be
+passed to callouts.  The semantics we chose were that arrays without
+square brackets evaluate to the pointer to the first element of the
+array.  Furthermore, we assumed that an array is a contiguous block of
+$8n$ bytes, where $n$ is the size of the array.  We chose this
+convention because it was easy to generate code to interface with such
+a convention, and because then the arrays could be passed to callouts
+assuming C conventions on the arrays.
+
+The specification was unclear on scoping rules.  We decided on the
+following scoping rules.  Scopes are nested, with the global scope as
+its root.  There is a method scope for each method with the global
+scope as its parent scope.  Each method scope contains as bindings the
+formal parameters to the method.  Each block and \texttt{for} loop
+defines a new scope, lexically nested.  There may not be multiple
+bindings with the same name in any given scoping level.  These rules
+admit the following program:
+\begin{verbatim}
+class Program {
+  int x;
+  void f(int x) {
+    int x;
+  }
+  void main() { }
+}
+\end{verbatim}
+The specification states that ``the method scope consists of names of
+variables and formal parameters introduced in the method declaration''
+as well as that ``additional scopes exist within each
+$\langle$block$\rangle$ of code''.  But, since a method definition has
+no variables, and because the grammar says that the declaration is
+followed by a $\langle$block$\rangle$, this means that a method scope
+has no variable names in addition to its formal parameters.
+Therefore, we accept the above program as valid.  This assumption is
+contrary to the assumptions in one of the semantic test cases.
+
+\section{Intermediate Representations}
+
+Our compiler mainly uses two intermediate representations which we
+call the mid-IR and the low-IR.  The mid-IR looks roughly like what we
+used regularly in class, which consists of expressions, assignments,
+and branches. The low-IR is essentially assembly in a control flow
+graph.
+
+The various IRs are all instances of control flow graphs parameterized
+by the types of instructions found in the graph.  The graphs
+themselves are composed of \texttt{Block}s, which are tree-like data
+structures consisting of the instructions at their leaves, and which
+have the constraint that a label instruction occurs at the beginning
+of the block, a jump-like instruction occurs at the end, and neither
+such kinds of instructions occur in the middle.
+
+The mid-IR has side-effect-free expression trees contained in possibly
+side-effect-full instructions, where the instructions are the leaves
+in the \texttt{Block} structures.  We chose this distinction to ensure
+that optimizations such as dead code elimination could remove
+instructions which were determined to be side-effect-free without
+having to inspect the contained subexpressions.
+
+As a consequence to this distinction, division was implemented as an
+instruction instead of as an expression because there was the
+possibility for division to kill the program with a divide-by-zero
+error.  We contemplated adding a division expression for those
+divisions which were proved to never divide by zero, but we never got
+around to implementing an analysis which would make this useful.
+
+Because the program has been semantically checked before it is
+converted to the mid-IR representation, we could simplify the type
+system and assume that 64-bit integers were the only type, using C
+conventions for booleans.  This simplification reduced the complexity
+of the intermediate representations because we had to deal with fewer
+kinds of instructions and because we did not have to keep track of
+type information.
+
+In the low-IR, there was a data constructor for each kind of assembly
+instruction.  We had the type system enforce the constraints on the
+kinds of operands which were accepted by the instruction.  For
+instance, there were three constructors for the \texttt{mov}
+instruction: \texttt{MovIRMtoR}, \texttt{MovIRtoM}, and
+\texttt{Mov64toR}.  These correspond to various combinations of moving
+immediates, registers, and memory.  The last is a special 64-bit
+instruction which moves a 64-bit rather than 32-bit literal into a
+register.  This type enforcement prevented us from making mistakes
+when constructing assembly in the code generator.
+
 \section {Algebraic Simplification} 
 
 
@@ -112,6 +234,15 @@ the benefits obtained from CSE.
 
 
 \section {Register Allocation}
+
+We mainly followed the paper ``Iterated Register Coalescing'' by Lal
+George and Andrew Appel, which itself based on the Briggs and Chaitlin
+algorithms.  We performed the register allocation at our low
+intermediate representation, which was essentially assembly.
+
+The first thing which needed to be done was to make it so we could
+refer to particular program points.  Our intermediate representations
+are built 
 
 \section{Loop Parallelizer}
 
