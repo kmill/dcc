@@ -327,14 +327,14 @@ The Mid-IR after unflattening
 
 % TODO: Put the before and after graphs right here for unflattentest1 and unflattentest2
 
-\section {Conditional Elimination} 
+\section {Conditional Branch Elimination} 
 
-The conditional eliminator takes \texttt{if} statements whose branches
-are simple assignments and rewrites them to be conditional stores.
-The conditional eliminator has been disabled in the shipped compiler
-because it in certain circumstances made our fixed point computations
-use infinite memory.  It was demonstrated to be able to take code such
-as:
+The conditional branch eliminator takes \texttt{if} statements whose
+branches are simple assignments and rewrites them to be conditional
+stores.  The conditional branch eliminator has been disabled in the
+shipped compiler because it in certain circumstances made our fixed
+point computations use infinite memory.  It was demonstrated to be
+able to take code such as:
 \begin{verbatim}
 int min(int a, int b) {
   if(a < b) {
@@ -372,6 +372,161 @@ L0:
 
 This saves a costly jump instruction.
 
+\section{Tail Call Elimination}
+
+We implemented a tail call eliminator for calls from a method to
+itself.  In addition to an \texttt{Enter} instruction in the control
+flow graph, we added a \texttt{PostEnter} instruction which represents
+the body of the function after formal arguments have been loaded into
+local variables.  Tail calls are replaced with jumps to the
+\texttt{PostEnter} for the method.  The \texttt{Return} instruction
+was augmented with the name of the method from which it is returning
+so that the backwards dataflow and rewrite can determine whether the
+call is a tail call for the same method.  This last point is only an
+issue because we perform the analysis on the entire graph
+simultaneously, and it is impossible to locally determine whether any
+particular instruction is a part of any particular method.
+
+This optimization takes the following two functions for computing the
+factorial of a number:
+{\footnotesize
+\begin{verbatim}
+int _factorial(int accum, int i) {
+  if(i <= 0) {
+    return accum;
+  } else {
+    return _factorial(accum * i, i-1);
+  }
+}
+int factorial(int i) {
+  return _factorial(1, i);
+}
+\end{verbatim}}
+and produces a tight loop: (this is after code generation and
+register allocation)
+{\footnotesize
+\begin{verbatim}
+method__factorial:
+L6:   # 2 args  line 3, col 7
+   movq %rdi, %rax        # line 3, col 7
+L7:  # line 3, col 7
+   cmpq $0, %rsi        # line 4, col 8
+   jle L1        # line 4, col 5 falls to L2
+L2:  # line 4, col 5
+   imulq %rsi, %rax        # line 7, col 25
+   decq %rsi        # line 7, col 14
+   jmp L7
+L1:  # line 4, col 5
+   ret        # line 5, col 7
+
+method_factorial:
+L9:   # 1 args  line 10, col 7
+L10:  # line 10, col 7
+   movq %rdi, %rsi        # line 11, col 12
+   movl $1, %edi    # line 11, col 12
+   call method__factorial        # line 11, col 12
+   ret        # line 11, col 5
+\end{verbatim}
+}
+
+\section{Code Generation}
+
+For our compiler, code generation is the process by which the mid-IR
+is converted to the low-IR.  This is implemented as a function which
+maps over each instruction of the mid-IR control flow graph and
+produces subgraphs which are all concatenated to produce the low-IR.
+
+Like algebraic simplification, the code generator is a rule-based
+pattern-matching system.  Expressions are responsible for effecting
+the code generation of their own subexpressions.  For numerical
+expressions, the data produced is a subgraph and a register, where the
+subgraph must be inserted before uses of the register.  For boolean
+expressions, instead of a register, the result is a flag to check when
+the expression evaluates to true.  The functions
+\texttt{expTo}\textit{XX} where \textit{XX} is some string of
+\texttt{I}, \texttt{R}, and \texttt{M}, evaluates the expression to be
+an immediate, register, or memory location.  This way, the code
+generator can locally decide how to evaluate things greedily.  For
+instance, conditional stores are matched by the following rule:
+{\footnotesize
+\begin{verbatim}
+...
+              , do I.Cond pos cexp texp fexp <- withNode e
+                   (gflag, flag) <- expToFlag cexp
+                   (gt, t) <- expToRM texp
+                   (gf, f) <- expToIRM fexp
+                   dr <- genTmpReg
+                   return ( gf <*> mkMiddle (A.MovIRMtoR pos f dr)
+                            <*> gt <*> gflag
+                            <*> mkMiddle (A.CMovRMtoR pos flag t dr)
+                          , dr )
+...
+\end{verbatim}
+}
+
+Code generation is also where certain peephole optimizations occur.
+For multiplication, we replace multiplication by powers of two by
+shifts, multiplications by 3, 5, and 9 by \texttt{lea},
+multiplications by literals by three-operand \texttt{imulq}, and all
+other multiplications by two-operand \texttt{imulq}.  This is encoded
+by the following rules:
+{\footnotesize
+\begin{verbatim}
+...
+              , do I.BinOp pos I.OpMul expa expb <- withNode e
+                   A.Imm32 i <- expToI expa
+                   let logi = log2 i
+                       log2 1 = 0
+                       log2 n = 1 + log2 (n `div` 2)
+                   guard $ i > 0
+                   guard $ i == 2 ^ logi
+                   (gb, b) <- expToIRM expb
+                   dr <- genTmpReg
+                   return ( gb
+                            <*> mkMiddles [ A.MovIRMtoR pos b dr
+                                          , A.Shl pos (A.Imm8 $ fromIntegral logi) (A.RM_R dr) ]
+                          , dr )
+              , do I.BinOp pos I.OpMul (I.Lit _ i) expb <- withNode e
+                   Just scale <- return $ lookup i [(3, A.STwo)
+                                                   ,(5, A.SFour)
+                                                   ,(9, A.SEight)]
+                   (gb, b) <- expToR expb
+                   dr <- genTmpReg
+                   let mem = A.MemAddr (Just b) (A.Imm32 0) (Just b) scale
+                   return ( gb <*> mkMiddle (A.Lea pos mem dr)
+                          , dr )
+              , do I.BinOp pos I.OpMul expa expb <- withNode e
+                   a <- expToI expa
+                   (gb, b) <- expToRM expb
+                   dr <- genTmpReg
+                   return ( gb
+                            <*> mkMiddle (A.IMulImm pos a b dr)
+                          , dr )
+              , do I.BinOp pos I.OpMul expa expb <- withNode e
+                   (ga, a) <- expToIRM expa
+                   (gb, b) <- expToRM expb
+                   dr <- genTmpReg
+                   return ( ga <*> gb
+                            <*> mkMiddle (A.MovIRMtoR pos a dr)
+                            <*> mkMiddle (A.IMulRM pos b dr)
+                          , dr )
+...
+\end{verbatim}}
+
+oeu
+
+The code generator tries to take full advantage of the memory
+addressing schemes available to the x86 architecture.  It actively
+looks for literals and labels in an expression as well as
+multiplications by 2, 4, and 8.  Hence, the expression
+\texttt{a[2+i] = 3}, assuming array bounds checking, generates the
+following code:
+{\footnotesize
+\begin{verbatim}
+movq $3, (a+2)(,%local_i,8)
+\end{verbatim}
+}
+
 \section {Register Allocation}
 
 We mainly followed the paper ``Iterated Register Coalescing'' by Lal
@@ -404,6 +559,128 @@ However, we have added a special case for stores of the form \texttt{x
 between the webs for \texttt{x} and \texttt{y}.  This allows the
 register allocator to perform the equivalent of copy propagation,
 using fewer registers.
+
+The algorithms for web and interference graph generation has been
+generalized to work with any control flow graph which can provide a
+function from instructions to a pair of lists of objects.  In the
+mid-IR this the objects are variable names, and in the low-IR the
+objects are registers (both machine and virtual).
+
+The basic register allocation algorithm takes the interference graph
+along with a function to compute spill costs for an arbitrary web.
+The spill cost function uses loop nest information from the loop
+parallelizer which consists of the number of times each loop runs
+(something which is provably a loop but without any clear bounds is
+assumed to run 10 times).  For a given web $w$ with a set $P_w$ of
+program points consisting of uses and definitions, the spill cost
+$c(w)$ is $\sum_{p\in P_w} f(p)$, where $f(p)$ is the estimated number
+of times program point $p$ will be executed per run of the enclosing
+function.
+
+Each fixed register has its own web.  Since fixed registers cannot be
+spilled, we first insert move instructions around each instruction in
+the control flow graph before register allocation.  For instance, the
+\texttt{cqo} instruction becomes
+\begin{verbatim}
+mov %rax, %rax
+cqo
+mov %rdx, %rdx
+\end{verbatim}
+hence making the live ranges of the fixed \texttt{\%rax} and
+\texttt{\%rdx} as short as possible.
+
+Our algorithm iteratively simplifies the interference graph, attempts
+to coalesce moves, and prospectively spills webs.  The details of this
+algorithm are in the aformentioned paper.  The move coalescer exists
+to try to assign the same register to webs which are connected by a
+move.  If it's possible to coalesce the webs, then the move can be
+removed.
+
+In addition to move coalescing, and unlike in the George and Appel
+paper, we also performed a biased coloring.  If two webs are connected
+by a move and weren't coalesced, and if they don't interfere, then the
+web colorer will prefer to give them the same color than note.
+Furthermore, the colorer will prefer to not give a color which an
+interfering web prefers by the same method.  The second heuristic is
+there to make sure that webs avoid being colored by callee-saved
+registers.
+
+The register allocator by itself and no other optimizations turned on
+produces the following assembly for the factorial function.
+
+{\footnotesize
+\begin{verbatim}
+method_factorial:
+L6: subq $8, %rsp  # 1 args  line 3, col 9
+   movq %rbx, (%rsp)        # line -1, col -1
+   movq %rdi, %rbx        # line 3, col 9
+L7:  # line 3, col 9
+   cmpq $1, %rbx        # line 5, col 13
+   jle L1        # line 5, col 9 falls to L2
+L2:  # line 5, col 9
+   movq %rbx, %rdi        # line 8, col 34
+   subq $1, %rdi        # line 8, col 34
+   call method_factorial        # line 8, col 24
+   imulq %rax, %rbx        # line 8, col 20
+   movq %rbx, %rax        # line -1, col -1
+   movq (%rsp), %rbx        # line -1, col -1
+   addq $8, %rsp
+   ret        # line 8, col 13
+L1:  # line 5, col 9
+   movl $1, %eax    # line 6, col 13
+   movq (%rsp), %rbx        # line -1, col -1
+   addq $8, %rsp
+   ret        # line 6, col 13
+\end{verbatim}}
+
+\section{Assembly-Level Optimizations}
+
+After code generation and register allocation, we perform a couple of
+optimizations on the low-IR:
+\begin{description}
+\item[Dead code elimination] This is implemented exactly the same as
+  for the mid-IR, except we do not remove anything but \texttt{mov}
+  and \texttt{lea}.  We do not do any analysis on flags.
+\item[Copy and constant propagation] This is performed over both
+  registers and spills.  This removes some extra moves which the
+  register allocator didn't notice, and, importantly, propagates
+  constants over spills so that they become moves without any memory
+  traffic.
+\item[Spill recoloring] This optimization performs the register
+  allocation algorithm on spill locations.  It also detects moves
+  between spill locations and attempts to coalesce them into the same
+  location.  Because there is no maximum on the number of spill
+  locations, we coalesce whenever possible without worrying about
+  uncolorability of the interference graph.
+\end{description}
+
+These optimizations along with register allocation which puts
+everything on the stack (and only uses a couple of working registers)
+are able to produce the following code for factorial:
+{\footnotesize
+\begin{verbatim}
+method_factorial:
+L6: subq $8, %rsp  # 1 args  line 3, col 9
+   movq %rdi, (%rsp)        # line -1, col -1
+L7:  # line 3, col 9
+   cmpq $1, %rdi        # line 5, col 13
+   jle L1        # line 5, col 9 falls to L2
+L2:  # line 5, col 9
+   movq %rdi, %r10        # line -1, col -1
+   subq $1, %r10        # line 8, col 34
+   movq %r10, %rdi        # line 8, col 24
+   call method_factorial        # line 8, col 24
+   movq (%rsp), %r11        # line -1, col -1
+   imulq %rax, %r11        # line 8, col 20
+   movq %r11, %rax        # line 8, col 13
+   addq $8, %rsp
+   ret        # line 8, col 13
+L1:  # line 5, col 9
+   movl $1, %eax    # line 6, col 13
+   addq $8, %rsp
+   ret        # line 6, col 13
+\end{verbatim}
+}
 
 \section{Loop Parallelizer}
 
