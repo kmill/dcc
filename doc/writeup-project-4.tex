@@ -22,6 +22,51 @@ install the newest version.
 of dcc at ./dcc.
 \end{enumerate}
 
+The following is the help output of dcc:
+\begin{verbatim}
+Usage: dcc [OPTIONS...] source
+  -o FILE          --out=FILE          output FILE
+  -t TARGET        --target=TARGET     Set target type:
+										   scan : Scans the input file
+										  parse : Parses the input file
+										  midir : Outputs a graph of the mid IR
+										  lowir : Outputs a graph of the low IR
+										codegen : Outputs the compiled assembly code
+  -d               --debug             Enables debug mode
+  -m               --mac               Enables Mac OS X mode
+  -c               --compat            Enables compatibility mode with 6.035 output spec
+  -h               --help              Prints this usage information
+  -p NUM           --numthreads=NUM    Sets the number of threads used by parallelize (default: 12)
+  -r               --regalloc          Enables the register allocator
+  -O OPTIMIZATION  --opt=OPTIMIZATION  Enables optimizations:
+                                                cse : Constant Subexpression Elimination
+                                           copyprop : Copy Propagation
+                                           condelim : Conditional Elimination
+                                          constprop : Constant Propagation
+                                           deadcode : Dead Code Elimination
+                                          blockelim : Block Elimination
+                                               flat : Flatten Optimization
+                                             unflat : Unflatten Optimization
+                                           tailcall : Tailcall Elimination
+                                        parallelize : Automatic Loop Parallelization
+                                          winnowstr : Removes unused strings
+                                        deadcodeasm : Dead code elimination on assembly
+                                        colorspills : Recolor spills in assembly
+                                       betterifyasm : Constant/copy propagation on assembly
+                                       blockelimasm : Block elimination on assembly
+                                           regalloc : Register Allocation
+                                       
+                                       Prefixing an optimization with '-' disables it.
+                                       all/none enables/disables ALL optimizations.
+
+ Optimization classes which can be passed to --opt:
+       all : cse copyprop condelim constprop deadcode
+             blockelim flat unflat tailcall parallelize
+             winnowstr deadcodeasm colorspills betterifyasm blockelimasm
+             regalloc
+     basic : constprop deadcode blockelim winnowstr
+       asm : deadcodeasm colorspills betterifyasm blockelimasm
+\end{verbatim}
 
 \section {Overview}
 
