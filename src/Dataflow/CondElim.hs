@@ -69,7 +69,7 @@ matchesMaybe _ _ = Nothing
 combineMaps :: (M.Map Assigned Assignable) -> (M.Map Assigned Assignable) -> Maybe (M.Map Assigned Assignable)
 combineMaps a b 
   | M.size (M.intersection a b) > 0 = Nothing
-  | otherwise = Just (M.union b a)
+  | otherwise = Just (M.union a b)
 
 condElim :: forall m . FuelMonad m => BwdRewrite m MidIRInst AssignMap
 condElim = deepBwdRw ll

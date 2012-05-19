@@ -219,6 +219,12 @@ backEdgeToLoop dominators graph mlabels (loopBack, loopHeader) = (loopHeader, lo
                            _ -> S.empty
          
 type BasicLoop = (Label, Label, S.Set Label)
+basicHeader :: BasicLoop -> Label
+basicHeader (h, _, _) = h
+basicBack :: BasicLoop -> Label
+basicBack (_, b, _) = b
+basicBody :: BasicLoop -> S.Set Label
+basicBody (_, _, b) = b
 data InductionLoc = Beginning | End deriving (Eq, Show)
 
 findInductionVariables :: Graph (PNode MidIRInst) C C -> [Label] -> FactBase DominFact -> Webs -> BasicLoop 
