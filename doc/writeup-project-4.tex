@@ -155,8 +155,92 @@ instruction which moves a 64-bit rather than 32-bit literal into a
 register.  This type enforcement prevented us from making mistakes
 when constructing assembly in the code generator.
 
+Because the graph is parameterized by the type of instruction, we are
+able to perform analyses which are agnostic to the particular kind of
+instruction in the graph.  Dominator analysis, liveness analysis, and
+web construction could occur on ethir representation because of this.
+
 \section {Algebraic Simplification} 
 
+Algebraic simplification occurs on the instructions and expressions in
+the mid-IR.  The algebraic simplifier also does constant folding.  We
+relied upon the algebraic simplification to put expressions into a
+``normal form'' so that the code generator could rely on certain
+assumptions.  For instance, we ensured that sums of multiple terms
+were always right-associated, and that literals always on the left
+side of an addition.
+
+The simplifier itself is structured as a pattern-matching rule system
+which recursively rewrites the expression tree from the leaves towards
+the root, and restarting this process with the resulting subtree.
+
+Instructions are simplified by simplifying their expressions and then
+rewriting the instruction with the new expressions.  The
+\texttt{CondBranch} instruction also, in addition, checks if the
+conditional expression is a literal and rewrites the instruction into
+being a \texttt{Branch} if appropriate.
+
+The following is an example of some rules from the expression
+simplifier for binary operations in particular.
+{\footnotesize
+\begin{verbatim}
+simpBinOp :: Ord v => SourcePos -> BinOp -> Expr v -> Expr v
+          -> AM (Expr v)
+simpBinOp pos op sex1 sex2 = msum rules
+    where
+      rules =
+          [ -- This rule does constant folding if both sides are
+            -- constants. (there is no division operation).
+            -- Muchnick R1,R3,R5
+            do Lit _ i1 <- withExpr sex1
+               Lit _ i2 <- withExpr sex2
+               return $ Lit pos (binOp op i1 i2)
+          -- The following rule enforces the order that literals occur
+          -- at the beginning of a sequence of
+          -- additions or multiplications
+          -- Muchnick R2,R4
+          , do guard $ op `elem` [OpAdd, OpMul]
+               guard $ sex1 > sex2
+               simpES $ BinOp pos op sex2 sex1
+          -- Reassociates left-association to right-association for
+          -- addition and multiplication while reordering the three
+          -- expressions.
+          -- backwards Muchnick R7,R8
+          , do guard $ op `elem` [OpAdd, OpMul]
+               BinOp _ op' oper1 oper2 <- withExpr sex1
+               guard $ op' == op
+               guard $ oper2 > sex2
+               let [a, b, c] = sort [oper1, oper2, sex2]
+               oper1' <- simpES $ BinOp pos op a b
+               simpES $ BinOp pos op oper1' c
+          -- Pulls a constant from the right branch into the left
+          -- branch if the left is a constant, too
+          -- Backwards muchnick R9, R10
+          , do guard $ op `elem` [OpAdd, OpMul]
+               Lit litpos i1 <- withExpr sex1
+               BinOp _ op' (Lit _ i2) sex2_2 <- withExpr sex2
+               guard $ op == op'
+               simpES $ BinOp pos op (Lit litpos (binOp op i1 i2)) sex2_2
+          -- Reorders the tree if the right-side's left branch is less
+          -- than the left branch
+          , do guard $ op `elem` [OpAdd, OpMul]
+               BinOp pos2 op' sex2_1 sex2_2 <- withExpr sex2
+               guard $ op == op'
+               guard $ sex1 > sex2_1
+               simpES $ BinOp pos op sex2_1 (BinOp pos2 op sex1 sex2_2)
+          -- Adding a negation is the same as just subtracting
+          , do guard $ op == OpAdd
+               UnOp pos1 OpNeg nsex1 <- withExpr sex1
+               simpES $ BinOp pos1 OpSub sex2 nsex1
+
+          ...]
+\end{verbatim}}
+
+The simplification computation occurs in \texttt{AM}, which is the
+\textbf{a}lgebraic simplification \textbf{m}onad.  This is basically
+the the \texttt{Maybe} monad, and this is what makes the
+\texttt{guard} statements go to the next computation in the
+\texttt{msum}.
 
 \section {Expression Unflattener}
 
@@ -232,6 +316,48 @@ the benefits obtained from CSE.
 
 \section {Conditional Elimination} 
 
+The conditional eliminator takes \texttt{if} statements whose branches
+are simple assignments and rewrites them to be conditional stores.
+The conditional eliminator has been disabled in the shipped compiler
+because it in certain circumstances made our fixed point computations
+use infinite memory.  It was demonstrated to be able to take code such
+as:
+\begin{verbatim}
+int min(int a, int b) {
+  if(a < b) {
+    return a;
+  } else {
+    return b;
+  }
+}
+\end{verbatim}
+and transform it to be
+\begin{verbatim}
+int min(int a, int b) {
+  return ((a < b) ? a : b);
+}
+\end{verbatim}
+which in the output assembly after register allocation looked like
+\begin{verbatim}
+min:
+  mov %rsi, %rax
+  cmpq %rsi, %rdi
+  cmovltq %rdi, %rax
+  ret
+\end{verbatim}
+rather than
+\begin{verbatim}
+min:
+  mov %rsi, %rax
+  cmp %rsi, %rdx
+  jlt L0
+  ret
+L0:
+  mov %rdi, %rax
+  ret
+\end{verbatim}
+
+This saves a costly jump instruction.
 
 \section {Register Allocation}
 
@@ -242,7 +368,29 @@ intermediate representation, which was essentially assembly.
 
 The first thing which needed to be done was to make it so we could
 refer to particular program points.  Our intermediate representations
-are built 
+are built with tree-based blocks, and Haskell makes no distinction
+between a pointer to an object and the object itself (that is, there
+is no reference-checking equality in Haskell).  What we did was make
+an intermediate representation wrapper which added unique ids to each
+instruction in the control flow graph.
+
+With these pointers, we could construct DU chains, and with these,
+webs.  The DU chains are constructed with a basic backwards dataflow
+analysis.  With the chains, we constructed the webs using an algorithm
+which kept track of two maps: one of uses at each program point, and
+one of definitions at each program point.  The DU chains are inserted
+into each of these maps, and when a DU chain is being inserted into a
+one of these maps at a program point which already has a DU chain,
+then it becomes an alias of the old DU chain.
+
+The interference graph of the webs is constructed over the course of a
+backwards dataflow analysis.  An edge between webs is inserted
+whenever a definition coincides with the live range of another web.
+However, we have added a special case for stores of the form \texttt{x
+  := y} which prevents the copy from introducing an interference edge
+between the webs for \texttt{x} and \texttt{y}.  This allows the
+register allocator to perform the equivalent of copy propagation,
+using fewer registers.
 
 \section{Loop Parallelizer}
 
