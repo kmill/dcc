@@ -361,6 +361,7 @@ The Mid-IR after unflattening
 % TODO: Put the before and after graphs right here for unflattentest1 and unflattentest2
 
 \section {Conditional Branch Elimination} 
+\label{sec:condelim}
 
 The conditional branch eliminator takes \texttt{if} statements whose
 branches are simple assignments and rewrites them to be conditional
@@ -406,6 +407,7 @@ L0:
 This saves a costly jump instruction.
 
 \section{Tail Call Elimination}
+\label{sec:tailcall}
 
 We implemented a tail call eliminator for calls from a method to
 itself.  In addition to an \texttt{Enter} instruction in the control
