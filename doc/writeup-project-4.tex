@@ -13,17 +13,39 @@
 
 \section {Instructions for Building and Running the Project}
 
+
 \section {Overview}
 
-For the final optimization project of our compiler, we 
+For the final optimization project of our compiler, we decided to
+implement two major optimizations and some number of smaller
+optimizations. The major optimizations we implemented were Register
+Allocation (Section~\ref{sec:regalloc}) and Loop Parallelization
+(Section~\ref{sec:parallel}). While these optimizations provided the
+most powerful speedups, smaller optimizations we implemented include
+Algebraic Simplification (Section~\ref{sec:algebra}), Conditional
+Branch Elimination (Section~\ref{sec:condelim}), Expression
+Unflattening (Section~\ref{sec:unflat}), Tailcall
+Optimizations (Section~\ref{sec:tailcall}), and Assembly Level
+Constant and Copy Propagation. Optimizations we wrote for the previous
+project including Global Common Subexpression Elimination, Global Copy
+Propagation, Constant Propagation, and Unreachable Code Elimination
+were all included along with the rest of our optimizations. The design
+and implementation of all of our new optimizations is described
+below. 
+
+Along with all the optimizations we implemented, we also maintained a
+detailed test system (Section~\ref{sec:test}) that helped assure us
+of the correctness of our optimizations. Finally, the order and degree
+to which we applied the optimizations was important to the
+effectiveness of our optimizations and is discussed in Section~\ref{sec:order}.
 
 \section {Division of Work}
 
-The work was divided as follows. Kyle Miller designed and implemented
+The work was divided as follows: Kyle Miller designed and implemented
 the register allocator along with a slew of peephole optimizations
 that occurred at the code generation level. Kyle also wrote part of
 the code generator portion of the loop parallelizer and wrote web
-analysis for the Mid IR that was essential for loop analysis. Alec Thomson wrote most of
+analysis for the Mid-IR that was essential for loop analysis. Alec Thomson wrote most of
 the loop analysis routines, including all of the loop parallelization
 analysis, the dominator analysis, the loop nesting analysis, and
 several loop heuristics that were used by the register allocator and
@@ -164,6 +186,7 @@ instruction in the graph.  Dominator analysis, liveness analysis, and
 web construction could occur on ethir representation because of this.
 
 \section {Algebraic Simplification} 
+\label{sec:algebra}
 
 Algebraic simplification occurs on the instructions and expressions in
 the mid-IR.  The algebraic simplifier also does constant folding.  We
@@ -246,6 +269,7 @@ the the \texttt{Maybe} monad, and this is what makes the
 \texttt{msum}.
 
 \section {Expression Unflattener}
+\label{sec:unflat}
 
 The purpose of the expression unflattener is to return the mid-ir to
 ``Tree-Form'' after CSE is performed while maintaining the benefits
@@ -328,6 +352,7 @@ The Mid-IR after unflattening
 % TODO: Put the before and after graphs right here for unflattentest1 and unflattentest2
 
 \section {Conditional Elimination} 
+\label{sec:condelim}
 
 The conditional eliminator takes \texttt{if} statements whose branches
 are simple assignments and rewrites them to be conditional stores.
@@ -372,7 +397,11 @@ L0:
 
 This saves a costly jump instruction.
 
+\section {Tailcall Optimization} 
+\label{sec:tailcall}
+
 \section {Register Allocation}
+\label{sec:regalloc}
 
 We mainly followed the paper ``Iterated Register Coalescing'' by Lal
 George and Andrew Appel, which itself based on the Briggs and Chaitlin
@@ -406,6 +435,7 @@ register allocator to perform the equivalent of copy propagation,
 using fewer registers.
 
 \section{Loop Parallelizer}
+\label{sec:parallel}
 
 The loop parallelizer splits the control flow into multiple threads
 for loops with expensive bodies with no inter-run dependencies. The
@@ -925,7 +955,130 @@ waste of resources. The implementation consists of a dataflow analysis
 and a non-local rewrite function: the rewrite function uses the State
 monad to ensure that instructions only get moved once.
 
+\section {Test Plan}
+\label{sec:test}
+
+Our test plan consisted of several redundant factors to increase the
+probability that we catch any errors with our compiler. First, our
+test suite includes a set of shell scripts that make use of every test
+we've written inside a certain ``testing directory''. We also
+implemented a ``Mid-IR to C'' compiler that produces valid C code from
+a valid decaf program's middle IR and uses GCC to produce the expected
+output. Finally, to test correctness of our compiler even further, we
+implemented a complex and ``Real'' decaf program, which in our case is a
+VM for a very simple stack-based programming language.
+
+\subsection {Testing Scripts}
+
+All the tests from each stage have been compiled into a single
+directory with a single testing script. This script runs the test,
+and if that test fails, it runs the Mid-IR to C converter with no
+optimizations to determine whether the problem is a result of
+optimizations or a result of code generation. 
+
+\subsection {Mid-IR to C Converter} 
+
+The Mid-IR to C converter converts from our middle IR to C. The Mid-IR
+preserves the function call abstraction, but not internal control
+flow. The C code is human readable, and enables us to see the results
+of programs before we do register allocation and code generation.
+
+\section {Odering of Optimizations} 
+\label{sec:order}
+
+Optimizations were split between optimizations that operated at the
+Mid-IR level and optimizations that operated at the Assembly
+level. The ordering of optimizations at the Mid-IR level, derived in
+part from Muchnick and in part from experimenting with what actually
+caused positive changes to the code, was as follows: 
+
+\begin{itemize}
+
+\item Constant Propagation immediately followed by Algebraic
+  Simplification. 
+
+\item Initial Tail Call Optimizations 
+
+\item Conditional Assignment Elimination First Pass
+
+\item Dead Code Elimination
+
+\item Conditional Assignment Elimination Second Pass
+
+\item Unreachable Code Elimination
+
+\item Constant Propagation and Algebraic Simplification Second Pass
+
+\item Global CSE (with flattening of the mid-ir)
+
+\item Global Copy Propagation
+
+\item Constant Propagation and Algebraic Simplification Third Pass
+
+\item Dead Code Elimination Second Pass
+
+\item Unflattening of the Mid-IR
+
+\item Dead Code Elimination Third Pass
+
+\item Tail Call Second Pass
+
+\item Parallelization 
+
+\item Constant Propagation and Algebraic Simplification Fourth Pass
+
+\item Copy Propagation Second Pass
+
+\item Dead Code Elimination Fourth Pass
+
+\item Unreachable Code Elimination Second Pass
+
+\item Dead Code Elimination Fifth Pass
+
+\end{itemize}
+
+Some highlights include the fact that Dead Code Elimination is run
+after nearly every optimization because it was often easier to let
+other optimizations introduce new code assuming Dead Code Elimination
+will take care of the redundant code later. After the Mid-IR
+optimizations, the Mid-IR is converted to a Low-IR comprised of
+assembly instructions. As explained above, the code generator is
+relatively smart about choosing correct assembly
+instructions to perform certain operations. After code generation, a
+series of optimizations is performed on the Low-IR. The ordering of
+these optimizations is as follows: 
+
+\begin{itemize}
+
+\item Register Allocation 
+
+\item Dead Code Elimination for Assembly 
+
+\item Spill Location Allocation (Essentially Register Allocation for
+  the spill locations)
+
+\item Assembly-Level Constant and Copy Propagation 
+
+\item Dead Code Elimination for Assembly Second Pass
+
+\item Assembly-Level Branch Optimization (including Unreachable Code Elimination)
+
+\end{itemize}
+
+Again, the ordering of these optimizations was derived in part from
+Muchnick and in part from experimenting with what appeared to be
+useful. 
+
 \section{Conclusion}
 
+In conclusion, we feel we learned a lot about the world of compiler
+design along with a whole slew of general CS knowledge. A few things
+we took away from this project were the fact that Haskell is a very
+useful and powerful language for designing compilers, designing an
+optimizing compiler for even a very simple language spec can be
+exceedingly complex, loop parallelization is one of the most powerful
+optimizations a compiler can perform when given the right
+circumstances, and large team projects are considerably more managable
+when the given tasks are highly parallelizable, just like loops. 
 
 \end{document}
